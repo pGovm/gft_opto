@@ -13,13 +13,17 @@ from PySide6.QtWidgets import (QApplication, QColorDialog, QCheckBox, QDialog,
 class Dialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
+        frameStyle = QFrame.Shadow.Raised | QFrame.Shape.Panel
 
-        self.label = QLabel()
-        self.label.setFrameStyle(QFrame.Shadow.Raised | QFrame.Shape.Panel)
+        self._component_label = QLabel()
+        self._component_label.setFrameStyle(frameStyle)
+        self._component_button = QPushButton("Click to Edit Button")
+        self._component_button.clicked.connect(self.set_name)
 
-        
-        self.button = QPushButton("Click to Edit Button")
-        self.button.clicked.connect(self.set_name)
+        self._value_label = QLabel()
+        self._value_label.setFrameStyle(frameStyle)
+        self._value_button = QPushButton()
+        self._value_button.clicked.connect(self.set_value)
 
         vertLayout = QVBoxLayout()
         toolbox = QToolBox()
@@ -28,20 +32,40 @@ class Dialog(QDialog):
 
         page = QWidget()
         layout = QGridLayout(page)
-        layout.addWidget(self.button, 0, 0)
-        layout.addWidget(self.label, 0, 1)
+        layout.addWidget(self._component_button, 0, 0)
+        layout.addWidget(self._component_label, 0, 1)
+        layout.addWidget(self._value_button, 1, 0)
+        layout.addWidget(self._value_label, 1, 1)
         toolbox.addItem(page, "Input Dialogs")
 
         self.setLayout(layout)
 
     @Slot()
     def set_name(self):
-        name = ("Inductor", "Resistor", "Breaker", "Autotransformer")
+        _component_name = ("Inductor", "Resistor", "Breaker", "Autotransformer")
 
-        name, ok = QInputDialog.getItem(self, "Component Widget Name", "Component:", name, 0, False)
+        name, ok = QInputDialog.getItem(self, "Component Widget Name", "Component:", _component_name, 0, False)
 
         if name and ok:
-            self.label.setText(name)
+            self._component_label.setText(f'{name}')
+            self.name = name
+
+    @Slot()
+    def set_value(self):
+        val, ok = QInputDialog.getDouble(self, "Component Widget Value", "Value:", 65, 0, 10000, 10)
+
+        if val and ok:
+            match(self.name):
+                case "Inductor":
+                    unit = "H"
+                case "Resistor":
+                    unit = "Ohm"
+                case "Breaker":
+                    unit = "W"
+                case "Autotransformer":
+                    unit = "MW"
+
+            self._value_label.setText(f'{val} {unit}')
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
@@ -51,4 +75,4 @@ if __name__ == '__main__':
     dialog.move((availableGeometry.width() - dialog.width()) / 2,
                 (availableGeometry.height() - dialog.height()) / 2)
     dialog.show()
-    app.exec()
+    sys.exit(app.exec())
