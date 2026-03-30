@@ -1,13 +1,13 @@
 import sys
-from PySide6.QtWidgets import QApplication, QWidget, QVBoxLayout, QPushButton
+from PySide6.QtWidgets import QApplication, QWidget, QVBoxLayout, QPushButton, QInputDialog
 from PySide6.QtGui import QPainter, QColor, QPen, QFont
-from PySide6.QtCore import Qt, QRect
+from PySide6.QtCore import Qt, QRect, Slot
 
 class LEDIndicator(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         # Set a fixed size for our LED
-        self.setFixedSize(200, 300)
+        self.setFixedSize(500, 500)
         # Default state is Off (False)
         self._state = False
         self._color_on = QColor(0, 255, 0)  # Green when on
@@ -20,25 +20,25 @@ class LEDIndicator(QWidget):
         painter.setFont(QFont("Sans-Serif", 20))
 
         # Define the area to draw in (a circle)
-        rect = QRect(30, 30, 150, 150)
+        rect = QRect(30, 30, 450, 450)
 
         # Set the brush colour based on the state
         if self._state:
-            painter.drawText(rect, Qt.AlignCenter, "Inductor")
+            painter.drawText(rect, Qt.AlignCenter, f"Component: {self._component_name}\n\n\n")
+            painter.drawText(rect, Qt.AlignCenter, f"Power Rating: {self._component_name}")
         else:
             painter.setBrush(self._color_off)
 
         # Draw the ellipse (circle) with a black border
-        painter.setPen(QPen(Qt.black, 2))
+        painter.setPen(QPen(Qt.black, 4))
         painter.drawRect(rect)
 
-    def set_state(self, state):
-        """Set the state of the LED (True for On, False for Off)."""
-        self._state = state
-        self.update()  # This calls paintEvent to redraw the widget
-
+    @Slot()
     def toggle(self):
-        """Toggle the state of the LED."""
+        components = ("Inductor", "Resistor", "Breaker", "Current Transformer", "Feeder")
+        self._component_name, ok = QInputDialog.getItem(self, "Component Widget Name", "", components, 0, False)
+        if self._component_name and ok:
+            self.update()
         self._state = not self._state
         self.update()
 
