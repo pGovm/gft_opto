@@ -1,4 +1,5 @@
 .venv/
 .venv5/
+__pycache__/
 /tutorial.py
 /tutorial1.py
