@@ -1,13 +1,14 @@
 import sys
+from tutorial import Dialog
 from PySide6.QtWidgets import QApplication, QWidget, QVBoxLayout, QPushButton, QInputDialog
 from PySide6.QtGui import QPainter, QColor, QPen, QFont
 from PySide6.QtCore import Qt, QRect, Slot
 
-class LEDIndicator(QWidget):
+class ComponentWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         # Set a fixed size for our LED
-        self.setFixedSize(500, 500)
+        self.setFixedSize(400, 400)
         # Default state is Off (False)
         self._state = False
         self._color_on = QColor(0, 255, 0)  # Green when on
@@ -20,12 +21,12 @@ class LEDIndicator(QWidget):
         painter.setFont(QFont("Sans-Serif", 20))
 
         # Define the area to draw in (a circle)
-        rect = QRect(30, 30, 450, 450)
+        rect = QRect(30, 30, 350, 350)
 
         # Set the brush colour based on the state
         if self._state:
             painter.drawText(rect, Qt.AlignCenter, f"Component: {self._component_name}\n\n\n")
-            painter.drawText(rect, Qt.AlignCenter, f"Power Rating: {self._component_name}")
+            painter.drawText(rect, Qt.AlignCenter, f"Power Rating: {self._component_rating} kVA")
         else:
             painter.setBrush(self._color_off)
 
@@ -34,28 +35,28 @@ class LEDIndicator(QWidget):
         painter.drawRect(rect)
 
     @Slot()
-    def toggle(self):
+    def choose(self):
         components = ("Inductor", "Resistor", "Breaker", "Current Transformer", "Feeder")
         self._component_name, ok = QInputDialog.getItem(self, "Component Widget Name", "", components, 0, False)
-        if self._component_name and ok:
+        self._component_rating, ok = QInputDialog.getDouble(self, "Component Widget Value", "", 65, 0, 1000, 10)
+        if self._component_name and ok and self._component_rating:
+            self._state = not self._state
             self.update()
-        self._state = not self._state
-        self.update()
 
 class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Custom LED Widget Demo")
+        self.setWindowTitle("Custom Component Widget Demo")
         layout = QVBoxLayout()
 
         # Create our custom LED widget
-        self.led = LEDIndicator()
-        layout.addWidget(self.led, alignment=Qt.AlignCenter)
+        self.comp = ComponentWidget()
+        layout.addWidget(self.comp, alignment=Qt.AlignCenter)
 
         # Create a button to toggle the LED
-        self.toggle_button = QPushButton("Choose a Component")
-        self.toggle_button.clicked.connect(self.led.toggle)
-        layout.addWidget(self.toggle_button)
+        self.editButton = QPushButton("Choose a Component")
+        self.editButton.clicked.connect(self.comp.choose)
+        layout.addWidget(self.editButton)
 
         self.setLayout(layout)
 
