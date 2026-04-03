@@ -9,6 +9,8 @@ from PySide6.QtWidgets import (
     QToolButton, QVBoxLayout, QWidget,
 )
 
+from app import ComponentWidget
+
 # Main Window Class defining the GUI structure
 class SubstationGuiMockup(QMainWindow):
     def __init__(self):
@@ -80,6 +82,7 @@ class SubstationGuiMockup(QMainWindow):
         frame.setObjectName("toolbarFrame")
         layout = QHBoxLayout(frame)
         layout.setContentsMargins(20, 14, 20, 14)
+        self.widget = ComponentWidget()
 
         title = QLabel("AI-Assisted Substation Protection & Control Design")
         title.setFont(QFont("Arial", 12, QFont.Bold))
@@ -91,6 +94,8 @@ class SubstationGuiMockup(QMainWindow):
         save_btn = QPushButton("Save Layout")
         load_btn = QPushButton("Load Diagram")
         run_btn = QPushButton("Run Evaluation")
+
+        load_btn.clicked.connect(self.widget.choose)
 
         layout.addWidget(title)
         layout.addStretch() 
