@@ -3,3 +3,4 @@
 __pycache__/
 /tutorial.py
 /tutorial1.py
+*.json
