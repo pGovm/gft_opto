@@ -1,15 +1,32 @@
 import sys
 # Changed imports from PyQt5 to PySide6
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QFont, QAction
+from PySide6.QtCore import Qt, Slot, QRect
+from PySide6.QtGui import QPainter, QColor, QFont, QAction, QPen
 from PySide6.QtWidgets import (
     QApplication, QComboBox, QFrame, QGridLayout, QGroupBox, 
     QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, 
     QMainWindow, QPushButton, QSlider, QStatusBar, QTextEdit, 
-    QToolButton, QVBoxLayout, QWidget,
+    QToolButton, QVBoxLayout, QWidget, QInputDialog,
 )
 
-from app import ComponentWidget
+from app import ComponentWidget 
+
+class MainWindow(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Custom Component Widget Demo")
+        layout = QVBoxLayout()
+
+        # Create our custom LED widget
+        self.comp = ComponentWidget()
+        layout.addWidget(self.comp, alignment=Qt.AlignCenter)
+
+        # Create a button to toggle the LED
+        self.editButton = QPushButton("Choose a Component")
+        self.editButton.clicked.connect(self.comp.choose)
+        layout.addWidget(self.editButton)
+
+        self.setLayout(layout)
 
 # Main Window Class defining the GUI structure
 class SubstationGuiMockup(QMainWindow):
@@ -82,7 +99,6 @@ class SubstationGuiMockup(QMainWindow):
         frame.setObjectName("toolbarFrame")
         layout = QHBoxLayout(frame)
         layout.setContentsMargins(20, 14, 20, 14)
-        self.widget = ComponentWidget()
 
         title = QLabel("AI-Assisted Substation Protection & Control Design")
         title.setFont(QFont("Arial", 12, QFont.Bold))
@@ -95,7 +111,7 @@ class SubstationGuiMockup(QMainWindow):
         load_btn = QPushButton("Load Diagram")
         run_btn = QPushButton("Run Evaluation")
 
-        load_btn.clicked.connect(self.widget.choose)
+        load_btn.clicked.connect(self.open_widgetTool)
 
         layout.addWidget(title)
         layout.addStretch() 
@@ -106,6 +122,10 @@ class SubstationGuiMockup(QMainWindow):
         layout.addWidget(run_btn)
 
         return frame
+    
+    def open_widgetTool(self):
+        self.w = MainWindow()
+        self.w.show()
 
     def _build_content(self):
         layout = QHBoxLayout()

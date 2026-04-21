@@ -60,11 +60,11 @@ class MainWindow(QWidget):
 
         self.setLayout(layout)
 
-if __name__ == "__main__":
-    app = QApplication(sys.argv)
-    window = MainWindow()
-    window.show()
-    sys.exit(app.exec())
+# if __name__ == "__main__":
+#     app = QApplication(sys.argv)
+#     window = MainWindow()
+#     window.show()
+#     sys.exit(app.exec())
 
 # class Dialog(QDialog):
 #     def __init__(self, parent=None):
