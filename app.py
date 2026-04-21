@@ -1,4 +1,5 @@
 import sys
+import json
 from tutorial import Dialog
 from PySide6.QtWidgets import QApplication, QWidget, QVBoxLayout, QPushButton, QInputDialog
 from PySide6.QtGui import QPainter, QColor, QPen, QFont
@@ -41,7 +42,18 @@ class ComponentWidget(QWidget):
         self._component_rating, ok = QInputDialog.getDouble(self, "Component Widget Value", "", 65, 0, 1000, 10)
         if self._component_name and ok and self._component_rating:
             self._state = not self._state
+            self.export()
             self.update()
+    
+    def export(self):
+        component = {
+            "name": self._component_name,
+            "Rating": self._component_rating,
+            "tags": ["Manufacturer", "Year"]
+        }
+
+        with open("widet_library.json", "w") as f:
+            json.dump(component, f)
 
 class MainWindow(QWidget):
     def __init__(self):
