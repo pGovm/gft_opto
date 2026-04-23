@@ -9,24 +9,7 @@ from PySide6.QtWidgets import (
     QToolButton, QVBoxLayout, QWidget, QInputDialog,
 )
 
-from app import ComponentWidget 
-
-class MainWindow(QWidget):
-    def __init__(self):
-        super().__init__()
-        self.setWindowTitle("Custom Component Widget Demo")
-        layout = QVBoxLayout()
-
-        # Create our custom LED widget
-        self.comp = ComponentWidget()
-        layout.addWidget(self.comp, alignment=Qt.AlignCenter)
-
-        # Create a button to toggle the LED
-        self.editButton = QPushButton("Choose a Component")
-        self.editButton.clicked.connect(self.comp.choose)
-        layout.addWidget(self.editButton)
-
-        self.setLayout(layout)
+from app import MainWindow 
 
 # Main Window Class defining the GUI structure
 class SubstationGuiMockup(QMainWindow):
