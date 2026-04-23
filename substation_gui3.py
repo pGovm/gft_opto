@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
     QToolButton, QVBoxLayout, QWidget, QInputDialog,
 )
 
-from app import MainWindow 
+from customWidgetTool import MainWindow 
 
 # Main Window Class defining the GUI structure
 class SubstationGuiMockup(QMainWindow):
