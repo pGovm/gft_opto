@@ -27,7 +27,7 @@ class ComponentWidget(QWidget):
         # Set the brush colour based on the state
         if self._state:
             painter.drawText(rect, Qt.AlignCenter, f"Component: {self._component_name}\n\n\n")
-            painter.drawText(rect, Qt.AlignCenter, f"Power Rating: {self._component_rating} kVA")
+            painter.drawText(rect, Qt.AlignCenter, f"Power Rating: {self._component_rating} kV")
         else:
             painter.setBrush(self._color_off)
 
@@ -39,7 +39,7 @@ class ComponentWidget(QWidget):
     def choose(self):
         components = ("Inductor", "Resistor", "Breaker", "Current Transformer", "Feeder")
         self._component_name, ok = QInputDialog.getItem(self, "Component Widget Name", "", components, 0, False)
-        self._component_rating, ok = QInputDialog.getDouble(self, "Component Widget Value", "", 65, 0, 1000, 10)
+        self._component_rating, ok = QInputDialog.getDouble(self, "Component Widget Value", "", 36, 0, 50, 10)
         if self._component_name and ok and self._component_rating:
             self._state = not self._state
             self.export()
