@@ -1,29 +1,25 @@
 import sys
-# Changed imports from PyQt5 to PySide6
 from PySide6.QtCore import Qt, QEvent, QPoint
 from PySide6.QtGui import QFont, QPixmap
 from PySide6.QtWidgets import (
-    QApplication, QComboBox, QFrame, QGridLayout, QGroupBox, 
-    QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, 
-    QMainWindow, QPushButton, QSlider, QStatusBar, QTextEdit, 
+    QApplication, QComboBox, QFrame, QGridLayout, QGroupBox,
+    QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
+    QMainWindow, QPushButton, QSlider, QStatusBar, QTextEdit,
     QToolButton, QVBoxLayout, QWidget, QFileDialog, QScrollArea,
 )
 
-# PyMuPDF
 import fitz
 
-# Main Window Class defining the GUI structure
 class SubstationGuiMockup(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("AI-Assisted Substation Design Tool")
         self.setMinimumSize(1400, 800)
 
-        # Global Stylesheet: Defines colors, borders, and padding for all widgets
         self.setStyleSheet("""
     QMainWindow { background-color: #f4f6f8; }
     
-    /* Explicitly set Label and GroupBox title colors to a dark slate */
+ 
     QLabel, QGroupBox { color: #1f2933; }
     
     QGroupBox { 
@@ -36,7 +32,6 @@ class SubstationGuiMockup(QMainWindow):
         padding-top: 25px; 
     }
     
-    /* This ensures the title text itself is dark and positioned correctly */
     QGroupBox::title { 
         subcontrol-origin: margin; 
         left: 16px; 
@@ -49,7 +44,6 @@ class SubstationGuiMockup(QMainWindow):
         border-radius: 8px; padding: 8px 16px; font-weight: 600; 
     }
 
-    /* Rest of your styles... */
     QLineEdit, QTextEdit, QComboBox, QListWidget { 
         background: white; border: 1px solid #cbd2d9; 
         border-radius: 8px; padding: 8px; color: #1f2933;
@@ -74,7 +68,6 @@ class SubstationGuiMockup(QMainWindow):
         main_layout.addWidget(header)
         main_layout.addLayout(content)
 
-        # Footer bar (more reliable than native QStatusBar across styles/platforms)
         footer = QFrame()
         footer.setStyleSheet(
             "QFrame { background: white; border: 1px solid #d9e2ec; border-radius: 10px; }"
@@ -118,7 +111,6 @@ class SubstationGuiMockup(QMainWindow):
                 self.workspace_scroll.viewport().setCursor(Qt.ArrowCursor)
                 return True
 
-            # Ctrl + wheel zoom
             if event.type() == QEvent.Wheel:
                 modifiers = event.modifiers()
                 if modifiers & Qt.ControlModifier:
@@ -283,7 +275,6 @@ class SubstationGuiMockup(QMainWindow):
         if viewport_size.width() <= 0 or viewport_size.height() <= 0:
             return
 
-        # Compute fit scale from original pixmap to viewport.
         ow = self._workspace_original.width()
         oh = self._workspace_original.height()
         if ow <= 0 or oh <= 0:
@@ -360,11 +351,10 @@ class SubstationGuiMockup(QMainWindow):
         return container
 
 if __name__ == "__main__":
-    # In PySide6 / Qt6, High DPI scaling is enabled by default.
-    # The old Qt.AA_EnableHighDpiScaling attributes are deprecated/removed.
+    
     app = QApplication(sys.argv)
     app.setFont(QFont("Segoe UI", 11))
     
     window = SubstationGuiMockup()
     window.showMaximized()
-    sys.exit(app.exec()) # Note: exec_() is also deprecated in favor of exec()
+    sys.exit(app.exec()) 
