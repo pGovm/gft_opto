@@ -27,7 +27,7 @@ class ComponentWidget(QWidget):
         # Set the brush colour based on the state
         if self._state:
             painter.drawText(rect, Qt.AlignCenter, f"Component: {self._component_name}\n\n\n")
-            painter.drawText(rect, Qt.AlignCenter, f"Power Rating: {self._component_rating} kV")
+            painter.drawText(rect, Qt.AlignCenter, f"Rating: {self._component_rating} kV")
         else:
             painter.setBrush(self._color_off)
 

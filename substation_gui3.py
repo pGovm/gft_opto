@@ -94,8 +94,6 @@ class SubstationGuiMockup(QMainWindow):
         load_btn = QPushButton("Load Diagram")
         run_btn = QPushButton("Run Evaluation")
 
-        load_btn.clicked.connect(self.open_widgetTool)
-
         layout.addWidget(title)
         layout.addStretch() 
         layout.addWidget(QLabel("Project:"))
@@ -105,10 +103,6 @@ class SubstationGuiMockup(QMainWindow):
         layout.addWidget(run_btn)
 
         return frame
-    
-    def open_widgetTool(self):
-        self.w = MainWindow()
-        self.w.show()
 
     def _build_content(self):
         layout = QHBoxLayout()
@@ -137,6 +131,9 @@ class SubstationGuiMockup(QMainWindow):
         search.setPlaceholderText("Search equipment...")
         palette_layout.addWidget(search)
 
+        widget_btn = QPushButton("Create Custom Widget")
+        widget_btn.clicked.connect(self.open_widgetTool)
+
         equipment_list = QListWidget()
         for item in ["Bus", "Breaker", "CT", "PT/VT", "Transformer"]:
             QListWidgetItem(item, equipment_list)
@@ -145,10 +142,15 @@ class SubstationGuiMockup(QMainWindow):
         self.controls_group = QGroupBox("Quick Actions")
         self.controls_layout = QVBoxLayout(self.controls_group)
         
+        layout.addWidget(widget_btn)
         layout.addWidget(palette_group, 3)
         layout.addWidget(self.controls_group, 1)
 
         return container
+    
+    def open_widgetTool(self):
+        self.w = MainWindow()
+        self.w.show()
 
     def _build_center_panel(self):
         container = QWidget()
