@@ -1,0 +1,36 @@
+[build-system]
+requires = ["uv-build>=0.12.0,<0.13.0"]
+build-backend = "uv_build"
+
+[project]
+name = "gft-opto"
+version = "0.0.1"
+
+dependencies = [
+    "PySide6>=6.11.0"
+]
+
+requires-python = ">= 3.12"
+
+authors = [
+    {name = "Govind Menon", email = "pgovindmenon07@gmail.com"},
+    {name = "Jon Hemrick", email = "pgovindmenon07@gmail.com"},
+    {name = "Athens Taylor", email = "pgovindmenon07@gmail.com"},
+    {name = "Lauren Rouse", email = "pgovindmenon07@gmail.com"},
+]
+
+maintainers = [
+    {name = "Govind Menon", email = "pgovindmenon07@gmail.com"},
+    {name = "Jon Hemrick", email = "pgovindmenon07@gmail.com"},
+    {name = "Lauren Rouse", email = "pgovindmenon07@gmail.com"},
+]
+
+readme = "README.md"
+license = "MIT"
+
+classifiers = [
+    "Programming Language :: Python :: 3.12"
+]
+
+[project.urls]
+Repository = "https://github.com/pGovm/gft_opto.git"
