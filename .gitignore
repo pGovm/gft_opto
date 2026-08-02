@@ -1,6 +1,6 @@
 .venv/
 .venv5/
 __pycache__/
-/tutorial.py
-/tutorial1.py
+src/gft_opto/tutorial.py
+src/tutorial1.py
 *.json
