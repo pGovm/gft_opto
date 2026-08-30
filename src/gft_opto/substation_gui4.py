@@ -10,6 +10,7 @@ Layout:
 
 import sys
 from collections import defaultdict
+from typing import Callable
 
 from PySide6.QtCore import Qt, QPointF, QRectF, QByteArray, QMimeData
 from PySide6.QtGui import (
@@ -21,10 +22,14 @@ from PySide6.QtWidgets import (
     QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
     QMainWindow, QPushButton, QTextEdit, QVBoxLayout, QWidget, QFileDialog,
     QGraphicsView, QGraphicsScene, QGraphicsItem, QGraphicsPixmapItem,
-    QGraphicsLineItem,
+    QGraphicsLineItem, QDialog,
+    QMessageBox,
 )
 
-import fitz
+import pymupdf
+import functools
+
+from gft_opto.customWidgetTool import ComponentDialog
 
 
 # ---------------------------------------------------------------------------
@@ -61,9 +66,9 @@ class OneLineSymbolItem(QGraphicsItem):
         self._ports = dict(ports)
         self._connections: list["ConnectionItem"] = []
         self.setFlags(
-            QGraphicsItem.ItemIsMovable
-            | QGraphicsItem.ItemIsSelectable
-            | QGraphicsItem.ItemSendsGeometryChanges
+            QGraphicsItem.GraphicsItemFlag.ItemIsMovable
+            | QGraphicsItem.GraphicsItemFlag.ItemIsSelectable
+            | QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges
         )
 
     # --- Port helpers -------------------------------------------------------
@@ -100,7 +105,7 @@ class OneLineSymbolItem(QGraphicsItem):
     # --- Drawing ------------------------------------------------------------
 
     def _pen(self):
-        return QPen(Qt.black, 2)
+        return QPen(Qt.GlobalColor.black, 2)
 
     def _draw_ports(self, painter: QPainter):
         """Draw blue port dots so drag-to-connect is easy to discover."""
@@ -113,10 +118,10 @@ class OneLineSymbolItem(QGraphicsItem):
 
     def itemChange(self, change, value):
         # Keep attached wires in sync when this symbol moves or is selected.
-        if change == QGraphicsItem.ItemPositionHasChanged:
+        if change == QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged:
             for conn in self._connections:
                 conn.update_path()
-        elif change == QGraphicsItem.ItemSelectedHasChanged:
+        elif change == QGraphicsItem.GraphicsItemChange.ItemSelectedHasChanged:
             self.update()
         return super().itemChange(change, value)
 
@@ -134,7 +139,7 @@ class Transformer2WItem(OneLineSymbolItem):
         return self._rect.adjusted(-6, -6, 6, 6)
 
     def paint(self, painter: QPainter, option, widget=None):
-        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         painter.setPen(self._pen())
         painter.drawLine(-34, 0, -18, 0)
         painter.drawLine(18, 0, 34, 0)
@@ -156,7 +161,7 @@ class Transformer3WItem(OneLineSymbolItem):
         return self._rect.adjusted(-6, -6, 6, 6)
 
     def paint(self, painter: QPainter, option, widget=None):
-        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         painter.setPen(self._pen())
         painter.drawEllipse(-18, -12, 22, 22)
         painter.drawEllipse(2, -12, 22, 22)
@@ -180,12 +185,12 @@ class MotorOperatedSwitchItem(OneLineSymbolItem):
         return self._rect.adjusted(-6, -6, 6, 6)
 
     def paint(self, painter: QPainter, option, widget=None):
-        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         painter.setPen(self._pen())
         painter.drawLine(-38, 0, -12, 0)
         painter.drawLine(12, 0, 38, 0)
         painter.drawLine(-12, 0, 12, -10)
-        painter.setBrush(QBrush(Qt.white))
+        painter.setBrush(QBrush(Qt.GlobalColor.white))
         painter.drawEllipse(QRectF(-14, -2, 4, 4))
         painter.drawEllipse(QRectF(10, -2, 4, 4))
         painter.drawRect(QRectF(-6, 6, 12, 8))
@@ -205,10 +210,37 @@ class CurrentTransformerItem(OneLineSymbolItem):
         return self._rect.adjusted(-6, -6, 6, 6)
 
     def paint(self, painter: QPainter, option, widget=None):
-        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         painter.setPen(self._pen())
         painter.drawEllipse(QRectF(-16, -16, 32, 32))
         painter.drawEllipse(QRectF(-6, -6, 12, 12))
+        self._draw_ports(painter)
+
+
+class CustomComponentItem(OneLineSymbolItem):
+    """A user-defined component created via the 'Create Component' dialog."""
+
+    def __init__(self, name: str, properties: dict | None = None):
+        slug = "".join(ch if ch.isalnum() else "_" for ch in name.strip().lower())
+        equip_type = f"custom_{slug}" if slug else "custom_component"
+        super().__init__(
+            equip_type,
+            name,
+            {"left": QPointF(-40, 0), "right": QPointF(40, 0)},
+        )
+        self.properties = dict(properties or {})
+        self._rect = QRectF(-42, -22, 84, 44)
+
+    def boundingRect(self):
+        return self._rect.adjusted(-6, -6, 6, 6)
+
+    def paint(self, painter: QPainter, option, widget=None):
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setPen(self._pen())
+        painter.setBrush(QBrush(Qt.GlobalColor.white))
+        painter.drawRect(self._rect)
+        painter.setFont(QFont("Sans-Serif", 8))
+        painter.drawText(self._rect, Qt.AlignmentFlag.AlignCenter, self.label)
         self._draw_ports(painter)
 
 
@@ -229,7 +261,7 @@ class ConnectionItem(QGraphicsLineItem):
         self.to_port = to_port
         self.setPen(QPen(QColor("#1f2933"), 2.5))
         self.setZValue(50)
-        self.setFlag(QGraphicsItem.ItemIsSelectable, True)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
         self.attach()
         self.update_path()
 
@@ -392,13 +424,13 @@ class EquipmentList(QListWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setDragEnabled(True)
-        self.setSelectionMode(QListWidget.SingleSelection)
+        self.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
 
     def startDrag(self, supportedActions):
         item = self.currentItem()
         if not item:
             return
-        equip_id = item.data(Qt.UserRole)
+        equip_id = item.data(Qt.ItemDataRole.UserRole)
         if not equip_id:
             return
 
@@ -407,7 +439,7 @@ class EquipmentList(QListWidget):
 
         drag = QDrag(self)
         drag.setMimeData(mime)
-        drag.exec(Qt.CopyAction)
+        drag.exec(Qt.DropAction.CopyAction)
 
 
 # ---------------------------------------------------------------------------
@@ -423,11 +455,11 @@ class WorkspaceView(QGraphicsView):
     def __init__(self, scene: QGraphicsScene, parent=None):
         super().__init__(scene, parent)
         self.setAcceptDrops(True)
-        self.setRenderHints(QPainter.Antialiasing | QPainter.SmoothPixmapTransform)
-        self.setViewportUpdateMode(QGraphicsView.BoundingRectViewportUpdate)
-        self.setDragMode(QGraphicsView.ScrollHandDrag)
-        self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
-        self.setResizeAnchor(QGraphicsView.AnchorUnderMouse)
+        self.setRenderHints(QPainter.RenderHint.Antialiasing | QPainter.RenderHint.SmoothPixmapTransform)
+        self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.BoundingRectViewportUpdate)
+        self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
+        self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
+        self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
 
         # PDF background (optional)
         self._background_item: QGraphicsPixmapItem | None = None
@@ -437,13 +469,13 @@ class WorkspaceView(QGraphicsView):
         self._temp_line: QGraphicsLineItem | None = None
         self._wire_start_pos: QPointF | None = None
         self._wiring = False
-        self._saved_drag_mode = QGraphicsView.ScrollHandDrag
+        self._saved_drag_mode = QGraphicsView.DragMode.ScrollHandDrag
 
         # Move tracking for undo (captured on press, committed on release)
         self._move_origins: dict[OneLineSymbolItem, QPointF] = {}
 
         self.undo_stack: QUndoStack | None = None
-        self.status_callback = None
+        self.status_callback: Callable[[str], None] | None = None
 
     # --- Status & undo helpers ----------------------------------------------
 
@@ -532,51 +564,55 @@ class WorkspaceView(QGraphicsView):
         scn = self.scene()
         if scn is None:
             return
-        selected = [
-            item for item in scn.selectedItems()
-            if item is not self._background_item
-            and isinstance(item, (OneLineSymbolItem, ConnectionItem))
-        ]
+        selected: list[QGraphicsItem] = []
+        for item in scn.selectedItems():
+            if item is self._background_item:
+                continue
+            if isinstance(item, (OneLineSymbolItem, ConnectionItem)):
+                selected.append(item)
         if not selected:
             return
         self._push(DeleteSelectionCommand(scn, selected))
         self._set_status("Deleted selection")
 
     def set_background_pixmap(self, pixmap: QPixmap):
-        if self._background_item is not None:
-            self.scene().removeItem(self._background_item)
+        scn = self.scene()
+        if self._background_item is not None and scn is not None:
+            scn.removeItem(self._background_item)
             self._background_item = None
 
         self._background_item = QGraphicsPixmapItem(pixmap)
         self._background_item.setZValue(-10_000)
-        self._background_item.setFlag(QGraphicsItem.ItemIsSelectable, False)
-        self._background_item.setFlag(QGraphicsItem.ItemIsMovable, False)
-        self.scene().addItem(self._background_item)
-        self.scene().setSceneRect(self._background_item.boundingRect())
-        self.fitInView(self.sceneRect(), Qt.KeepAspectRatio)
+        self._background_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, False)
+        self._background_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, False)
+        scn = self.scene()
+        if scn is not None:
+            scn.addItem(self._background_item)
+            scn.setSceneRect(self._background_item.boundingRect())
+        self.fitInView(self.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
 
     # --- Keyboard & mouse input ---------------------------------------------
 
     def keyPressEvent(self, event):
-        if event.key() == Qt.Key_Escape and self._pending is not None:
+        if event.key() == Qt.Key.Key_Escape and self._pending is not None:
             self._cancel_pending()
             self._set_status("Connection cancelled")
             event.accept()
             return
-        if event.key() in (Qt.Key_Delete, Qt.Key_Backspace):
+        if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
             self.delete_selected()
             event.accept()
             return
         super().keyPressEvent(event)
 
     def mousePressEvent(self, event):
-        if event.button() == Qt.RightButton and self._pending is not None:
+        if event.button() == Qt.MouseButton.RightButton and self._pending is not None:
             self._cancel_pending()
             self._set_status("Connection cancelled")
             event.accept()
             return
 
-        if event.button() == Qt.LeftButton:
+        if event.button() == Qt.MouseButton.LeftButton:
             scene_pos = self.mapToScene(event.position().toPoint())
             hit = self._find_port_at(scene_pos)
             if hit is not None:
@@ -584,13 +620,13 @@ class WorkspaceView(QGraphicsView):
                 item, port = hit
                 self._move_origins = {}
                 self._saved_drag_mode = self.dragMode()
-                self.setDragMode(QGraphicsView.NoDrag)
-                self.setCursor(Qt.CrossCursor)
+                self.setDragMode(QGraphicsView.DragMode.NoDrag)
+                self.setCursor(Qt.CursorShape.CrossCursor)
                 self._pending = (item, port)
                 self._wire_start_pos = scene_pos
                 self._wiring = False
                 self._temp_line = QGraphicsLineItem()
-                self._temp_line.setPen(QPen(QColor("#2f6fed"), 2, Qt.DashLine))
+                self._temp_line.setPen(QPen(QColor("#2f6fed"), 2, Qt.PenStyle.DashLine))
                 self._temp_line.setZValue(200)
                 start = item.port_scene_pos(port)
                 self._temp_line.setLine(start.x(), start.y(), start.x(), start.y())
@@ -623,7 +659,7 @@ class WorkspaceView(QGraphicsView):
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
-        if event.button() == Qt.LeftButton and self._pending is not None:
+        if event.button() == Qt.MouseButton.LeftButton and self._pending is not None:
             from_item, from_port = self._pending
             scene_pos = self.mapToScene(event.position().toPoint())
             hit = self._find_port_at(scene_pos)
@@ -650,7 +686,7 @@ class WorkspaceView(QGraphicsView):
             event.accept()
             return
 
-        if event.button() == Qt.LeftButton and self._move_origins:
+        if event.button() == Qt.MouseButton.LeftButton and self._move_origins:
             super().mouseReleaseEvent(event)
             self._commit_moves_if_any()
             return
@@ -658,7 +694,7 @@ class WorkspaceView(QGraphicsView):
         super().mouseReleaseEvent(event)
 
     def wheelEvent(self, event):
-        if event.modifiers() & Qt.ControlModifier:
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
             steps = event.angleDelta().y() / 120.0
             if steps == 0:
                 return
@@ -766,9 +802,9 @@ class SubstationGuiMockup(QMainWindow):
             self.workspace_view.undo_stack = self.undo_stack
 
         self.undo_action = self.undo_stack.createUndoAction(self, "Undo")
-        self.undo_action.setShortcut(QKeySequence.Undo)
+        self.undo_action.setShortcut(QKeySequence.StandardKey.Undo)
         self.redo_action = self.undo_stack.createRedoAction(self, "Redo")
-        self.redo_action.setShortcut(QKeySequence.Redo)
+        self.redo_action.setShortcut(QKeySequence.StandardKey.Redo)
         self.addAction(self.undo_action)
         self.addAction(self.redo_action)
 
@@ -831,7 +867,7 @@ class SubstationGuiMockup(QMainWindow):
         layout.setContentsMargins(20, 14, 20, 14)
 
         title = QLabel("AI-Assisted Substation Protection & Control Design")
-        title.setFont(QFont("Arial", 12, QFont.Bold))
+        title.setFont(QFont("Arial", 12, QFont.Weight.Bold))
 
         project_box = QComboBox()
         project_box.addItems(["Demo Project - One Line A", "Breaker-and-a-Half Yard", "Ring Bus Example"])
@@ -865,6 +901,11 @@ class SubstationGuiMockup(QMainWindow):
         layout.setSpacing(16)
         layout.setContentsMargins(0, 0, 0, 0)
 
+        # Create Component button (sits above the Equipment Library)
+        self.create_component_btn = QPushButton("Create Component")
+        self.create_component_btn.clicked.connect(self._on_create_component_clicked)
+        layout.addWidget(self.create_component_btn)
+
         # Equipment palette
         palette_group = QGroupBox("Equipment Library")
         palette_layout = QVBoxLayout(palette_group)
@@ -876,7 +917,7 @@ class SubstationGuiMockup(QMainWindow):
         self.equipment_list = EquipmentList()
         for equip_id, meta in EQUIPMENT_DEFS.items():
             item = QListWidgetItem(meta["label"])
-            item.setData(Qt.UserRole, equip_id)
+            item.setData(Qt.ItemDataRole.UserRole, equip_id)
             self.equipment_list.addItem(item)
         palette_layout.addWidget(self.equipment_list)
 
@@ -927,7 +968,7 @@ class SubstationGuiMockup(QMainWindow):
         self.workspace_hint = QLabel(
             "Drag blue ports to connect.\nCtrl+Z / Ctrl+Y undo-redo. Ctrl+scroll zooms."
         )
-        self.workspace_hint.setAlignment(Qt.AlignCenter)
+        self.workspace_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.workspace_hint.setStyleSheet("color: #52606d; font-size: 13pt; margin-top: 10px;")
         canvas_layout.addWidget(self.workspace_hint)
 
@@ -953,16 +994,36 @@ class SubstationGuiMockup(QMainWindow):
         properties_layout.addWidget(QLabel("Name:"), 1, 0)
         self.prop_name = QLineEdit("—")
         properties_layout.addWidget(self.prop_name, 1, 1)
-        properties_layout.addWidget(QLabel("Voltage Level:"), 2, 0)
 
-        volt_cb = QComboBox()
-        volt_cb.addItems(["230 kV", "115 kV", "34.5 kV"])
-        properties_layout.addWidget(volt_cb, 2, 1)
-
-        properties_layout.addWidget(QLabel("Status:"), 3, 0)
+        properties_layout.addWidget(QLabel("Status:"), 2, 0)
         status_cb = QComboBox()
         status_cb.addItems(["Closed", "Open", "Maintenance"])
-        properties_layout.addWidget(status_cb, 3, 1)
+        properties_layout.addWidget(status_cb, 2, 1)
+
+        properties_layout.addWidget(QLabel("Trip Coil 1 (A):"), 3, 0)
+        self.prop_trip_coil_1 = QLineEdit("—")
+        self.prop_trip_coil_1.setReadOnly(True)
+        properties_layout.addWidget(self.prop_trip_coil_1, 3, 1)
+
+        properties_layout.addWidget(QLabel("Trip Coil 2 (A):"), 4, 0)
+        self.prop_trip_coil_2 = QLineEdit("—")
+        self.prop_trip_coil_2.setReadOnly(True)
+        properties_layout.addWidget(self.prop_trip_coil_2, 4, 1)
+
+        properties_layout.addWidget(QLabel("Close Coil (A):"), 5, 0)
+        self.prop_close_coil = QLineEdit("—")
+        self.prop_close_coil.setReadOnly(True)
+        properties_layout.addWidget(self.prop_close_coil, 6, 1)
+
+        properties_layout.addWidget(QLabel("Motor Inrush Current (A):"), 6, 0)
+        self.prop_motor_inrush = QLineEdit("—")
+        self.prop_motor_inrush.setReadOnly(True)
+        properties_layout.addWidget(self.prop_motor_inrush, 6, 1)
+
+        properties_layout.addWidget(QLabel("Motor Run Current (A):"), 7, 0)
+        self.prop_motor_run = QLineEdit("—")
+        self.prop_motor_run.setReadOnly(True)
+        properties_layout.addWidget(self.prop_motor_run, 7, 1)
 
         analysis_group = QGroupBox("Analysis Output")
         analysis_layout = QVBoxLayout(analysis_group)
@@ -988,10 +1049,58 @@ class SubstationGuiMockup(QMainWindow):
 
     # --- Event handlers -----------------------------------------------------
 
+    def _on_create_component_clicked(self):
+        """
+        Open the Create Component popup (from customWidgetTool.py). On
+        accept, register the new component as an EQUIPMENT_DEFS entry (so
+        it appears in the Equipment Library) and add a matching list entry
+        so it can be dragged into the sandbox like any built-in symbol.
+        """
+        dialog = ComponentDialog(self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        name = dialog.component_name()
+        if not name:
+            QMessageBox.warning(self, "Create Component", "Please enter a component name.")
+            return
+
+        data = dialog.component_data()
+        properties = {
+            "rating_kv": data["Rating"],
+            "trip_coil_1_a": data["TripCoil1"],
+            "trip_coil_2_a": data["TripCoil2"],
+            "close_coil_a": data["CloseCoil"],
+            "motor_inrush_a": data["MotorInrushCurrent"],
+            "motor_run_a": data["MotorRunCurrent"],
+        }
+
+        slug = "".join(ch if ch.isalnum() else "_" for ch in name.strip().lower())
+        equip_id = f"custom_{slug}" if slug else f"custom_{len(EQUIPMENT_DEFS)}"
+        base_id = equip_id
+        suffix = 1
+        while equip_id in EQUIPMENT_DEFS:
+            suffix += 1
+            equip_id = f"{base_id}_{suffix}"
+
+        EQUIPMENT_DEFS[equip_id] = {
+            "label": name,
+            "factory": functools.partial(
+                CustomComponentItem, name=name, properties=properties
+            ),
+        }
+
+        item = QListWidgetItem(name)
+        item.setData(Qt.ItemDataRole.UserRole, equip_id)
+        self.equipment_list.addItem(item)
+
+        if hasattr(self, "footer_status_label"):
+            self.footer_status_label.setText(f"Added '{name}' to the Equipment Library")
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
         if hasattr(self, "workspace_view") and getattr(self, "_workspace_original", None):
-            self.workspace_view.fitInView(self.workspace_scene.sceneRect(), Qt.KeepAspectRatio)
+            self.workspace_view.fitInView(self.workspace_scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
 
     def on_import_pdf_clicked(self):
         """Render the first page of a PDF as the canvas background."""
@@ -1000,11 +1109,11 @@ class SubstationGuiMockup(QMainWindow):
             return
 
         try:
-            doc = fitz.open(pdf_path)
+            doc = pymupdf.open(pdf_path)
             try:
                 page = doc.load_page(0)
                 zoom = 2.0
-                mat = fitz.Matrix(zoom, zoom)
+                mat = pymupdf.Matrix(zoom, zoom)
                 pix = page.get_pixmap(matrix=mat, alpha=False)
                 png_bytes = pix.tobytes("png")
             finally:
@@ -1015,7 +1124,7 @@ class SubstationGuiMockup(QMainWindow):
             return
 
         pm = QPixmap()
-        if not pm.loadFromData(png_bytes, "PNG"):
+        if not pm.loadFromData(png_bytes):
             if hasattr(self, "footer_status_label"):
                 self.footer_status_label.setText("Import failed: could not decode rendered PNG")
             return
@@ -1036,20 +1145,43 @@ class SubstationGuiMockup(QMainWindow):
         if not items:
             self.prop_type.setText("—")
             self.prop_name.setText("—")
+            self._clear_custom_component_properties()
             return
 
         item = items[0]
         if isinstance(item, OneLineSymbolItem):
             self.prop_type.setText(item.label)
             self.prop_name.setText(item.instance_id)
+            if isinstance(item, CustomComponentItem):
+                self._set_custom_component_properties(item.properties)
+            else:
+                self._clear_custom_component_properties()
         elif isinstance(item, ConnectionItem):
             self.prop_type.setText("Connection")
             self.prop_name.setText(
                 f"{item.from_item.instance_id}:{item.from_port} → "
                 f"{item.to_item.instance_id}:{item.to_port}"
             )
+            self._clear_custom_component_properties()
         else:
             self.prop_type.setText(type(item).__name__)
+            self._clear_custom_component_properties()
+
+    def _set_custom_component_properties(self, properties: dict):
+        """Fill the Trip Coil / Motor Current rows from a CustomComponentItem."""
+        self.prop_trip_coil_1.setText(f"{properties.get('trip_coil_1_a', 0):g}")
+        self.prop_trip_coil_2.setText(f"{properties.get('trip_coil_2_a', 0):g}")
+        self.prop_close_coil.setText(f"{properties.get('close_coil_a', 0):g}")
+        self.prop_motor_inrush.setText(f"{properties.get('motor_inrush_a', 0):g}")
+        self.prop_motor_run.setText(f"{properties.get('motor_run_a', 0):g}")
+
+    def _clear_custom_component_properties(self):
+        """Reset the Trip Coil / Motor Current rows for non-custom selections."""
+        self.prop_trip_coil_1.setText("—")
+        self.prop_trip_coil_2.setText("—")
+        self.prop_close_coil.setText("—")
+        self.prop_motor_inrush.setText("—")
+        self.prop_motor_run.setText("—")
 
 
 # ---------------------------------------------------------------------------
