@@ -25,7 +25,10 @@ class ComponentDialog(QDialog):
             ["Inductor", "Resistor", "Breaker", "Current Transformer", "Feeder"]
         )
         self.name_combo.setCurrentIndex(-1)
-        self.name_combo.lineEdit().setPlaceholderText("e.g. Inductor, Breaker, Feeder")
+        line_edit = self.name_combo.lineEdit()
+        if line_edit is not None:
+            line_edit.setPlaceholderText("e.g. Inductor, Breaker, Feeder")
+
         self._add_row(form, "Component Name:", self.name_combo)
 
         self.rating_spin = self._make_spin(default=36)
