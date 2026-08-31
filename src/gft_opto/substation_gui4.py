@@ -18,9 +18,9 @@ from PySide6.QtGui import (
     QKeySequence, QUndoStack, QUndoCommand,
 )
 from PySide6.QtWidgets import (
-    QApplication, QComboBox, QFrame, QGridLayout, QGroupBox,
+    QApplication, QCheckBox, QComboBox, QFrame, QGridLayout, QGroupBox,
     QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
-    QMainWindow, QPushButton, QTextEdit, QVBoxLayout, QWidget, QFileDialog,
+    QMainWindow, QPushButton, QSlider, QTextEdit, QVBoxLayout, QWidget, QFileDialog,
     QGraphicsView, QGraphicsScene, QGraphicsItem, QGraphicsPixmapItem,
     QGraphicsLineItem, QDialog,
     QMessageBox,
@@ -40,6 +40,11 @@ MIME_EQUIPMENT = "application/x-substation-equipment"
 PORT_HIT_RADIUS = 14.0       # px — how close the cursor must be to snap to a port
 PORT_DOT_RADIUS = 4.0        # px — visual size of port handles
 WIRE_DRAG_THRESHOLD = 6.0    # px — min drag before rubber-band wire appears
+DEFAULT_WORKSPACE_WIDTH = 2400.0
+DEFAULT_WORKSPACE_HEIGHT = 1800.0
+GRID_SPACING = 25.0          # scene units — matches PDF pixel coords after import
+GRID_MAJOR_EVERY = 5         # every Nth line is drawn heavier
+DEFAULT_GRID_OPACITY = 0.25
 
 _instance_counters: dict[str, int] = defaultdict(int)
 
@@ -446,6 +451,46 @@ class EquipmentList(QListWidget):
 # Workspace canvas
 # ---------------------------------------------------------------------------
 
+class WorkspaceGridItem(QGraphicsItem):
+    """Alignment grid drawn in scene coordinates so it pans/zooms with the PDF."""
+
+    def __init__(self, rect: QRectF):
+        super().__init__()
+        self._rect = QRectF(rect)
+        self.setZValue(-9_000)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, False)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, False)
+
+    def set_grid_rect(self, rect: QRectF):
+        self.prepareGeometryChange()
+        self._rect = QRectF(rect)
+        self.update()
+
+    def boundingRect(self) -> QRectF:
+        return self._rect
+
+    def paint(self, painter: QPainter, option, widget=None):
+        left = int(self._rect.left())
+        right = int(self._rect.right())
+        top = int(self._rect.top())
+        bottom = int(self._rect.bottom())
+        spacing = int(GRID_SPACING)
+
+        for x in range(left, right + 1, spacing):
+            is_major = ((x - left) // spacing) % GRID_MAJOR_EVERY == 0
+            color = QColor("#9fb3c8" if is_major else "#d9e2ec")
+            width = 1.5 if is_major else 1.0
+            painter.setPen(QPen(color, width))
+            painter.drawLine(x, top, x, bottom)
+
+        for y in range(top, bottom + 1, spacing):
+            is_major = ((y - top) // spacing) % GRID_MAJOR_EVERY == 0
+            color = QColor("#9fb3c8" if is_major else "#d9e2ec")
+            width = 1.5 if is_major else 1.0
+            painter.setPen(QPen(color, width))
+            painter.drawLine(left, y, right, y)
+
+
 class WorkspaceView(QGraphicsView):
     """
     Central diagram view: pan/zoom, drop equipment, move symbols,
@@ -461,8 +506,10 @@ class WorkspaceView(QGraphicsView):
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
 
-        # PDF background (optional)
+        # PDF background (optional) and alignment grid (above PDF, below symbols)
         self._background_item: QGraphicsPixmapItem | None = None
+        self._grid_item: WorkspaceGridItem | None = None
+        self._init_grid()
 
         # In-progress port-to-port wire drag
         self._pending: tuple[OneLineSymbolItem, str] | None = None
@@ -476,6 +523,28 @@ class WorkspaceView(QGraphicsView):
 
         self.undo_stack: QUndoStack | None = None
         self.status_callback: Callable[[str], None] | None = None
+
+    def _init_grid(self):
+        scn = self.scene()
+        if scn is None:
+            return
+        self._grid_item = WorkspaceGridItem(scn.sceneRect())
+        self._grid_item.setOpacity(DEFAULT_GRID_OPACITY)
+        scn.addItem(self._grid_item)
+
+    def _sync_grid_to_scene(self):
+        scn = self.scene()
+        if scn is None or self._grid_item is None:
+            return
+        self._grid_item.set_grid_rect(scn.sceneRect())
+
+    def set_grid_visible(self, visible: bool):
+        if self._grid_item is not None:
+            self._grid_item.setVisible(visible)
+
+    def set_grid_opacity(self, percent: int):
+        if self._grid_item is not None:
+            self._grid_item.setOpacity(max(0.0, min(percent / 100.0, 1.0)))
 
     # --- Status & undo helpers ----------------------------------------------
 
@@ -589,6 +658,7 @@ class WorkspaceView(QGraphicsView):
         if scn is not None:
             scn.addItem(self._background_item)
             scn.setSceneRect(self._background_item.boundingRect())
+            self._sync_grid_to_scene()
         self.fitInView(self.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
 
     # --- Keyboard & mouse input ---------------------------------------------
@@ -842,6 +912,30 @@ class SubstationGuiMockup(QMainWindow):
 
         if hasattr(self, "workspace_view"):
             self.workspace_view.status_callback = self.footer_status_label.setText
+        self._setup_grid_controls()
+
+    def _setup_grid_controls(self):
+        self.grid_show_cb = QCheckBox("Show Grid")
+        self.grid_show_cb.setChecked(True)
+        self.grid_show_cb.toggled.connect(self.workspace_view.set_grid_visible)
+
+        opacity_row = QHBoxLayout()
+        opacity_row.addWidget(QLabel("Grid Opacity:"))
+        self.grid_opacity_slider = QSlider(Qt.Orientation.Horizontal)
+        self.grid_opacity_slider.setRange(0, 100)
+        self.grid_opacity_slider.setValue(int(DEFAULT_GRID_OPACITY * 100))
+        self.grid_opacity_label = QLabel(f"{self.grid_opacity_slider.value()}%")
+        opacity_row.addWidget(self.grid_opacity_slider, 1)
+        opacity_row.addWidget(self.grid_opacity_label)
+
+        def _on_opacity_changed(value: int):
+            self.grid_opacity_label.setText(f"{value}%")
+            self.workspace_view.set_grid_opacity(value)
+
+        self.grid_opacity_slider.valueChanged.connect(_on_opacity_changed)
+
+        self.controls_layout.addWidget(self.grid_show_cb)
+        self.controls_layout.addLayout(opacity_row)
 
     def _build_footer(self):
         footer = QFrame()
@@ -959,6 +1053,9 @@ class SubstationGuiMockup(QMainWindow):
         canvas_layout = QVBoxLayout(canvas)
 
         self.workspace_scene = QGraphicsScene(self)
+        self.workspace_scene.setSceneRect(
+            QRectF(0, 0, DEFAULT_WORKSPACE_WIDTH, DEFAULT_WORKSPACE_HEIGHT)
+        )
         self.workspace_view = WorkspaceView(self.workspace_scene, self)
         self.workspace_view.setStyleSheet("background: white; border: none;")
 
