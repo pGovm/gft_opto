@@ -15,14 +15,14 @@ from typing import Callable
 from PySide6.QtCore import Qt, QPointF, QRectF, QByteArray, QMimeData
 from PySide6.QtGui import (
     QFont, QPixmap, QDrag, QPainter, QPen, QBrush, QColor,
-    QKeySequence, QUndoStack, QUndoCommand,
+    QKeySequence, QUndoStack, QUndoCommand, QPainterPath,
 )
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QFrame, QGridLayout, QGroupBox,
     QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
     QMainWindow, QPushButton, QSlider, QTextEdit, QVBoxLayout, QWidget, QFileDialog,
     QGraphicsView, QGraphicsScene, QGraphicsItem, QGraphicsPixmapItem,
-    QGraphicsLineItem, QDialog,
+    QGraphicsPathItem, QDialog,
     QMessageBox,
 )
 
@@ -55,12 +55,81 @@ def next_instance_id(equip_type: str) -> str:
     return f"{equip_type}_{_instance_counters[equip_type]}"
 
 
+def snap_point_to_grid(p: QPointF, spacing: float = GRID_SPACING) -> QPointF:
+    """Round a scene point to the nearest grid intersection."""
+    return QPointF(
+        round(p.x() / spacing) * spacing,
+        round(p.y() / spacing) * spacing,
+    )
+
+
+def position_for_snapped_port(
+    proposed_pos: QPointF,
+    port_local: QPointF,
+    spacing: float = GRID_SPACING,
+) -> QPointF:
+    """Return item position that places port_local on the grid."""
+    port_scene = proposed_pos + port_local
+    snapped = snap_point_to_grid(port_scene, spacing)
+    return snapped - port_local
+
+
+def default_snap_port(item: "OneLineSymbolItem") -> str:
+    """Pick a sensible anchor port when the user did not click on one."""
+    ports = item.ports()
+    if "left" in ports:
+        return "left"
+    return next(iter(ports))
+
+
+def route_wire_on_grid(
+    p1: QPointF,
+    p2: QPointF,
+    *,
+    spacing: float = GRID_SPACING,
+    snap_endpoints: bool = True,
+) -> list[QPointF]:
+    """Return orthogonal polyline vertices that follow the alignment grid."""
+    if snap_endpoints:
+        p1 = snap_point_to_grid(p1, spacing)
+        p2 = snap_point_to_grid(p2, spacing)
+
+    if abs(p1.y() - p2.y()) < 0.01:
+        return [p1, p2]
+    if abs(p1.x() - p2.x()) < 0.01:
+        return [p1, p2]
+
+    bend_x = snap_point_to_grid(
+        QPointF((p1.x() + p2.x()) / 2, p1.y()),
+        spacing,
+    ).x()
+    return [p1, QPointF(bend_x, p1.y()), QPointF(bend_x, p2.y()), p2]
+
+
+def wire_path_from_points(points: list[QPointF]) -> QPainterPath:
+    """Build a painter path from a polyline, skipping duplicate vertices."""
+    if not points:
+        return QPainterPath()
+
+    simplified: list[QPointF] = [points[0]]
+    for pt in points[1:]:
+        if (pt - simplified[-1]).manhattanLength() > 0.01:
+            simplified.append(pt)
+
+    path = QPainterPath(simplified[0])
+    for pt in simplified[1:]:
+        path.lineTo(pt)
+    return path
+
+
 # ---------------------------------------------------------------------------
 # Symbol graphics items
 # ---------------------------------------------------------------------------
 
 class OneLineSymbolItem(QGraphicsItem):
     """Base class for draggable one-line equipment symbols with named ports."""
+
+    snap_to_grid_enabled = True
 
     def __init__(self, equip_type: str, label: str, ports: dict[str, QPointF]):
         super().__init__()
@@ -70,6 +139,7 @@ class OneLineSymbolItem(QGraphicsItem):
         self.label = label
         self._ports = dict(ports)
         self._connections: list["ConnectionItem"] = []
+        self._snap_port_name: str | None = None
         self.setFlags(
             QGraphicsItem.GraphicsItemFlag.ItemIsMovable
             | QGraphicsItem.GraphicsItemFlag.ItemIsSelectable
@@ -122,6 +192,13 @@ class OneLineSymbolItem(QGraphicsItem):
             painter.drawEllipse(QRectF(pt.x() - r, pt.y() - r, 2 * r, 2 * r))
 
     def itemChange(self, change, value):
+        if change == QGraphicsItem.GraphicsItemChange.ItemPositionChange:
+            if (
+                self.snap_to_grid_enabled
+                and self._snap_port_name is not None
+                and self._snap_port_name in self._ports
+            ):
+                return position_for_snapped_port(value, self._ports[self._snap_port_name])
         # Keep attached wires in sync when this symbol moves or is selected.
         if change == QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged:
             for conn in self._connections:
@@ -249,8 +326,8 @@ class CustomComponentItem(OneLineSymbolItem):
         self._draw_ports(painter)
 
 
-class ConnectionItem(QGraphicsLineItem):
-    """A wire between two symbol ports; updates when either endpoint moves."""
+class ConnectionItem(QGraphicsPathItem):
+    """A wire between two symbol ports; routes orthogonally along the grid."""
 
     def __init__(
         self,
@@ -275,7 +352,12 @@ class ConnectionItem(QGraphicsLineItem):
             return
         p1 = self.from_item.port_scene_pos(self.from_port)
         p2 = self.to_item.port_scene_pos(self.to_port)
-        self.setLine(p1.x(), p1.y(), p2.x(), p2.y())
+        points = route_wire_on_grid(
+            p1,
+            p2,
+            snap_endpoints=OneLineSymbolItem.snap_to_grid_enabled,
+        )
+        self.setPath(wire_path_from_points(points))
 
     def attach(self):
         if self.from_item is not None:
@@ -513,13 +595,15 @@ class WorkspaceView(QGraphicsView):
 
         # In-progress port-to-port wire drag
         self._pending: tuple[OneLineSymbolItem, str] | None = None
-        self._temp_line: QGraphicsLineItem | None = None
+        self._temp_line: QGraphicsPathItem | None = None
         self._wire_start_pos: QPointF | None = None
         self._wiring = False
         self._saved_drag_mode = QGraphicsView.DragMode.ScrollHandDrag
 
         # Move tracking for undo (captured on press, committed on release)
         self._move_origins: dict[OneLineSymbolItem, QPointF] = {}
+        self._snap_ports: dict[OneLineSymbolItem, str] = {}
+        self._snap_to_grid = True
 
         self.undo_stack: QUndoStack | None = None
         self.status_callback: Callable[[str], None] | None = None
@@ -546,6 +630,33 @@ class WorkspaceView(QGraphicsView):
         if self._grid_item is not None:
             self._grid_item.setOpacity(max(0.0, min(percent / 100.0, 1.0)))
 
+    def set_snap_to_grid(self, enabled: bool):
+        self._snap_to_grid = enabled
+        OneLineSymbolItem.snap_to_grid_enabled = enabled
+        scn = self.scene()
+        if scn is not None:
+            for item in scn.items():
+                if isinstance(item, ConnectionItem):
+                    item.update_path()
+
+    def _assign_snap_ports(self, items: list[OneLineSymbolItem], scene_pos: QPointF):
+        self._clear_snap_ports()
+        if not self._snap_to_grid:
+            return
+        for item in items:
+            port = item.nearest_port(scene_pos, max_dist=PORT_HIT_RADIUS)
+            if port is None:
+                port = item.nearest_port(scene_pos, max_dist=float("inf"))
+            if port is None:
+                port = default_snap_port(item)
+            item._snap_port_name = port
+            self._snap_ports[item] = port
+
+    def _clear_snap_ports(self):
+        for item in self._snap_ports:
+            item._snap_port_name = None
+        self._snap_ports = {}
+
     # --- Status & undo helpers ----------------------------------------------
 
     def _set_status(self, text: str):
@@ -559,6 +670,15 @@ class WorkspaceView(QGraphicsView):
             command.redo()
 
     # --- Wiring helpers -----------------------------------------------------
+
+    def _wire_preview_path(self, start: QPointF, end: QPointF) -> QPainterPath:
+        hit = self._find_port_at(end)
+        if hit is not None:
+            end = hit[0].port_scene_pos(hit[1])
+        elif self._snap_to_grid:
+            end = snap_point_to_grid(end)
+        points = route_wire_on_grid(start, end, snap_endpoints=self._snap_to_grid)
+        return wire_path_from_points(points)
 
     def _cancel_pending(self):
         self._pending = None
@@ -602,16 +722,20 @@ class WorkspaceView(QGraphicsView):
         if scn is None:
             return
         origins: dict[OneLineSymbolItem, QPointF] = {}
+        items: list[OneLineSymbolItem] = []
         selected = [it for it in scn.selectedItems() if isinstance(it, OneLineSymbolItem)]
         if selected:
             for item in selected:
                 origins[item] = QPointF(item.pos())
+                items.append(item)
         else:
             for it in scn.items(scene_pos):
                 if isinstance(it, OneLineSymbolItem):
                     origins[it] = QPointF(it.pos())
+                    items.append(it)
                     break
         self._move_origins = origins
+        self._assign_snap_ports(items, scene_pos)
 
     def _commit_moves_if_any(self):
         moves: list[tuple[OneLineSymbolItem, QPointF, QPointF]] = []
@@ -620,6 +744,7 @@ class WorkspaceView(QGraphicsView):
             if (new_pos - old_pos).manhattanLength() > 0.5:
                 moves.append((item, old_pos, new_pos))
         self._move_origins = {}
+        self._clear_snap_ports()
         if moves:
             self._push(MoveEquipmentCommand(moves))
             if len(moves) == 1:
@@ -695,11 +820,11 @@ class WorkspaceView(QGraphicsView):
                 self._pending = (item, port)
                 self._wire_start_pos = scene_pos
                 self._wiring = False
-                self._temp_line = QGraphicsLineItem()
+                self._temp_line = QGraphicsPathItem()
                 self._temp_line.setPen(QPen(QColor("#2f6fed"), 2, Qt.PenStyle.DashLine))
                 self._temp_line.setZValue(200)
                 start = item.port_scene_pos(port)
-                self._temp_line.setLine(start.x(), start.y(), start.x(), start.y())
+                self._temp_line.setPath(wire_path_from_points([start, start]))
                 self._temp_line.setVisible(False)
                 self.scene().addItem(self._temp_line)
                 self._set_status(f"Drag to a port from {item.instance_id}:{port}")
@@ -723,7 +848,7 @@ class WorkspaceView(QGraphicsView):
                     self._wiring = True
                     self._temp_line.setVisible(True)
             if self._wiring:
-                self._temp_line.setLine(start.x(), start.y(), end.x(), end.y())
+                self._temp_line.setPath(self._wire_preview_path(start, end))
             event.accept()
             return
         super().mouseMoveEvent(event)
@@ -801,6 +926,11 @@ class WorkspaceView(QGraphicsView):
 
         pos = self.mapToScene(event.position().toPoint())
         symbol = meta["factory"]()
+        if self._snap_to_grid:
+            port = symbol.nearest_port(pos, max_dist=float("inf"))
+            if port is None:
+                port = default_snap_port(symbol)
+            pos = position_for_snapped_port(pos, symbol.ports()[port])
         symbol.setPos(pos)
         symbol.setZValue(100)
         self._push(AddEquipmentCommand(self.scene(), symbol))
@@ -828,6 +958,39 @@ class SubstationGuiMockup(QMainWindow):
     QMainWindow { background-color: #f4f6f8; }
 
     QLabel, QGroupBox { color: #1f2933; }
+
+    QCheckBox {
+        color: #1f2933;
+        spacing: 8px;
+        font-size: 11pt;
+        font-weight: normal;
+    }
+
+    QCheckBox::indicator {
+        width: 18px;
+        height: 18px;
+        border: 1px solid #cbd2d9;
+        border-radius: 4px;
+        background: white;
+    }
+
+    QCheckBox::indicator:checked {
+        background: #2f6fed;
+        border-color: #2f6fed;
+    }
+
+    QSlider::groove:horizontal {
+        height: 6px;
+        background: #d9e2ec;
+        border-radius: 3px;
+    }
+
+    QSlider::handle:horizontal {
+        width: 14px;
+        margin: -5px 0;
+        border-radius: 7px;
+        background: #2f6fed;
+    }
 
     QGroupBox {
         background: white;
@@ -919,6 +1082,10 @@ class SubstationGuiMockup(QMainWindow):
         self.grid_show_cb.setChecked(True)
         self.grid_show_cb.toggled.connect(self.workspace_view.set_grid_visible)
 
+        self.grid_snap_cb = QCheckBox("Snap to Grid")
+        self.grid_snap_cb.setChecked(True)
+        self.grid_snap_cb.toggled.connect(self.workspace_view.set_snap_to_grid)
+
         opacity_row = QHBoxLayout()
         opacity_row.addWidget(QLabel("Grid Opacity:"))
         self.grid_opacity_slider = QSlider(Qt.Orientation.Horizontal)
@@ -935,6 +1102,7 @@ class SubstationGuiMockup(QMainWindow):
         self.grid_opacity_slider.valueChanged.connect(_on_opacity_changed)
 
         self.controls_layout.addWidget(self.grid_show_cb)
+        self.controls_layout.addWidget(self.grid_snap_cb)
         self.controls_layout.addLayout(opacity_row)
 
     def _build_footer(self):
