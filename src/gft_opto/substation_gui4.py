@@ -10,6 +10,7 @@ Layout:
 
 import sys
 import math
+import time
 from collections import defaultdict
 from typing import Callable
 
@@ -31,6 +32,7 @@ import pymupdf
 import functools
 
 from gft_opto.customWidgetTool import ComponentDialog
+from gft_opto.test_netlist import run_fake_evaluation
 
 
 # ---------------------------------------------------------------------------
@@ -1546,11 +1548,13 @@ class SubstationGuiMockup(QMainWindow):
         project_box = QComboBox()
         project_box.addItems(["Demo Project - One Line A", "Breaker-and-a-Half Yard", "Ring Bus Example"])
         project_box.setMinimumWidth(320)
+        self.project_box = project_box
 
         save_btn = QPushButton("Save Layout")
         self.load_btn = QPushButton("Import PDF")
         self.load_btn.clicked.connect(self.on_import_pdf_clicked)
-        run_btn = QPushButton("Run Evaluation")
+        self.run_btn = QPushButton("Run Evaluation")
+        self.run_btn.clicked.connect(self._on_run_evaluation_clicked)
 
         layout.addWidget(title)
         layout.addStretch()
@@ -1558,7 +1562,7 @@ class SubstationGuiMockup(QMainWindow):
         layout.addWidget(project_box)
         layout.addWidget(self.load_btn)
         layout.addWidget(save_btn)
-        layout.addWidget(run_btn)
+        layout.addWidget(self.run_btn)
         return frame
 
     def _build_content(self):
@@ -1708,15 +1712,8 @@ class SubstationGuiMockup(QMainWindow):
         self.output_box.setReadOnly(True)
         analysis_layout.addWidget(self.output_box)
 
-        notes_group = QGroupBox("Engineer Notes")
-        notes_layout = QVBoxLayout(notes_group)
-        notes = QTextEdit()
-        notes.setPlaceholderText("Add design notes here...")
-        notes_layout.addWidget(notes)
-
         layout.addWidget(properties_group, 1)
-        layout.addWidget(analysis_group, 2)
-        layout.addWidget(notes_group, 2)
+        layout.addWidget(analysis_group, 4)
 
         if hasattr(self, "workspace_scene"):
             self.workspace_scene.selectionChanged.connect(self._on_selection_changed)
@@ -1724,6 +1721,63 @@ class SubstationGuiMockup(QMainWindow):
         return container
 
     # --- Event handlers -----------------------------------------------------
+
+    def _on_run_evaluation_clicked(self):
+        """
+        Run momentary evaluation on the fake test netlist (test_netlist.py),
+        not the live sandbox — for demos / integration testing.
+        """
+        system_name = "Test Bay"
+        if hasattr(self, "project_box"):
+            system_name = self.project_box.currentText() or system_name
+
+        started = time.perf_counter()
+        try:
+            netlist, result = run_fake_evaluation(system_name=system_name)
+        except Exception as e:
+            if hasattr(self, "output_box"):
+                self.output_box.setPlainText(f"Evaluation failed:\n{e}")
+            if hasattr(self, "footer_status_label"):
+                self.footer_status_label.setText(f"Evaluation failed: {e}")
+            return
+
+        elapsed_ms = (time.perf_counter() - started) * 1000.0
+        if hasattr(self, "response_time_label"):
+            self.response_time_label.setText(f"Response time: {elapsed_ms:.0f} ms")
+
+        lines: list[str] = []
+        lines.append("(Using fake test netlist from test_netlist.py)")
+        lines.append(f"System: {result.get('scenario_name', system_name)}")
+        lines.append(f"Voltage: {result.get('voltage_V', 125):g} V")
+        lines.append(f"Components: {len(netlist.get('components', []))}")
+        lines.append(f"Connections: {len(netlist.get('connections', []))}")
+        lines.append("")
+        lines.append(f"Peak current: {result.get('peak_current_A', 0):g} A")
+        lines.append("")
+        loads = result.get("loads") or []
+        if loads:
+            lines.append("Loads:")
+            for ld in loads:
+                note = f"  ({ld['note']})" if ld.get("note") else ""
+                lines.append(
+                    f"  • {ld.get('name', '?')}: {ld.get('total_amps', 0):g} A{note}"
+                )
+        else:
+            lines.append("Loads: (none)")
+
+        warnings = result.get("warnings") or []
+        if warnings:
+            lines.append("")
+            lines.append("Warnings:")
+            for w in warnings:
+                lines.append(f"  ⚠ {w}")
+
+        if hasattr(self, "output_box"):
+            self.output_box.setPlainText("\n".join(lines))
+        if hasattr(self, "footer_status_label"):
+            self.footer_status_label.setText(
+                f"Evaluation complete — peak {result.get('peak_current_A', 0):g} A"
+            )
 
     def _on_create_component_clicked(self):
         """
