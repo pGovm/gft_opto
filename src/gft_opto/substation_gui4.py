@@ -9,20 +9,22 @@ Layout:
 """
 
 import sys
+import math
+import time
 from collections import defaultdict
 from typing import Callable
 
 from PySide6.QtCore import Qt, QPointF, QRectF, QByteArray, QMimeData
 from PySide6.QtGui import (
     QFont, QPixmap, QDrag, QPainter, QPen, QBrush, QColor,
-    QKeySequence, QUndoStack, QUndoCommand,
+    QKeySequence, QUndoStack, QUndoCommand, QPainterPath, QTransform,
 )
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QFrame, QGridLayout, QGroupBox,
     QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
     QMainWindow, QPushButton, QSlider, QTextEdit, QVBoxLayout, QWidget, QFileDialog,
     QGraphicsView, QGraphicsScene, QGraphicsItem, QGraphicsPixmapItem,
-    QGraphicsLineItem, QDialog,
+    QGraphicsPathItem, QDialog,
     QMessageBox,
 )
 
@@ -30,6 +32,7 @@ import pymupdf
 import functools
 
 from gft_opto.customWidgetTool import ComponentDialog
+from gft_opto.test_netlist import run_fake_evaluation
 
 
 # ---------------------------------------------------------------------------
@@ -45,6 +48,16 @@ DEFAULT_WORKSPACE_HEIGHT = 1800.0
 GRID_SPACING = 25.0          # scene units — matches PDF pixel coords after import
 GRID_MAJOR_EVERY = 5         # every Nth line is drawn heavier
 DEFAULT_GRID_OPACITY = 0.25
+RESIZE_HANDLE_SIZE = 8.0     # px — corner handle size in item coords
+RESIZE_HANDLE_HIT = 12.0     # px — how close the cursor must be to grab a handle
+MIN_SYMBOL_SCALE = 0.5
+MAX_SYMBOL_SCALE = 3.0
+SYMBOL_SCALE_STEP = 0.25     # snap resize to this increment
+SYMBOL_ROTATION_STEP = 90.0  # degrees — R / Shift+R and Quick Actions
+ROTATE_HANDLE_OFFSET = 28.0  # px above symbol AABB top edge
+ROTATE_HANDLE_RADIUS = 8.0
+ROTATE_HANDLE_HIT = 14.0
+ROTATE_DRAG_SNAP = 15.0      # degrees — snap while dragging the rotate handle
 
 _instance_counters: dict[str, int] = defaultdict(int)
 
@@ -55,6 +68,73 @@ def next_instance_id(equip_type: str) -> str:
     return f"{equip_type}_{_instance_counters[equip_type]}"
 
 
+def snap_point_to_grid(p: QPointF, spacing: float = GRID_SPACING) -> QPointF:
+    """Round a scene point to the nearest grid intersection."""
+    return QPointF(
+        round(p.x() / spacing) * spacing,
+        round(p.y() / spacing) * spacing,
+    )
+
+
+def position_for_snapped_port(
+    proposed_pos: QPointF,
+    port_local: QPointF,
+    spacing: float = GRID_SPACING,
+) -> QPointF:
+    """Return item position that places port_local on the grid."""
+    port_scene = proposed_pos + port_local
+    snapped = snap_point_to_grid(port_scene, spacing)
+    return snapped - port_local
+
+
+def default_snap_port(item: "OneLineSymbolItem") -> str:
+    """Pick a sensible anchor port when the user did not click on one."""
+    ports = item.ports()
+    if "left" in ports:
+        return "left"
+    return next(iter(ports))
+
+
+def route_wire_on_grid(
+    p1: QPointF,
+    p2: QPointF,
+    *,
+    spacing: float = GRID_SPACING,
+    snap_endpoints: bool = True,
+) -> list[QPointF]:
+    """Return orthogonal polyline vertices that follow the alignment grid."""
+    if snap_endpoints:
+        p1 = snap_point_to_grid(p1, spacing)
+        p2 = snap_point_to_grid(p2, spacing)
+
+    if abs(p1.y() - p2.y()) < 0.01:
+        return [p1, p2]
+    if abs(p1.x() - p2.x()) < 0.01:
+        return [p1, p2]
+
+    bend_x = snap_point_to_grid(
+        QPointF((p1.x() + p2.x()) / 2, p1.y()),
+        spacing,
+    ).x()
+    return [p1, QPointF(bend_x, p1.y()), QPointF(bend_x, p2.y()), p2]
+
+
+def wire_path_from_points(points: list[QPointF]) -> QPainterPath:
+    """Build a painter path from a polyline, skipping duplicate vertices."""
+    if not points:
+        return QPainterPath()
+
+    simplified: list[QPointF] = [points[0]]
+    for pt in points[1:]:
+        if (pt - simplified[-1]).manhattanLength() > 0.01:
+            simplified.append(pt)
+
+    path = QPainterPath(simplified[0])
+    for pt in simplified[1:]:
+        path.lineTo(pt)
+    return path
+
+
 # ---------------------------------------------------------------------------
 # Symbol graphics items
 # ---------------------------------------------------------------------------
@@ -62,33 +142,76 @@ def next_instance_id(equip_type: str) -> str:
 class OneLineSymbolItem(QGraphicsItem):
     """Base class for draggable one-line equipment symbols with named ports."""
 
+    snap_to_grid_enabled = True
+
     def __init__(self, equip_type: str, label: str, ports: dict[str, QPointF]):
         super().__init__()
         self.equip_type = equip_type
         self.equip_id = equip_type  # legacy alias used by the properties panel
         self.instance_id = next_instance_id(equip_type)
         self.label = label
-        self._ports = dict(ports)
+        self._base_ports = dict(ports)
         self._connections: list["ConnectionItem"] = []
+        self._snap_port_name: str | None = None
+        self.scale_factor = 1.0
+        self.rotation_deg = 0.0
+        self._rect = QRectF(-40, -20, 80, 40)
         self.setFlags(
             QGraphicsItem.GraphicsItemFlag.ItemIsMovable
             | QGraphicsItem.GraphicsItemFlag.ItemIsSelectable
             | QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges
         )
 
+    # --- Transform (scale + rotation) ---------------------------------------
+
+    def _local_transform(self) -> QTransform:
+        """Map base symbol coords → item-local coords (scale, then rotate)."""
+        t = QTransform()
+        t.rotate(self.rotation_deg)
+        t.scale(self.scale_factor, self.scale_factor)
+        return t
+
+    def _transformed_point(self, p: QPointF) -> QPointF:
+        return self._local_transform().map(p)
+
+    def _transformed_rect(self) -> QRectF:
+        return self._local_transform().mapRect(self._rect)
+
+    def set_scale_factor(self, scale: float):
+        scale = max(MIN_SYMBOL_SCALE, min(MAX_SYMBOL_SCALE, float(scale)))
+        if abs(scale - self.scale_factor) < 1e-6:
+            return
+        self.prepareGeometryChange()
+        self.scale_factor = scale
+        self.update()
+        for conn in self._connections:
+            conn.update_path()
+
+    def set_rotation_deg(self, degrees: float):
+        degrees = float(degrees) % 360.0
+        if degrees < 0:
+            degrees += 360.0
+        if abs(degrees - self.rotation_deg) < 1e-6:
+            return
+        self.prepareGeometryChange()
+        self.rotation_deg = degrees
+        self.update()
+        for conn in self._connections:
+            conn.update_path()
+
     # --- Port helpers -------------------------------------------------------
 
     def ports(self) -> dict[str, QPointF]:
-        return self._ports
+        return {name: self._transformed_point(pt) for name, pt in self._base_ports.items()}
 
     def port_scene_pos(self, port_name: str) -> QPointF:
-        return self.mapToScene(self._ports[port_name])
+        return self.mapToScene(self._transformed_point(self._base_ports[port_name]))
 
     def nearest_port(self, scene_pos: QPointF, max_dist: float = PORT_HIT_RADIUS):
         """Return the closest port name within max_dist, or None."""
         best_name = None
         best_dist = max_dist
-        for name, local in self._ports.items():
+        for name, local in self.ports().items():
             delta = self.mapToScene(local) - scene_pos
             dist = (delta.x() ** 2 + delta.y() ** 2) ** 0.5
             if dist <= best_dist:
@@ -107,10 +230,80 @@ class OneLineSymbolItem(QGraphicsItem):
     def connections(self) -> list["ConnectionItem"]:
         return list(self._connections)
 
+    # --- Resize / rotate handles --------------------------------------------
+
+    def resize_handle_points(self) -> dict[str, QPointF]:
+        r = self._rect
+        t = self._local_transform()
+        return {
+            "tl": t.map(r.topLeft()),
+            "tr": t.map(r.topRight()),
+            "bl": t.map(r.bottomLeft()),
+            "br": t.map(r.bottomRight()),
+        }
+
+    def resize_handle_at(self, local_pos: QPointF, hit_radius: float = RESIZE_HANDLE_HIT):
+        """Return handle name under local_pos, or None."""
+        if not self.isSelected():
+            return None
+        best_name = None
+        best_dist = hit_radius
+        for name, pt in self.resize_handle_points().items():
+            delta = pt - local_pos
+            dist = (delta.x() ** 2 + delta.y() ** 2) ** 0.5
+            if dist <= best_dist:
+                best_dist = dist
+                best_name = name
+        return best_name
+
+    def rotation_handle_pos(self) -> QPointF:
+        """Local position of the drag-to-rotate knob above the symbol."""
+        r = self._transformed_rect()
+        return QPointF(r.center().x(), r.top() - ROTATE_HANDLE_OFFSET)
+
+    def rotation_handle_at(self, local_pos: QPointF, hit_radius: float = ROTATE_HANDLE_HIT) -> bool:
+        if not self.isSelected():
+            return False
+        pt = self.rotation_handle_pos()
+        delta = pt - local_pos
+        return (delta.x() ** 2 + delta.y() ** 2) ** 0.5 <= hit_radius
+
     # --- Drawing ------------------------------------------------------------
+
+    def boundingRect(self) -> QRectF:
+        body = self._transformed_rect()
+        rect = QRectF(body)
+        pad = 6.0
+        if self.isSelected():
+            pad = max(pad, RESIZE_HANDLE_SIZE / 2 + 2)
+            handle = self.rotation_handle_pos()
+            hr = ROTATE_HANDLE_RADIUS + 2
+            handle_rect = QRectF(handle.x() - hr, handle.y() - hr, 2 * hr, 2 * hr)
+            top_mid = QPointF(body.center().x(), body.top())
+            stem_rect = QRectF(top_mid, handle).normalized()
+            rect = rect.united(handle_rect).united(stem_rect)
+        return rect.adjusted(-pad, -pad, pad, pad)
 
     def _pen(self):
         return QPen(Qt.GlobalColor.black, 2)
+
+    def _begin_paint(self, painter: QPainter) -> float:
+        """Apply scale+rotation for symbol geometry; keep stroke width constant."""
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.save()
+        painter.setTransform(self._local_transform(), True)
+        s = self.scale_factor
+        pen = self._pen()
+        if s > 0:
+            pen.setWidthF(pen.widthF() / s)
+        painter.setPen(pen)
+        return s
+
+    def _end_paint(self, painter: QPainter):
+        painter.restore()
+        self._draw_ports(painter)
+        self._draw_resize_handles(painter)
+        self._draw_rotation_handle(painter)
 
     def _draw_ports(self, painter: QPainter):
         """Draw blue port dots so drag-to-connect is easy to discover."""
@@ -118,15 +311,67 @@ class OneLineSymbolItem(QGraphicsItem):
         painter.setPen(QPen(color, 1.5))
         painter.setBrush(QBrush(color))
         r = PORT_DOT_RADIUS
-        for pt in self._ports.values():
+        for pt in self.ports().values():
             painter.drawEllipse(QRectF(pt.x() - r, pt.y() - r, 2 * r, 2 * r))
 
+    def _draw_resize_handles(self, painter: QPainter):
+        if not self.isSelected():
+            return
+        half = RESIZE_HANDLE_SIZE / 2
+        painter.setPen(QPen(QColor("#1f2933"), 1.0))
+        painter.setBrush(QBrush(QColor("#ffffff")))
+        for pt in self.resize_handle_points().values():
+            painter.drawRect(QRectF(pt.x() - half, pt.y() - half, RESIZE_HANDLE_SIZE, RESIZE_HANDLE_SIZE))
+
+    def _draw_rotation_handle(self, painter: QPainter):
+        """Draw stem + circular-arrow knob above the selection (sandbox-style)."""
+        if not self.isSelected():
+            return
+        body = self._transformed_rect()
+        top_mid = QPointF(body.center().x(), body.top())
+        handle = self.rotation_handle_pos()
+        accent = QColor("#2f6fed")
+
+        painter.setPen(QPen(accent, 1.5))
+        painter.drawLine(top_mid, handle)
+
+        hr = ROTATE_HANDLE_RADIUS
+        painter.setBrush(QBrush(QColor("#ffffff")))
+        painter.setPen(QPen(accent, 1.5))
+        painter.drawEllipse(handle, hr, hr)
+
+        # Circular arrow inside the knob
+        arc_rect = QRectF(handle.x() - 4.5, handle.y() - 4.5, 9.0, 9.0)
+        painter.drawArc(arc_rect, 40 * 16, 240 * 16)
+        # Arrowhead at the arc end (~40°)
+        tip_angle = math.radians(40)
+        tip = QPointF(
+            handle.x() + 4.5 * math.cos(tip_angle),
+            handle.y() - 4.5 * math.sin(tip_angle),
+        )
+        painter.setBrush(QBrush(accent))
+        arrow = QPainterPath()
+        arrow.moveTo(tip)
+        arrow.lineTo(tip + QPointF(-3.5, -1.0))
+        arrow.lineTo(tip + QPointF(-0.5, 3.5))
+        arrow.closeSubpath()
+        painter.drawPath(arrow)
+
     def itemChange(self, change, value):
+        if change == QGraphicsItem.GraphicsItemChange.ItemPositionChange:
+            ports = self.ports()
+            if (
+                self.snap_to_grid_enabled
+                and self._snap_port_name is not None
+                and self._snap_port_name in ports
+            ):
+                return position_for_snapped_port(value, ports[self._snap_port_name])
         # Keep attached wires in sync when this symbol moves or is selected.
         if change == QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged:
             for conn in self._connections:
                 conn.update_path()
         elif change == QGraphicsItem.GraphicsItemChange.ItemSelectedHasChanged:
+            self.prepareGeometryChange()
             self.update()
         return super().itemChange(change, value)
 
@@ -140,17 +385,13 @@ class Transformer2WItem(OneLineSymbolItem):
         )
         self._rect = QRectF(-34, -20, 68, 40)
 
-    def boundingRect(self):
-        return self._rect.adjusted(-6, -6, 6, 6)
-
     def paint(self, painter: QPainter, option, widget=None):
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        painter.setPen(self._pen())
+        self._begin_paint(painter)
         painter.drawLine(-34, 0, -18, 0)
         painter.drawLine(18, 0, 34, 0)
         painter.drawEllipse(-18, -12, 24, 24)
         painter.drawEllipse(-6, -12, 24, 24)
-        self._draw_ports(painter)
+        self._end_paint(painter)
 
 
 class Transformer3WItem(OneLineSymbolItem):
@@ -162,19 +403,15 @@ class Transformer3WItem(OneLineSymbolItem):
         )
         self._rect = QRectF(-38, -28, 76, 60)
 
-    def boundingRect(self):
-        return self._rect.adjusted(-6, -6, 6, 6)
-
     def paint(self, painter: QPainter, option, widget=None):
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        painter.setPen(self._pen())
+        self._begin_paint(painter)
         painter.drawEllipse(-18, -12, 22, 22)
         painter.drawEllipse(2, -12, 22, 22)
         painter.drawEllipse(-8, 8, 22, 22)
         painter.drawLine(-38, -1, -18, -1)
         painter.drawLine(24, -1, 38, -1)
         painter.drawLine(3, 30, 3, 38)
-        self._draw_ports(painter)
+        self._end_paint(painter)
 
 
 class MotorOperatedSwitchItem(OneLineSymbolItem):
@@ -186,12 +423,8 @@ class MotorOperatedSwitchItem(OneLineSymbolItem):
         )
         self._rect = QRectF(-38, -18, 76, 36)
 
-    def boundingRect(self):
-        return self._rect.adjusted(-6, -6, 6, 6)
-
     def paint(self, painter: QPainter, option, widget=None):
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        painter.setPen(self._pen())
+        self._begin_paint(painter)
         painter.drawLine(-38, 0, -12, 0)
         painter.drawLine(12, 0, 38, 0)
         painter.drawLine(-12, 0, 12, -10)
@@ -199,7 +432,7 @@ class MotorOperatedSwitchItem(OneLineSymbolItem):
         painter.drawEllipse(QRectF(-14, -2, 4, 4))
         painter.drawEllipse(QRectF(10, -2, 4, 4))
         painter.drawRect(QRectF(-6, 6, 12, 8))
-        self._draw_ports(painter)
+        self._end_paint(painter)
 
 
 class CurrentTransformerItem(OneLineSymbolItem):
@@ -211,15 +444,11 @@ class CurrentTransformerItem(OneLineSymbolItem):
         )
         self._rect = QRectF(-22, -22, 44, 44)
 
-    def boundingRect(self):
-        return self._rect.adjusted(-6, -6, 6, 6)
-
     def paint(self, painter: QPainter, option, widget=None):
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        painter.setPen(self._pen())
+        self._begin_paint(painter)
         painter.drawEllipse(QRectF(-16, -16, 32, 32))
         painter.drawEllipse(QRectF(-6, -6, 12, 12))
-        self._draw_ports(painter)
+        self._end_paint(painter)
 
 
 class CustomComponentItem(OneLineSymbolItem):
@@ -236,21 +465,17 @@ class CustomComponentItem(OneLineSymbolItem):
         self.properties = dict(properties or {})
         self._rect = QRectF(-42, -22, 84, 44)
 
-    def boundingRect(self):
-        return self._rect.adjusted(-6, -6, 6, 6)
-
     def paint(self, painter: QPainter, option, widget=None):
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        painter.setPen(self._pen())
+        self._begin_paint(painter)
         painter.setBrush(QBrush(Qt.GlobalColor.white))
         painter.drawRect(self._rect)
         painter.setFont(QFont("Sans-Serif", 8))
         painter.drawText(self._rect, Qt.AlignmentFlag.AlignCenter, self.label)
-        self._draw_ports(painter)
+        self._end_paint(painter)
 
 
-class ConnectionItem(QGraphicsLineItem):
-    """A wire between two symbol ports; updates when either endpoint moves."""
+class ConnectionItem(QGraphicsPathItem):
+    """A wire between two symbol ports; routes orthogonally along the grid."""
 
     def __init__(
         self,
@@ -275,7 +500,12 @@ class ConnectionItem(QGraphicsLineItem):
             return
         p1 = self.from_item.port_scene_pos(self.from_port)
         p2 = self.to_item.port_scene_pos(self.to_port)
-        self.setLine(p1.x(), p1.y(), p2.x(), p2.y())
+        points = route_wire_on_grid(
+            p1,
+            p2,
+            snap_endpoints=OneLineSymbolItem.snap_to_grid_enabled,
+        )
+        self.setPath(wire_path_from_points(points))
 
     def attach(self):
         if self.from_item is not None:
@@ -371,6 +601,41 @@ class MoveEquipmentCommand(QUndoCommand):
     def undo(self):
         for item, old, _new in self.moves:
             item.setPos(old)
+
+
+class ResizeEquipmentCommand(QUndoCommand):
+    def __init__(self, item: OneLineSymbolItem, old_scale: float, new_scale: float):
+        super().__init__(f"Resize {item.instance_id}")
+        self.item = item
+        self.old_scale = old_scale
+        self.new_scale = new_scale
+
+    def redo(self):
+        self.item.set_scale_factor(self.new_scale)
+
+    def undo(self):
+        self.item.set_scale_factor(self.old_scale)
+
+
+class RotateEquipmentCommand(QUndoCommand):
+    def __init__(self, rotations: list[tuple[OneLineSymbolItem, float, float]]):
+        label = (
+            "Rotate equipment"
+            if len(rotations) != 1
+            else f"Rotate {rotations[0][0].instance_id}"
+        )
+        super().__init__(label)
+        self.rotations = [
+            (item, float(old), float(new)) for item, old, new in rotations
+        ]
+
+    def redo(self):
+        for item, _old, new in self.rotations:
+            item.set_rotation_deg(new)
+
+    def undo(self):
+        for item, old, _new in self.rotations:
+            item.set_rotation_deg(old)
 
 
 class DeleteSelectionCommand(QUndoCommand):
@@ -513,13 +778,27 @@ class WorkspaceView(QGraphicsView):
 
         # In-progress port-to-port wire drag
         self._pending: tuple[OneLineSymbolItem, str] | None = None
-        self._temp_line: QGraphicsLineItem | None = None
+        self._temp_line: QGraphicsPathItem | None = None
         self._wire_start_pos: QPointF | None = None
         self._wiring = False
         self._saved_drag_mode = QGraphicsView.DragMode.ScrollHandDrag
 
         # Move tracking for undo (captured on press, committed on release)
         self._move_origins: dict[OneLineSymbolItem, QPointF] = {}
+        self._snap_ports: dict[OneLineSymbolItem, str] = {}
+        self._snap_to_grid = True
+
+        # Resize tracking (corner-handle drag)
+        self._resize_item: OneLineSymbolItem | None = None
+        self._resize_origin_scale = 1.0
+        self._resize_start_dist = 1.0
+        self._resize_was_movable = True
+
+        # Rotate tracking (circular-arrow handle drag)
+        self._rotate_item: OneLineSymbolItem | None = None
+        self._rotate_origin_deg = 0.0
+        self._rotate_start_angle = 0.0
+        self._rotate_was_movable = True
 
         self.undo_stack: QUndoStack | None = None
         self.status_callback: Callable[[str], None] | None = None
@@ -546,6 +825,33 @@ class WorkspaceView(QGraphicsView):
         if self._grid_item is not None:
             self._grid_item.setOpacity(max(0.0, min(percent / 100.0, 1.0)))
 
+    def set_snap_to_grid(self, enabled: bool):
+        self._snap_to_grid = enabled
+        OneLineSymbolItem.snap_to_grid_enabled = enabled
+        scn = self.scene()
+        if scn is not None:
+            for item in scn.items():
+                if isinstance(item, ConnectionItem):
+                    item.update_path()
+
+    def _assign_snap_ports(self, items: list[OneLineSymbolItem], scene_pos: QPointF):
+        self._clear_snap_ports()
+        if not self._snap_to_grid:
+            return
+        for item in items:
+            port = item.nearest_port(scene_pos, max_dist=PORT_HIT_RADIUS)
+            if port is None:
+                port = item.nearest_port(scene_pos, max_dist=float("inf"))
+            if port is None:
+                port = default_snap_port(item)
+            item._snap_port_name = port
+            self._snap_ports[item] = port
+
+    def _clear_snap_ports(self):
+        for item in self._snap_ports:
+            item._snap_port_name = None
+        self._snap_ports = {}
+
     # --- Status & undo helpers ----------------------------------------------
 
     def _set_status(self, text: str):
@@ -559,6 +865,15 @@ class WorkspaceView(QGraphicsView):
             command.redo()
 
     # --- Wiring helpers -----------------------------------------------------
+
+    def _wire_preview_path(self, start: QPointF, end: QPointF) -> QPainterPath:
+        hit = self._find_port_at(end)
+        if hit is not None:
+            end = hit[0].port_scene_pos(hit[1])
+        elif self._snap_to_grid:
+            end = snap_point_to_grid(end)
+        points = route_wire_on_grid(start, end, snap_endpoints=self._snap_to_grid)
+        return wire_path_from_points(points)
 
     def _cancel_pending(self):
         self._pending = None
@@ -595,6 +910,142 @@ class WorkspaceView(QGraphicsView):
                 best = (item, port)
         return best
 
+    def _find_resize_handle_at(self, scene_pos: QPointF):
+        scn = self.scene()
+        if scn is None:
+            return None
+        for item in scn.selectedItems():
+            if not isinstance(item, OneLineSymbolItem):
+                continue
+            handle = item.resize_handle_at(item.mapFromScene(scene_pos))
+            if handle is not None:
+                return item, handle
+        return None
+
+    def _find_rotate_handle_at(self, scene_pos: QPointF):
+        scn = self.scene()
+        if scn is None:
+            return None
+        for item in scn.selectedItems():
+            if not isinstance(item, OneLineSymbolItem):
+                continue
+            if item.rotation_handle_at(item.mapFromScene(scene_pos)):
+                return item
+        return None
+
+    @staticmethod
+    def _angle_about_item(item: OneLineSymbolItem, scene_pos: QPointF) -> float:
+        center = item.mapToScene(QPointF(0.0, 0.0))
+        delta = scene_pos - center
+        return math.degrees(math.atan2(delta.y(), delta.x()))
+
+    def _begin_rotate(self, item: OneLineSymbolItem, scene_pos: QPointF):
+        self._move_origins = {}
+        self._clear_snap_ports()
+        self._rotate_item = item
+        self._rotate_origin_deg = item.rotation_deg
+        self._rotate_start_angle = self._angle_about_item(item, scene_pos)
+        self._rotate_was_movable = bool(
+            item.flags() & QGraphicsItem.GraphicsItemFlag.ItemIsMovable
+        )
+        item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, False)
+        self._saved_drag_mode = self.dragMode()
+        self.setDragMode(QGraphicsView.DragMode.NoDrag)
+        self.setCursor(Qt.CursorShape.ClosedHandCursor)
+        self._set_status(f"Rotate {item.instance_id} ({item.rotation_deg:g}°)")
+
+    def _update_rotate(self, scene_pos: QPointF):
+        item = self._rotate_item
+        if item is None:
+            return
+        angle_now = self._angle_about_item(item, scene_pos)
+        delta = angle_now - self._rotate_start_angle
+        raw = (self._rotate_origin_deg + delta) % 360.0
+        if raw < 0:
+            raw += 360.0
+        # Hold Shift for free rotation; otherwise snap to 15°
+        if QApplication.keyboardModifiers() & Qt.KeyboardModifier.ShiftModifier:
+            snapped = raw
+        else:
+            snapped = round(raw / ROTATE_DRAG_SNAP) * ROTATE_DRAG_SNAP % 360.0
+            if snapped < 0:
+                snapped += 360.0
+        item.set_rotation_deg(snapped)
+        self._set_status(f"Rotate {item.instance_id} → {snapped:g}°")
+
+    def _commit_rotate_if_any(self):
+        item = self._rotate_item
+        if item is None:
+            return
+        old_rot = self._rotate_origin_deg
+        new_rot = item.rotation_deg
+        item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, self._rotate_was_movable)
+        self._rotate_item = None
+        self.setDragMode(self._saved_drag_mode)
+        self.unsetCursor()
+        if abs(new_rot - old_rot) > 1e-6:
+            self._push(RotateEquipmentCommand([(item, old_rot, new_rot)]))
+            self._set_status(f"Rotated {item.instance_id} to {new_rot:g}°")
+        else:
+            self._set_status("Ready")
+
+    def _cancel_rotate(self):
+        item = self._rotate_item
+        if item is None:
+            return
+        item.set_rotation_deg(self._rotate_origin_deg)
+        item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, self._rotate_was_movable)
+        self._rotate_item = None
+        self.setDragMode(self._saved_drag_mode)
+        self.unsetCursor()
+        self._set_status("Rotate cancelled")
+
+    def _begin_resize(self, item: OneLineSymbolItem, scene_pos: QPointF):
+        self._move_origins = {}
+        self._clear_snap_ports()
+        self._resize_item = item
+        self._resize_origin_scale = item.scale_factor
+        local = item.mapFromScene(scene_pos)
+        self._resize_start_dist = max(1.0, (local.x() ** 2 + local.y() ** 2) ** 0.5)
+        self._resize_was_movable = bool(
+            item.flags() & QGraphicsItem.GraphicsItemFlag.ItemIsMovable
+        )
+        item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, False)
+        self._saved_drag_mode = self.dragMode()
+        self.setDragMode(QGraphicsView.DragMode.NoDrag)
+        self.setCursor(Qt.CursorShape.SizeAllCursor)
+        self._set_status(f"Resize {item.instance_id} (scale {item.scale_factor:g})")
+
+    def _update_resize(self, scene_pos: QPointF):
+        item = self._resize_item
+        if item is None:
+            return
+        local = item.mapFromScene(scene_pos)
+        dist = (local.x() ** 2 + local.y() ** 2) ** 0.5
+        raw = self._resize_origin_scale * (dist / self._resize_start_dist)
+        snapped = round(raw / SYMBOL_SCALE_STEP) * SYMBOL_SCALE_STEP
+        snapped = max(MIN_SYMBOL_SCALE, min(MAX_SYMBOL_SCALE, snapped))
+        item.set_scale_factor(snapped)
+        self._set_status(f"Resize {item.instance_id} → {snapped:g}×")
+
+    def _commit_resize_if_any(self):
+        item = self._resize_item
+        if item is None:
+            return
+        old_scale = self._resize_origin_scale
+        new_scale = item.scale_factor
+        item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, self._resize_was_movable)
+        self._resize_item = None
+        self.setDragMode(self._saved_drag_mode)
+        self.unsetCursor()
+        if abs(new_scale - old_scale) > 1e-6:
+            # Undo stack expects redo() to apply the new value; item is already there,
+            # so push a command that no-ops on first redo by setting again.
+            self._push(ResizeEquipmentCommand(item, old_scale, new_scale))
+            self._set_status(f"Resized {item.instance_id} to {new_scale:g}×")
+        else:
+            self._set_status("Ready")
+
     # --- Move tracking for undo ---------------------------------------------
 
     def _capture_move_origins(self, scene_pos: QPointF):
@@ -602,16 +1053,20 @@ class WorkspaceView(QGraphicsView):
         if scn is None:
             return
         origins: dict[OneLineSymbolItem, QPointF] = {}
+        items: list[OneLineSymbolItem] = []
         selected = [it for it in scn.selectedItems() if isinstance(it, OneLineSymbolItem)]
         if selected:
             for item in selected:
                 origins[item] = QPointF(item.pos())
+                items.append(item)
         else:
             for it in scn.items(scene_pos):
                 if isinstance(it, OneLineSymbolItem):
                     origins[it] = QPointF(it.pos())
+                    items.append(it)
                     break
         self._move_origins = origins
+        self._assign_snap_ports(items, scene_pos)
 
     def _commit_moves_if_any(self):
         moves: list[tuple[OneLineSymbolItem, QPointF, QPointF]] = []
@@ -620,6 +1075,7 @@ class WorkspaceView(QGraphicsView):
             if (new_pos - old_pos).manhattanLength() > 0.5:
                 moves.append((item, old_pos, new_pos))
         self._move_origins = {}
+        self._clear_snap_ports()
         if moves:
             self._push(MoveEquipmentCommand(moves))
             if len(moves) == 1:
@@ -644,6 +1100,33 @@ class WorkspaceView(QGraphicsView):
         self._push(DeleteSelectionCommand(scn, selected))
         self._set_status("Deleted selection")
 
+    def rotate_selected(self, delta_deg: float = SYMBOL_ROTATION_STEP):
+        """Rotate selected symbols by delta_deg (positive = clockwise)."""
+        scn = self.scene()
+        if scn is None:
+            return
+        selected = [it for it in scn.selectedItems() if isinstance(it, OneLineSymbolItem)]
+        if not selected:
+            self._set_status("Select a component to rotate")
+            return
+        rotations: list[tuple[OneLineSymbolItem, float, float]] = []
+        for item in selected:
+            old = item.rotation_deg
+            new = (old + delta_deg) % 360.0
+            if new < 0:
+                new += 360.0
+            if abs(new - old) > 1e-6:
+                rotations.append((item, old, new))
+        if not rotations:
+            return
+        self._push(RotateEquipmentCommand(rotations))
+        if len(rotations) == 1:
+            self._set_status(
+                f"Rotated {rotations[0][0].instance_id} to {rotations[0][2]:g}°"
+            )
+        else:
+            self._set_status(f"Rotated {len(rotations)} items")
+
     def set_background_pixmap(self, pixmap: QPixmap):
         scn = self.scene()
         if self._background_item is not None and scn is not None:
@@ -664,6 +1147,21 @@ class WorkspaceView(QGraphicsView):
     # --- Keyboard & mouse input ---------------------------------------------
 
     def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Escape and self._rotate_item is not None:
+            self._cancel_rotate()
+            event.accept()
+            return
+        if event.key() == Qt.Key.Key_Escape and self._resize_item is not None:
+            item = self._resize_item
+            old_scale = self._resize_origin_scale
+            item.set_scale_factor(old_scale)
+            item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, self._resize_was_movable)
+            self._resize_item = None
+            self.setDragMode(self._saved_drag_mode)
+            self.unsetCursor()
+            self._set_status("Resize cancelled")
+            event.accept()
+            return
         if event.key() == Qt.Key.Key_Escape and self._pending is not None:
             self._cancel_pending()
             self._set_status("Connection cancelled")
@@ -671,6 +1169,15 @@ class WorkspaceView(QGraphicsView):
             return
         if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
             self.delete_selected()
+            event.accept()
+            return
+        if event.key() == Qt.Key.Key_R:
+            delta = (
+                -SYMBOL_ROTATION_STEP
+                if event.modifiers() & Qt.KeyboardModifier.ShiftModifier
+                else SYMBOL_ROTATION_STEP
+            )
+            self.rotate_selected(delta)
             event.accept()
             return
         super().keyPressEvent(event)
@@ -684,6 +1191,20 @@ class WorkspaceView(QGraphicsView):
 
         if event.button() == Qt.MouseButton.LeftButton:
             scene_pos = self.mapToScene(event.position().toPoint())
+
+            rotate_item = self._find_rotate_handle_at(scene_pos)
+            if rotate_item is not None:
+                self._begin_rotate(rotate_item, scene_pos)
+                event.accept()
+                return
+
+            handle_hit = self._find_resize_handle_at(scene_pos)
+            if handle_hit is not None:
+                item, _handle = handle_hit
+                self._begin_resize(item, scene_pos)
+                event.accept()
+                return
+
             hit = self._find_port_at(scene_pos)
             if hit is not None:
                 # Start a port-to-port wire drag.
@@ -695,11 +1216,11 @@ class WorkspaceView(QGraphicsView):
                 self._pending = (item, port)
                 self._wire_start_pos = scene_pos
                 self._wiring = False
-                self._temp_line = QGraphicsLineItem()
+                self._temp_line = QGraphicsPathItem()
                 self._temp_line.setPen(QPen(QColor("#2f6fed"), 2, Qt.PenStyle.DashLine))
                 self._temp_line.setZValue(200)
                 start = item.port_scene_pos(port)
-                self._temp_line.setLine(start.x(), start.y(), start.x(), start.y())
+                self._temp_line.setPath(wire_path_from_points([start, start]))
                 self._temp_line.setVisible(False)
                 self.scene().addItem(self._temp_line)
                 self._set_status(f"Drag to a port from {item.instance_id}:{port}")
@@ -712,6 +1233,14 @@ class WorkspaceView(QGraphicsView):
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
+        if self._rotate_item is not None:
+            self._update_rotate(self.mapToScene(event.position().toPoint()))
+            event.accept()
+            return
+        if self._resize_item is not None:
+            self._update_resize(self.mapToScene(event.position().toPoint()))
+            event.accept()
+            return
         if self._pending is not None and self._temp_line is not None:
             from_item, from_port = self._pending
             start = from_item.port_scene_pos(from_port)
@@ -723,12 +1252,22 @@ class WorkspaceView(QGraphicsView):
                     self._wiring = True
                     self._temp_line.setVisible(True)
             if self._wiring:
-                self._temp_line.setLine(start.x(), start.y(), end.x(), end.y())
+                self._temp_line.setPath(self._wire_preview_path(start, end))
             event.accept()
             return
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and self._rotate_item is not None:
+            self._commit_rotate_if_any()
+            event.accept()
+            return
+
+        if event.button() == Qt.MouseButton.LeftButton and self._resize_item is not None:
+            self._commit_resize_if_any()
+            event.accept()
+            return
+
         if event.button() == Qt.MouseButton.LeftButton and self._pending is not None:
             from_item, from_port = self._pending
             scene_pos = self.mapToScene(event.position().toPoint())
@@ -801,6 +1340,11 @@ class WorkspaceView(QGraphicsView):
 
         pos = self.mapToScene(event.position().toPoint())
         symbol = meta["factory"]()
+        if self._snap_to_grid:
+            port = symbol.nearest_port(pos, max_dist=float("inf"))
+            if port is None:
+                port = default_snap_port(symbol)
+            pos = position_for_snapped_port(pos, symbol.ports()[port])
         symbol.setPos(pos)
         symbol.setZValue(100)
         self._push(AddEquipmentCommand(self.scene(), symbol))
@@ -828,6 +1372,39 @@ class SubstationGuiMockup(QMainWindow):
     QMainWindow { background-color: #f4f6f8; }
 
     QLabel, QGroupBox { color: #1f2933; }
+
+    QCheckBox {
+        color: #1f2933;
+        spacing: 8px;
+        font-size: 11pt;
+        font-weight: normal;
+    }
+
+    QCheckBox::indicator {
+        width: 18px;
+        height: 18px;
+        border: 1px solid #cbd2d9;
+        border-radius: 4px;
+        background: white;
+    }
+
+    QCheckBox::indicator:checked {
+        background: #2f6fed;
+        border-color: #2f6fed;
+    }
+
+    QSlider::groove:horizontal {
+        height: 6px;
+        background: #d9e2ec;
+        border-radius: 3px;
+    }
+
+    QSlider::handle:horizontal {
+        width: 14px;
+        margin: -5px 0;
+        border-radius: 7px;
+        background: #2f6fed;
+    }
 
     QGroupBox {
         background: white;
@@ -919,6 +1496,10 @@ class SubstationGuiMockup(QMainWindow):
         self.grid_show_cb.setChecked(True)
         self.grid_show_cb.toggled.connect(self.workspace_view.set_grid_visible)
 
+        self.grid_snap_cb = QCheckBox("Snap to Grid")
+        self.grid_snap_cb.setChecked(True)
+        self.grid_snap_cb.toggled.connect(self.workspace_view.set_snap_to_grid)
+
         opacity_row = QHBoxLayout()
         opacity_row.addWidget(QLabel("Grid Opacity:"))
         self.grid_opacity_slider = QSlider(Qt.Orientation.Horizontal)
@@ -935,6 +1516,7 @@ class SubstationGuiMockup(QMainWindow):
         self.grid_opacity_slider.valueChanged.connect(_on_opacity_changed)
 
         self.controls_layout.addWidget(self.grid_show_cb)
+        self.controls_layout.addWidget(self.grid_snap_cb)
         self.controls_layout.addLayout(opacity_row)
 
     def _build_footer(self):
@@ -966,11 +1548,13 @@ class SubstationGuiMockup(QMainWindow):
         project_box = QComboBox()
         project_box.addItems(["Demo Project - One Line A", "Breaker-and-a-Half Yard", "Ring Bus Example"])
         project_box.setMinimumWidth(320)
+        self.project_box = project_box
 
         save_btn = QPushButton("Save Layout")
         self.load_btn = QPushButton("Import PDF")
         self.load_btn.clicked.connect(self.on_import_pdf_clicked)
-        run_btn = QPushButton("Run Evaluation")
+        self.run_btn = QPushButton("Run Evaluation")
+        self.run_btn.clicked.connect(self._on_run_evaluation_clicked)
 
         layout.addWidget(title)
         layout.addStretch()
@@ -978,7 +1562,7 @@ class SubstationGuiMockup(QMainWindow):
         layout.addWidget(project_box)
         layout.addWidget(self.load_btn)
         layout.addWidget(save_btn)
-        layout.addWidget(run_btn)
+        layout.addWidget(self.run_btn)
         return frame
 
     def _build_content(self):
@@ -1038,6 +1622,12 @@ class SubstationGuiMockup(QMainWindow):
         )
         self.controls_layout.addWidget(delete_btn)
 
+        rotate_btn = QPushButton("Rotate 90°")
+        rotate_btn.clicked.connect(
+            lambda: self.workspace_view.rotate_selected() if hasattr(self, "workspace_view") else None
+        )
+        self.controls_layout.addWidget(rotate_btn)
+
         layout.addWidget(palette_group, 3)
         layout.addWidget(self.controls_group, 1)
         return container
@@ -1061,13 +1651,6 @@ class SubstationGuiMockup(QMainWindow):
 
         self._workspace_original = None
         canvas_layout.addWidget(self.workspace_view, 1)
-
-        self.workspace_hint = QLabel(
-            "Drag blue ports to connect.\nCtrl+Z / Ctrl+Y undo-redo. Ctrl+scroll zooms."
-        )
-        self.workspace_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.workspace_hint.setStyleSheet("color: #52606d; font-size: 13pt; margin-top: 10px;")
-        canvas_layout.addWidget(self.workspace_hint)
 
         layout.addWidget(canvas, 1)
         return container
@@ -1110,7 +1693,7 @@ class SubstationGuiMockup(QMainWindow):
         properties_layout.addWidget(QLabel("Close Coil (A):"), 5, 0)
         self.prop_close_coil = QLineEdit("—")
         self.prop_close_coil.setReadOnly(True)
-        properties_layout.addWidget(self.prop_close_coil, 6, 1)
+        properties_layout.addWidget(self.prop_close_coil, 5, 1)
 
         properties_layout.addWidget(QLabel("Motor Inrush Current (A):"), 6, 0)
         self.prop_motor_inrush = QLineEdit("—")
@@ -1129,15 +1712,8 @@ class SubstationGuiMockup(QMainWindow):
         self.output_box.setReadOnly(True)
         analysis_layout.addWidget(self.output_box)
 
-        notes_group = QGroupBox("Engineer Notes")
-        notes_layout = QVBoxLayout(notes_group)
-        notes = QTextEdit()
-        notes.setPlaceholderText("Add design notes here...")
-        notes_layout.addWidget(notes)
-
         layout.addWidget(properties_group, 1)
-        layout.addWidget(analysis_group, 2)
-        layout.addWidget(notes_group, 2)
+        layout.addWidget(analysis_group, 4)
 
         if hasattr(self, "workspace_scene"):
             self.workspace_scene.selectionChanged.connect(self._on_selection_changed)
@@ -1145,6 +1721,62 @@ class SubstationGuiMockup(QMainWindow):
         return container
 
     # --- Event handlers -----------------------------------------------------
+
+    def _on_run_evaluation_clicked(self):
+        """
+        Run momentary evaluation on the fake test netlist (test_netlist.py)
+        """
+        system_name = "Test Bay"
+        if hasattr(self, "project_box"):
+            system_name = self.project_box.currentText() or system_name
+
+        started = time.perf_counter()
+        try:
+            netlist, result = run_fake_evaluation(system_name=system_name)
+        except Exception as e:
+            if hasattr(self, "output_box"):
+                self.output_box.setPlainText(f"Evaluation failed:\n{e}")
+            if hasattr(self, "footer_status_label"):
+                self.footer_status_label.setText(f"Evaluation failed: {e}")
+            return
+
+        elapsed_ms = (time.perf_counter() - started) * 1000.0
+        if hasattr(self, "response_time_label"):
+            self.response_time_label.setText(f"Response time: {elapsed_ms:.0f} ms")
+
+        lines: list[str] = []
+        lines.append("(Using fake test netlist from test_netlist.py)")
+        lines.append(f"System: {result.get('scenario_name', system_name)}")
+        lines.append(f"Voltage: {result.get('voltage_V', 125):g} V")
+        lines.append(f"Components: {len(netlist.get('components', []))}")
+        lines.append(f"Connections: {len(netlist.get('connections', []))}")
+        lines.append("")
+        lines.append(f"Peak current: {result.get('peak_current_A', 0):g} A")
+        lines.append("")
+        loads = result.get("loads") or []
+        if loads:
+            lines.append("Loads:")
+            for ld in loads:
+                note = f"  ({ld['note']})" if ld.get("note") else ""
+                lines.append(
+                    f"  • {ld.get('name', '?')}: {ld.get('total_amps', 0):g} A{note}"
+                )
+        else:
+            lines.append("Loads: (none)")
+
+        warnings = result.get("warnings") or []
+        if warnings:
+            lines.append("")
+            lines.append("Warnings:")
+            for w in warnings:
+                lines.append(f"  ⚠ {w}")
+
+        if hasattr(self, "output_box"):
+            self.output_box.setPlainText("\n".join(lines))
+        if hasattr(self, "footer_status_label"):
+            self.footer_status_label.setText(
+                f"Evaluation complete — peak {result.get('peak_current_A', 0):g} A"
+            )
 
     def _on_create_component_clicked(self):
         """
@@ -1227,8 +1859,6 @@ class SubstationGuiMockup(QMainWindow):
             return
 
         self._workspace_original = pm
-        if hasattr(self, "workspace_hint"):
-            self.workspace_hint.hide()
         if hasattr(self, "workspace_view"):
             self.workspace_view.set_background_pixmap(pm)
         if hasattr(self, "footer_status_label"):
