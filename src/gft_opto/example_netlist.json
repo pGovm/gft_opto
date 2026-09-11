@@ -1,0 +1,40 @@
+{
+  "system_name": "Example Substation Bay",
+  "voltage_V": 125.0,
+  "components": [
+    {
+      "id": "mos_1",
+      "type": "mos",
+      "label": "Motor Operated Switch (MOS)",
+      "position": {
+        "x": 420.0,
+        "y": 260.0
+      },
+      "properties": {
+        "trip_coil_1_a": 10.0,
+        "trip_coil_2_a": 10.0,
+        "close_coil_a": 12.0,
+        "motor_inrush_a": 8.0,
+        "motor_run_a": 2.0
+      }
+    },
+    {
+      "id": "xfmr_2w_1",
+      "type": "xfmr_2w",
+      "label": "Transformer (2-winding)",
+      "position": {
+        "x": 760.0,
+        "y": 260.0
+      },
+      "properties": {}
+    }
+  ],
+  "connections": [
+    {
+      "from_id": "mos_1",
+      "from_port": "right",
+      "to_id": "xfmr_2w_1",
+      "to_port": "H"
+    }
+  ]
+}
