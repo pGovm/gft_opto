@@ -12,11 +12,12 @@ import sys
 import math
 import time
 from collections import defaultdict
+from pathlib import Path
 from typing import Callable
 
 from PySide6.QtCore import Qt, QPointF, QRectF, QByteArray, QMimeData
 from PySide6.QtGui import (
-    QFont, QPixmap, QDrag, QPainter, QPen, QBrush, QColor,
+    QFont, QPixmap, QImage, QDrag, QPainter, QPen, QBrush, QColor,
     QKeySequence, QUndoStack, QUndoCommand, QPainterPath, QTransform,
 )
 from PySide6.QtWidgets import (
@@ -43,6 +44,7 @@ MIME_EQUIPMENT = "application/x-substation-equipment"
 PORT_HIT_RADIUS = 14.0       # px — how close the cursor must be to snap to a port
 PORT_DOT_RADIUS = 4.0        # px — visual size of port handles
 WIRE_DRAG_THRESHOLD = 6.0    # px — min drag before rubber-band wire appears
+WIRE_HIT_RADIUS = 10.0       # px — how close to a wire to tee / place a junction
 DEFAULT_WORKSPACE_WIDTH = 2400.0
 DEFAULT_WORKSPACE_HEIGHT = 1800.0
 GRID_SPACING = 25.0          # scene units — matches PDF pixel coords after import
@@ -58,8 +60,51 @@ ROTATE_HANDLE_OFFSET = 28.0  # px above symbol AABB top edge
 ROTATE_HANDLE_RADIUS = 8.0
 ROTATE_HANDLE_HIT = 14.0
 ROTATE_DRAG_SNAP = 15.0      # degrees — snap while dragging the rotate handle
+UI_ACCENT = "#006A4E"        # bottle green — primary GUI accent
+GFT_LOGO_PATH = Path(__file__).resolve().parent / "assets" / "gft_logo.png"
+GFT_LOGO_HEIGHT = 34         # px — header wordmark height
 
 _instance_counters: dict[str, int] = defaultdict(int)
+
+
+def load_gft_logo_pixmap(height: int = GFT_LOGO_HEIGHT) -> QPixmap:
+    """Load the GFT wordmark, clear near-white background, and size for the header."""
+    image = QImage(str(GFT_LOGO_PATH))
+    if image.isNull():
+        return QPixmap()
+
+    # Shrink first so chroma-keying stays cheap at startup.
+    work_h = max(height * 3, 96)
+    image = image.scaledToHeight(work_h, Qt.TransformationMode.SmoothTransformation)
+    image = image.convertToFormat(QImage.Format.Format_ARGB32)
+
+    width, height_px = image.width(), image.height()
+    min_x, min_y = width, height_px
+    max_x, max_y = -1, -1
+    for y in range(height_px):
+        for x in range(width):
+            c = image.pixelColor(x, y)
+            if c.red() > 220 and c.green() > 220 and c.blue() > 220:
+                c.setAlpha(0)
+                image.setPixelColor(x, y, c)
+            elif c.alpha() > 0:
+                min_x = min(min_x, x)
+                min_y = min(min_y, y)
+                max_x = max(max_x, x)
+                max_y = max(max_y, y)
+
+    if max_x >= min_x and max_y >= min_y:
+        pad = 2
+        image = image.copy(
+            max(0, min_x - pad),
+            max(0, min_y - pad),
+            min(width, max_x + pad + 1) - max(0, min_x - pad),
+            min(height_px, max_y + pad + 1) - max(0, min_y - pad),
+        )
+
+    return QPixmap.fromImage(image).scaledToHeight(
+        height, Qt.TransformationMode.SmoothTransformation
+    )
 
 
 def next_instance_id(equip_type: str) -> str:
@@ -90,8 +135,9 @@ def position_for_snapped_port(
 def default_snap_port(item: "OneLineSymbolItem") -> str:
     """Pick a sensible anchor port when the user did not click on one."""
     ports = item.ports()
-    if "left" in ports:
-        return "left"
+    for preferred in ("left", "H", "H1", "line", "node"):
+        if preferred in ports:
+            return preferred
     return next(iter(ports))
 
 
@@ -133,6 +179,29 @@ def wire_path_from_points(points: list[QPointF]) -> QPainterPath:
     for pt in simplified[1:]:
         path.lineTo(pt)
     return path
+
+
+def simplify_route_points(points: list[QPointF]) -> list[QPointF]:
+    if not points:
+        return []
+    simplified: list[QPointF] = [QPointF(points[0])]
+    for pt in points[1:]:
+        if (pt - simplified[-1]).manhattanLength() > 0.01:
+            simplified.append(QPointF(pt))
+    return simplified
+
+
+def point_to_segment_distance(p: QPointF, a: QPointF, b: QPointF) -> tuple[float, QPointF]:
+    """Return (distance, closest point on segment ab to p)."""
+    ab = b - a
+    len_sq = ab.x() ** 2 + ab.y() ** 2
+    if len_sq < 1e-9:
+        return ((p - a).manhattanLength(), QPointF(a))
+    t = ((p.x() - a.x()) * ab.x() + (p.y() - a.y()) * ab.y()) / len_sq
+    t = max(0.0, min(1.0, t))
+    closest = QPointF(a.x() + t * ab.x(), a.y() + t * ab.y())
+    delta = p - closest
+    return ((delta.x() ** 2 + delta.y() ** 2) ** 0.5, closest)
 
 
 # ---------------------------------------------------------------------------
@@ -306,8 +375,8 @@ class OneLineSymbolItem(QGraphicsItem):
         self._draw_rotation_handle(painter)
 
     def _draw_ports(self, painter: QPainter):
-        """Draw blue port dots so drag-to-connect is easy to discover."""
-        color = QColor("#1d4ed8") if self.isSelected() else QColor("#2f6fed")
+        """Draw port dots so drag-to-connect is easy to discover."""
+        color = QColor("#000000") if self.isSelected() else QColor("#1f2933")
         painter.setPen(QPen(color, 1.5))
         painter.setBrush(QBrush(color))
         r = PORT_DOT_RADIUS
@@ -330,7 +399,7 @@ class OneLineSymbolItem(QGraphicsItem):
         body = self._transformed_rect()
         top_mid = QPointF(body.center().x(), body.top())
         handle = self.rotation_handle_pos()
-        accent = QColor("#2f6fed")
+        accent = QColor(UI_ACCENT)
 
         painter.setPen(QPen(accent, 1.5))
         painter.drawLine(top_mid, handle)
@@ -359,13 +428,14 @@ class OneLineSymbolItem(QGraphicsItem):
 
     def itemChange(self, change, value):
         if change == QGraphicsItem.GraphicsItemChange.ItemPositionChange:
-            ports = self.ports()
-            if (
-                self.snap_to_grid_enabled
-                and self._snap_port_name is not None
-                and self._snap_port_name in ports
-            ):
-                return position_for_snapped_port(value, ports[self._snap_port_name])
+            if self.snap_to_grid_enabled:
+                ports = self.ports()
+                port_name = self._snap_port_name
+                if port_name is None or port_name not in ports:
+                    port_name = default_snap_port(self) if ports else None
+                if port_name is not None and port_name in ports:
+                    value = position_for_snapped_port(value, ports[port_name])
+            return super().itemChange(change, value)
         # Keep attached wires in sync when this symbol moves or is selected.
         if change == QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged:
             for conn in self._connections:
@@ -377,78 +447,211 @@ class OneLineSymbolItem(QGraphicsItem):
 
 
 class Transformer2WItem(OneLineSymbolItem):
+    """AEP-style two-winding power transformer (interlocking circles)."""
+
     def __init__(self):
         super().__init__(
             "xfmr_2w",
             "Transformer (2-winding)",
-            {"H": QPointF(-34, 0), "X": QPointF(34, 0)},
+            {"H": QPointF(-40, 0), "X": QPointF(40, 0)},
         )
-        self._rect = QRectF(-34, -20, 68, 40)
+        self._rect = QRectF(-40, -18, 80, 36)
 
     def paint(self, painter: QPainter, option, widget=None):
         self._begin_paint(painter)
-        painter.drawLine(-34, 0, -18, 0)
-        painter.drawLine(18, 0, 34, 0)
-        painter.drawEllipse(-18, -12, 24, 24)
-        painter.drawEllipse(-6, -12, 24, 24)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawLine(-40, 0, -18, 0)
+        painter.drawLine(18, 0, 40, 0)
+        painter.drawEllipse(QRectF(-18, -14, 28, 28))
+        painter.drawEllipse(QRectF(-10, -14, 28, 28))
         self._end_paint(painter)
 
 
 class Transformer3WItem(OneLineSymbolItem):
+    """AEP-style three-winding transformer (three interlocking circles)."""
+
     def __init__(self):
         super().__init__(
             "xfmr_3w",
             "Transformer (3-winding)",
-            {"H1": QPointF(-38, -1), "H2": QPointF(38, -1), "X": QPointF(3, 38)},
+            {"H1": QPointF(-40, -8), "H2": QPointF(40, -8), "X": QPointF(0, 40)},
         )
-        self._rect = QRectF(-38, -28, 76, 60)
+        self._rect = QRectF(-40, -28, 80, 68)
 
     def paint(self, painter: QPainter, option, widget=None):
         self._begin_paint(painter)
-        painter.drawEllipse(-18, -12, 22, 22)
-        painter.drawEllipse(2, -12, 22, 22)
-        painter.drawEllipse(-8, 8, 22, 22)
-        painter.drawLine(-38, -1, -18, -1)
-        painter.drawLine(24, -1, 38, -1)
-        painter.drawLine(3, 30, 3, 38)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawEllipse(QRectF(-20, -22, 26, 26))
+        painter.drawEllipse(QRectF(-6, -22, 26, 26))
+        painter.drawEllipse(QRectF(-13, -4, 26, 26))
+        painter.drawLine(-40, -8, -20, -8)
+        painter.drawLine(20, -8, 40, -8)
+        painter.drawLine(0, 22, 0, 40)
+        self._end_paint(painter)
+
+
+class DisconnectSwitchItem(OneLineSymbolItem):
+    """AEP air-break / disconnect: open blade with hinge dots on the centerline."""
+
+    def __init__(self):
+        super().__init__(
+            "disconnect",
+            "Disconnect Switch",
+            {"left": QPointF(-36, 0), "right": QPointF(36, 0)},
+        )
+        self._rect = QRectF(-36, -16, 72, 28)
+
+    def paint(self, painter: QPainter, option, widget=None):
+        self._begin_paint(painter)
+        painter.drawLine(-36, 0, -12, 0)
+        painter.drawLine(12, 0, 36, 0)
+        # Open blade (angled up toward the far terminal)
+        painter.drawLine(-12, 0, 12, -12)
+        painter.setBrush(QBrush(Qt.GlobalColor.black))
+        painter.drawEllipse(QRectF(-14, -2, 4, 4))
+        painter.drawEllipse(QRectF(10, -2, 4, 4))
         self._end_paint(painter)
 
 
 class MotorOperatedSwitchItem(OneLineSymbolItem):
+    """AEP motor-operated disconnect: open blade + circled M."""
+
     def __init__(self):
         super().__init__(
             "mos",
             "Motor Operated Switch (MOS)",
-            {"left": QPointF(-38, 0), "right": QPointF(38, 0)},
+            {"left": QPointF(-36, 0), "right": QPointF(36, 0)},
         )
-        self._rect = QRectF(-38, -18, 76, 36)
+        self._rect = QRectF(-36, -16, 72, 40)
 
     def paint(self, painter: QPainter, option, widget=None):
         self._begin_paint(painter)
-        painter.drawLine(-38, 0, -12, 0)
-        painter.drawLine(12, 0, 38, 0)
-        painter.drawLine(-12, 0, 12, -10)
-        painter.setBrush(QBrush(Qt.GlobalColor.white))
+        painter.drawLine(-36, 0, -12, 0)
+        painter.drawLine(12, 0, 36, 0)
+        painter.drawLine(-12, 0, 12, -12)
+        painter.setBrush(QBrush(Qt.GlobalColor.black))
         painter.drawEllipse(QRectF(-14, -2, 4, 4))
         painter.drawEllipse(QRectF(10, -2, 4, 4))
-        painter.drawRect(QRectF(-6, 6, 12, 8))
+        # Circled M (motor operator), AEP style
+        painter.setBrush(QBrush(Qt.GlobalColor.white))
+        painter.drawEllipse(QRectF(-8, 8, 16, 16))
+        painter.setFont(QFont("Sans-Serif", 7, QFont.Weight.Bold))
+        painter.drawText(QRectF(-8, 8, 16, 16), Qt.AlignmentFlag.AlignCenter, "M")
+        self._end_paint(painter)
+
+
+class CircuitBreakerItem(OneLineSymbolItem):
+    """AEP circuit breaker: square on the centerline."""
+
+    def __init__(self):
+        super().__init__(
+            "breaker",
+            "Circuit Breaker",
+            {"left": QPointF(-32, 0), "right": QPointF(32, 0)},
+        )
+        self._rect = QRectF(-32, -12, 64, 24)
+
+    def paint(self, painter: QPainter, option, widget=None):
+        self._begin_paint(painter)
+        painter.drawLine(-32, 0, -10, 0)
+        painter.drawLine(10, 0, 32, 0)
+        painter.setBrush(QBrush(Qt.GlobalColor.white))
+        painter.drawRect(QRectF(-10, -10, 20, 20))
         self._end_paint(painter)
 
 
 class CurrentTransformerItem(OneLineSymbolItem):
+    """AEP CT: conductor with two core loops."""
+
     def __init__(self):
         super().__init__(
             "ct",
             "Current Transformer (CT/BCT)",
-            {"left": QPointF(-16, 0), "right": QPointF(16, 0)},
+            {"left": QPointF(-28, 0), "right": QPointF(28, 0)},
         )
-        self._rect = QRectF(-22, -22, 44, 44)
+        self._rect = QRectF(-28, -14, 56, 28)
 
     def paint(self, painter: QPainter, option, widget=None):
         self._begin_paint(painter)
-        painter.drawEllipse(QRectF(-16, -16, 32, 32))
-        painter.drawEllipse(QRectF(-6, -6, 12, 12))
+        painter.drawLine(-28, 0, 28, 0)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        # Classic AEP CT: two open loops sitting on the conductor
+        painter.drawArc(QRectF(-16, -12, 16, 16), 0 * 16, 180 * 16)
+        painter.drawArc(QRectF(0, -12, 16, 16), 0 * 16, 180 * 16)
         self._end_paint(painter)
+
+
+class PotentialTransformerItem(OneLineSymbolItem):
+    """AEP VT/PT tap: small two-winding symbol off the line."""
+
+    def __init__(self):
+        super().__init__(
+            "pt",
+            "Potential Transformer (PT/VT)",
+            {"line": QPointF(0, -28), "ground": QPointF(0, 28)},
+        )
+        self._rect = QRectF(-16, -28, 32, 56)
+
+    def paint(self, painter: QPainter, option, widget=None):
+        self._begin_paint(painter)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawLine(0, -28, 0, -12)
+        painter.drawEllipse(QRectF(-10, -12, 20, 20))
+        painter.drawEllipse(QRectF(-10, -2, 20, 20))
+        painter.drawLine(0, 18, 0, 28)
+        self._end_paint(painter)
+
+
+
+class GroundItem(OneLineSymbolItem):
+    """Earth ground: three horizontal bars."""
+
+    def __init__(self):
+        super().__init__(
+            "ground",
+            "Ground",
+            {"node": QPointF(0, -16)},
+        )
+        self._rect = QRectF(-14, -16, 28, 36)
+
+    def paint(self, painter: QPainter, option, widget=None):
+        self._begin_paint(painter)
+        painter.drawLine(0, -16, 0, 4)
+        painter.drawLine(-12, 4, 12, 4)
+        painter.drawLine(-8, 10, 8, 10)
+        painter.drawLine(-4, 16, 4, 16)
+        self._end_paint(painter)
+
+
+class JunctionItem(OneLineSymbolItem):
+    """
+    Auto-placed tee node. Looks exactly like a component blue port so you can
+    branch more wires from wire bends / mid-wire connection points.
+    """
+
+    def __init__(self):
+        super().__init__(
+            "junction",
+            "Junction",
+            {"node": QPointF(0, 0)},
+        )
+        self._rect = QRectF(-10, -10, 20, 20)
+
+    def paint(self, painter: QPainter, option, widget=None):
+        # Match component port styling exactly (no extra cross / body).
+        color = QColor("#000000") if self.isSelected() else QColor("#1f2933")
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setPen(QPen(color, 1.5))
+        painter.setBrush(QBrush(color))
+        r = PORT_DOT_RADIUS
+        painter.drawEllipse(QRectF(-r, -r, 2 * r, 2 * r))
+        self._draw_rotation_handle(painter)
+
+    def resize_handle_at(self, local_pos: QPointF, hit_radius: float = RESIZE_HANDLE_HIT):
+        return None
+
+    def _draw_resize_handles(self, painter: QPainter):
+        return
 
 
 class CustomComponentItem(OneLineSymbolItem):
@@ -489,23 +692,48 @@ class ConnectionItem(QGraphicsPathItem):
         self.from_port = from_port
         self.to_item = to_item
         self.to_port = to_port
+        self._route_points: list[QPointF] = []
         self.setPen(QPen(QColor("#1f2933"), 2.5))
         self.setZValue(50)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
         self.attach()
         self.update_path()
 
+    def route_points(self) -> list[QPointF]:
+        return [QPointF(p) for p in self._route_points]
+
+    def bend_points(self) -> list[QPointF]:
+        pts = self._route_points
+        if len(pts) <= 2:
+            return []
+        return [QPointF(p) for p in pts[1:-1]]
+
     def update_path(self):
         if self.from_item is None or self.to_item is None:
             return
         p1 = self.from_item.port_scene_pos(self.from_port)
         p2 = self.to_item.port_scene_pos(self.to_port)
-        points = route_wire_on_grid(
-            p1,
-            p2,
-            snap_endpoints=OneLineSymbolItem.snap_to_grid_enabled,
+        points = simplify_route_points(
+            route_wire_on_grid(
+                p1,
+                p2,
+                snap_endpoints=OneLineSymbolItem.snap_to_grid_enabled,
+            )
         )
+        self._route_points = points
         self.setPath(wire_path_from_points(points))
+        self.update()
+
+    def paint(self, painter: QPainter, option, widget=None):
+        super().paint(painter, option, widget)
+        # Ports at orthogonal bend / tee corners (same look as component ports).
+        color = QColor("#000000") if self.isSelected() else QColor("#1f2933")
+        painter.setPen(QPen(color, 1.5))
+        painter.setBrush(QBrush(color))
+        r = PORT_DOT_RADIUS
+        for pt in self.bend_points():
+            local = self.mapFromScene(pt)
+            painter.drawEllipse(QRectF(local.x() - r, local.y() - r, 2 * r, 2 * r))
 
     def attach(self):
         if self.from_item is not None:
@@ -525,8 +753,12 @@ class ConnectionItem(QGraphicsPathItem):
 EQUIPMENT_DEFS = {
     "xfmr_2w": {"label": "Transformer (2-winding)", "factory": Transformer2WItem},
     "xfmr_3w": {"label": "Transformer (3-winding)", "factory": Transformer3WItem},
+    "breaker": {"label": "Circuit Breaker", "factory": CircuitBreakerItem},
+    "disconnect": {"label": "Disconnect Switch", "factory": DisconnectSwitchItem},
     "mos": {"label": "Motor Operated Switch (MOS)", "factory": MotorOperatedSwitchItem},
     "ct": {"label": "Current Transformer (CT/BCT)", "factory": CurrentTransformerItem},
+    "pt": {"label": "Potential Transformer (PT/VT)", "factory": PotentialTransformerItem},
+    "ground": {"label": "Ground", "factory": GroundItem},
 }
 
 
@@ -566,26 +798,138 @@ class AddConnectionCommand(QUndoCommand):
         self.from_port = from_port
         self.to_item = to_item
         self.to_port = to_port
-        self.conn: ConnectionItem | None = None
+        # May include JunctionItems + one or more ConnectionItems (bent routes).
+        self.created_items: list[QGraphicsItem] = []
 
     def redo(self):
-        if self.conn is None:
-            self.conn = ConnectionItem(
-                self.from_item, self.from_port, self.to_item, self.to_port
+        if self.created_items:
+            for item in self.created_items:
+                if item.scene() is not self.scene:
+                    self.scene.addItem(item)
+                if isinstance(item, ConnectionItem):
+                    item.attach()
+                    item.update_path()
+            return
+
+        p1 = self.from_item.port_scene_pos(self.from_port)
+        p2 = self.to_item.port_scene_pos(self.to_port)
+        points = simplify_route_points(
+            route_wire_on_grid(
+                p1,
+                p2,
+                snap_endpoints=OneLineSymbolItem.snap_to_grid_enabled,
             )
-            self.scene.addItem(self.conn)
-        else:
-            if self.conn.scene() is not self.scene:
-                self.scene.addItem(self.conn)
-            self.conn.attach()
-            self.conn.update_path()
+        )
+
+        prev_item: OneLineSymbolItem = self.from_item
+        prev_port = self.from_port
+        for bend in points[1:-1]:
+            junction = JunctionItem()
+            pos = snap_point_to_grid(bend) if OneLineSymbolItem.snap_to_grid_enabled else QPointF(bend)
+            junction.setPos(pos)
+            junction.setZValue(100)
+            self.scene.addItem(junction)
+            self.created_items.append(junction)
+            seg = ConnectionItem(prev_item, prev_port, junction, "node")
+            self.scene.addItem(seg)
+            self.created_items.append(seg)
+            prev_item = junction
+            prev_port = "node"
+
+        seg = ConnectionItem(prev_item, prev_port, self.to_item, self.to_port)
+        self.scene.addItem(seg)
+        self.created_items.append(seg)
 
     def undo(self):
-        if self.conn is None:
+        for item in reversed(self.created_items):
+            if isinstance(item, ConnectionItem):
+                item.detach()
+            if item.scene() is self.scene:
+                self.scene.removeItem(item)
+
+
+class SplitWireCommand(QUndoCommand):
+    """
+    Insert a blue-port junction on an existing wire at `point`, splitting it
+    into two segments. Optionally also attach a new branch wire to the junction.
+    """
+
+    def __init__(
+        self,
+        scene: QGraphicsScene,
+        wire: ConnectionItem,
+        point: QPointF,
+        branch_from: OneLineSymbolItem | None = None,
+        branch_port: str | None = None,
+    ):
+        super().__init__("Add wire junction")
+        self.scene = scene
+        self.wire = wire
+        self.point = QPointF(point)
+        self.branch_from = branch_from
+        self.branch_port = branch_port
+        self.junction: JunctionItem | None = None
+        self.seg_a: ConnectionItem | None = None
+        self.seg_b: ConnectionItem | None = None
+        self.branch: ConnectionItem | None = None
+        self._did_remove_wire = False
+
+    def redo(self):
+        if self.junction is None:
+            pos = (
+                snap_point_to_grid(self.point)
+                if OneLineSymbolItem.snap_to_grid_enabled
+                else QPointF(self.point)
+            )
+            self.junction = JunctionItem()
+            self.junction.setPos(pos)
+            self.junction.setZValue(100)
+
+            a, ap = self.wire.from_item, self.wire.from_port
+            b, bp = self.wire.to_item, self.wire.to_port
+            self.wire.detach()
+            if self.wire.scene() is self.scene:
+                self.scene.removeItem(self.wire)
+            self._did_remove_wire = True
+
+            self.scene.addItem(self.junction)
+            self.seg_a = ConnectionItem(a, ap, self.junction, "node")
+            self.seg_b = ConnectionItem(self.junction, "node", b, bp)
+            self.scene.addItem(self.seg_a)
+            self.scene.addItem(self.seg_b)
+            if self.branch_from is not None and self.branch_port is not None:
+                self.branch = ConnectionItem(
+                    self.branch_from, self.branch_port, self.junction, "node"
+                )
+                self.scene.addItem(self.branch)
             return
-        self.conn.detach()
-        if self.conn.scene() is self.scene:
-            self.scene.removeItem(self.conn)
+
+        if self._did_remove_wire and self.wire.scene() is self.scene:
+            self.wire.detach()
+            self.scene.removeItem(self.wire)
+        if self.junction.scene() is not self.scene:
+            self.scene.addItem(self.junction)
+        for seg in (self.seg_a, self.seg_b, self.branch):
+            if seg is None:
+                continue
+            if seg.scene() is not self.scene:
+                self.scene.addItem(seg)
+            seg.attach()
+            seg.update_path()
+
+    def undo(self):
+        for seg in (self.branch, self.seg_b, self.seg_a):
+            if seg is None:
+                continue
+            seg.detach()
+            if seg.scene() is self.scene:
+                self.scene.removeItem(seg)
+        if self.junction is not None and self.junction.scene() is self.scene:
+            self.scene.removeItem(self.junction)
+        if self.wire.scene() is not self.scene:
+            self.scene.addItem(self.wire)
+        self.wire.attach()
+        self.wire.update_path()
 
 
 class MoveEquipmentCommand(QUndoCommand):
@@ -788,6 +1132,10 @@ class WorkspaceView(QGraphicsView):
         self._snap_ports: dict[OneLineSymbolItem, str] = {}
         self._snap_to_grid = True
 
+        # Live ghost while dragging equipment from the library
+        self._drop_preview: OneLineSymbolItem | None = None
+        self._drop_preview_equip_id: str | None = None
+
         # Resize tracking (corner-handle drag)
         self._resize_item: OneLineSymbolItem | None = None
         self._resize_origin_scale = 1.0
@@ -799,6 +1147,8 @@ class WorkspaceView(QGraphicsView):
         self._rotate_origin_deg = 0.0
         self._rotate_start_angle = 0.0
         self._rotate_was_movable = True
+
+        self._pdf_visible = True
 
         self.undo_stack: QUndoStack | None = None
         self.status_callback: Callable[[str], None] | None = None
@@ -820,6 +1170,14 @@ class WorkspaceView(QGraphicsView):
     def set_grid_visible(self, visible: bool):
         if self._grid_item is not None:
             self._grid_item.setVisible(visible)
+
+    def set_pdf_visible(self, visible: bool):
+        self._pdf_visible = visible
+        if self._background_item is not None:
+            self._background_item.setVisible(visible)
+
+    def has_pdf_background(self) -> bool:
+        return self._background_item is not None
 
     def set_grid_opacity(self, percent: int):
         if self._grid_item is not None:
@@ -870,8 +1228,12 @@ class WorkspaceView(QGraphicsView):
         hit = self._find_port_at(end)
         if hit is not None:
             end = hit[0].port_scene_pos(hit[1])
-        elif self._snap_to_grid:
-            end = snap_point_to_grid(end)
+        else:
+            wire_hit = self._find_wire_at(end)
+            if wire_hit is not None:
+                end = wire_hit[1]
+            elif self._snap_to_grid:
+                end = snap_point_to_grid(end)
         points = route_wire_on_grid(start, end, snap_endpoints=self._snap_to_grid)
         return wire_path_from_points(points)
 
@@ -908,6 +1270,31 @@ class WorkspaceView(QGraphicsView):
             if dist <= best_dist:
                 best_dist = dist
                 best = (item, port)
+        return best
+
+    def _find_wire_at(self, scene_pos: QPointF, exclude: ConnectionItem | None = None):
+        """Return (ConnectionItem, point_on_wire) if cursor is near a wire segment."""
+        scn = self.scene()
+        if scn is None:
+            return None
+        best = None
+        best_dist = WIRE_HIT_RADIUS
+        for item in scn.items():
+            if not isinstance(item, ConnectionItem) or item is exclude:
+                continue
+            pts = item.route_points()
+            if len(pts) < 2:
+                continue
+            for i in range(len(pts) - 1):
+                dist, closest = point_to_segment_distance(scene_pos, pts[i], pts[i + 1])
+                if dist <= best_dist:
+                    best_dist = dist
+                    point = (
+                        snap_point_to_grid(closest)
+                        if self._snap_to_grid
+                        else QPointF(closest)
+                    )
+                    best = (item, point)
         return best
 
     def _find_resize_handle_at(self, scene_pos: QPointF):
@@ -1054,17 +1441,22 @@ class WorkspaceView(QGraphicsView):
             return
         origins: dict[OneLineSymbolItem, QPointF] = {}
         items: list[OneLineSymbolItem] = []
+        under = [
+            it for it in scn.items(scene_pos) if isinstance(it, OneLineSymbolItem)
+        ]
         selected = [it for it in scn.selectedItems() if isinstance(it, OneLineSymbolItem)]
-        if selected:
-            for item in selected:
-                origins[item] = QPointF(item.pos())
-                items.append(item)
+        # Prefer the symbol under the cursor so snap applies to the item being
+        # dragged (not a stale multi-selection). Keep multi-select when the
+        # clicked item is already part of the selection.
+        if under and under[0] in selected and len(selected) > 1:
+            move_items = selected
+        elif under:
+            move_items = [under[0]]
         else:
-            for it in scn.items(scene_pos):
-                if isinstance(it, OneLineSymbolItem):
-                    origins[it] = QPointF(it.pos())
-                    items.append(it)
-                    break
+            move_items = selected
+        for item in move_items:
+            origins[item] = QPointF(item.pos())
+            items.append(item)
         self._move_origins = origins
         self._assign_snap_ports(items, scene_pos)
 
@@ -1137,6 +1529,7 @@ class WorkspaceView(QGraphicsView):
         self._background_item.setZValue(-10_000)
         self._background_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, False)
         self._background_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, False)
+        self._background_item.setVisible(self._pdf_visible)
         scn = self.scene()
         if scn is not None:
             scn.addItem(self._background_item)
@@ -1217,13 +1610,41 @@ class WorkspaceView(QGraphicsView):
                 self._wire_start_pos = scene_pos
                 self._wiring = False
                 self._temp_line = QGraphicsPathItem()
-                self._temp_line.setPen(QPen(QColor("#2f6fed"), 2, Qt.PenStyle.DashLine))
+                self._temp_line.setPen(QPen(QColor(UI_ACCENT), 2, Qt.PenStyle.DashLine))
                 self._temp_line.setZValue(200)
                 start = item.port_scene_pos(port)
                 self._temp_line.setPath(wire_path_from_points([start, start]))
                 self._temp_line.setVisible(False)
                 self.scene().addItem(self._temp_line)
                 self._set_status(f"Drag to a port from {item.instance_id}:{port}")
+                event.accept()
+                return
+
+            # Click on an existing wire / bend → insert blue junction and start a branch.
+            wire_hit = self._find_wire_at(scene_pos)
+            if wire_hit is not None:
+                wire, point = wire_hit
+                cmd = SplitWireCommand(self.scene(), wire, point)
+                self._push(cmd)
+                junction = cmd.junction
+                if junction is None:
+                    event.accept()
+                    return
+                self._move_origins = {}
+                self._saved_drag_mode = self.dragMode()
+                self.setDragMode(QGraphicsView.DragMode.NoDrag)
+                self.setCursor(Qt.CursorShape.CrossCursor)
+                self._pending = (junction, "node")
+                self._wire_start_pos = scene_pos
+                self._wiring = False
+                self._temp_line = QGraphicsPathItem()
+                self._temp_line.setPen(QPen(QColor(UI_ACCENT), 2, Qt.PenStyle.DashLine))
+                self._temp_line.setZValue(200)
+                start = junction.port_scene_pos("node")
+                self._temp_line.setPath(wire_path_from_points([start, start]))
+                self._temp_line.setVisible(False)
+                self.scene().addItem(self._temp_line)
+                self._set_status(f"Drag to a port from {junction.instance_id}")
                 event.accept()
                 return
 
@@ -1289,6 +1710,27 @@ class WorkspaceView(QGraphicsView):
                     event.accept()
                     return
 
+            # Drop onto an existing wire → tee with an auto blue-port junction.
+            if self._wiring:
+                wire_hit = self._find_wire_at(scene_pos)
+                if wire_hit is not None:
+                    wire, point = wire_hit
+                    self._push(
+                        SplitWireCommand(
+                            self.scene(),
+                            wire,
+                            point,
+                            branch_from=from_item,
+                            branch_port=from_port,
+                        )
+                    )
+                    self._cancel_pending()
+                    self._set_status(
+                        f"Teed {from_item.instance_id}:{from_port} into wire junction"
+                    )
+                    event.accept()
+                    return
+
             was_wiring = self._wiring
             self._cancel_pending()
             self._set_status("Connection cancelled" if was_wiring else "Ready")
@@ -1315,17 +1757,77 @@ class WorkspaceView(QGraphicsView):
 
     # --- Drag-and-drop from equipment library -------------------------------
 
+    def _clear_drop_preview(self):
+        preview = self._drop_preview
+        self._drop_preview = None
+        self._drop_preview_equip_id = None
+        if preview is None:
+            return
+        scn = self.scene()
+        if scn is not None and preview.scene() is scn:
+            scn.removeItem(preview)
+
+    def _snapped_place_pos(self, scene_pos: QPointF, symbol: OneLineSymbolItem) -> QPointF:
+        if not self._snap_to_grid:
+            return QPointF(scene_pos)
+        port = default_snap_port(symbol)
+        return position_for_snapped_port(scene_pos, symbol.ports()[port])
+
+    def _ensure_drop_preview(self, equip_id: str) -> OneLineSymbolItem | None:
+        meta = EQUIPMENT_DEFS.get(equip_id)
+        if not meta:
+            return None
+        if (
+            self._drop_preview is not None
+            and self._drop_preview_equip_id == equip_id
+            and self._drop_preview.scene() is self.scene()
+        ):
+            return self._drop_preview
+
+        self._clear_drop_preview()
+        # Avoid burning a permanent instance id on the transient ghost.
+        prior_count = _instance_counters[equip_id]
+        symbol = meta["factory"]()
+        _instance_counters[equip_id] = prior_count
+
+        symbol.setOpacity(0.55)
+        symbol.setZValue(300)
+        symbol.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, False)
+        symbol.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, False)
+        if self._snap_to_grid:
+            symbol._snap_port_name = default_snap_port(symbol)
+        scn = self.scene()
+        if scn is not None:
+            scn.addItem(symbol)
+        self._drop_preview = symbol
+        self._drop_preview_equip_id = equip_id
+        return symbol
+
     def dragEnterEvent(self, event):
         if event.mimeData().hasFormat(MIME_EQUIPMENT):
+            equip_id = bytes(event.mimeData().data(MIME_EQUIPMENT)).decode("utf-8")
+            preview = self._ensure_drop_preview(equip_id)
+            if preview is not None:
+                pos = self.mapToScene(event.position().toPoint())
+                preview.setPos(self._snapped_place_pos(pos, preview))
             event.acceptProposedAction()
             return
         super().dragEnterEvent(event)
 
     def dragMoveEvent(self, event):
         if event.mimeData().hasFormat(MIME_EQUIPMENT):
+            equip_id = bytes(event.mimeData().data(MIME_EQUIPMENT)).decode("utf-8")
+            preview = self._ensure_drop_preview(equip_id)
+            if preview is not None:
+                pos = self.mapToScene(event.position().toPoint())
+                preview.setPos(self._snapped_place_pos(pos, preview))
             event.acceptProposedAction()
             return
         super().dragMoveEvent(event)
+
+    def dragLeaveEvent(self, event):
+        self._clear_drop_preview()
+        super().dragLeaveEvent(event)
 
     def dropEvent(self, event):
         if not event.mimeData().hasFormat(MIME_EQUIPMENT):
@@ -1335,17 +1837,32 @@ class WorkspaceView(QGraphicsView):
         equip_id = bytes(event.mimeData().data(MIME_EQUIPMENT)).decode("utf-8")
         meta = EQUIPMENT_DEFS.get(equip_id)
         if not meta:
+            self._clear_drop_preview()
             event.ignore()
             return
 
-        pos = self.mapToScene(event.position().toPoint())
+        # Prefer the live ghost position so drop matches what the user saw.
+        if (
+            self._drop_preview is not None
+            and self._drop_preview_equip_id == equip_id
+        ):
+            pos = QPointF(self._drop_preview.pos())
+        else:
+            prior_count = _instance_counters[equip_id]
+            temp = meta["factory"]()
+            _instance_counters[equip_id] = prior_count
+            pos = self._snapped_place_pos(
+                self.mapToScene(event.position().toPoint()),
+                temp,
+            )
+
+        self._clear_drop_preview()
         symbol = meta["factory"]()
-        if self._snap_to_grid:
-            port = symbol.nearest_port(pos, max_dist=float("inf"))
-            if port is None:
-                port = default_snap_port(symbol)
-            pos = position_for_snapped_port(pos, symbol.ports()[port])
+        # Keep the exact preview/grid position (avoid a second snap pass).
+        was_snap = OneLineSymbolItem.snap_to_grid_enabled
+        OneLineSymbolItem.snap_to_grid_enabled = False
         symbol.setPos(pos)
+        OneLineSymbolItem.snap_to_grid_enabled = was_snap
         symbol.setZValue(100)
         self._push(AddEquipmentCommand(self.scene(), symbol))
         self._set_status(f"Placed {symbol.instance_id}")
@@ -1389,8 +1906,8 @@ class SubstationGuiMockup(QMainWindow):
     }
 
     QCheckBox::indicator:checked {
-        background: #2f6fed;
-        border-color: #2f6fed;
+        background: #006A4E;
+        border-color: #006A4E;
     }
 
     QSlider::groove:horizontal {
@@ -1403,7 +1920,7 @@ class SubstationGuiMockup(QMainWindow):
         width: 14px;
         margin: -5px 0;
         border-radius: 7px;
-        background: #2f6fed;
+        background: #006A4E;
     }
 
     QGroupBox {
@@ -1424,7 +1941,7 @@ class SubstationGuiMockup(QMainWindow):
     }
 
     QPushButton {
-        background-color: #2f6fed; color: white; border: none;
+        background-color: #006A4E; color: white; border: none;
         border-radius: 8px; padding: 8px 16px; font-weight: 600;
     }
 
@@ -1496,6 +2013,12 @@ class SubstationGuiMockup(QMainWindow):
         self.grid_show_cb.setChecked(True)
         self.grid_show_cb.toggled.connect(self.workspace_view.set_grid_visible)
 
+        self.pdf_show_cb = QCheckBox("Show PDF")
+        self.pdf_show_cb.setChecked(True)
+        self.pdf_show_cb.setEnabled(False)
+        self.pdf_show_cb.setToolTip("Import a PDF first to enable this option")
+        self.pdf_show_cb.toggled.connect(self.workspace_view.set_pdf_visible)
+
         self.grid_snap_cb = QCheckBox("Snap to Grid")
         self.grid_snap_cb.setChecked(True)
         self.grid_snap_cb.toggled.connect(self.workspace_view.set_snap_to_grid)
@@ -1516,6 +2039,7 @@ class SubstationGuiMockup(QMainWindow):
         self.grid_opacity_slider.valueChanged.connect(_on_opacity_changed)
 
         self.controls_layout.addWidget(self.grid_show_cb)
+        self.controls_layout.addWidget(self.pdf_show_cb)
         self.controls_layout.addWidget(self.grid_snap_cb)
         self.controls_layout.addLayout(opacity_row)
 
@@ -1541,6 +2065,15 @@ class SubstationGuiMockup(QMainWindow):
         frame.setObjectName("toolbarFrame")
         layout = QHBoxLayout(frame)
         layout.setContentsMargins(20, 14, 20, 14)
+        layout.setSpacing(12)
+
+        logo = QLabel()
+        logo_pix = load_gft_logo_pixmap()
+        if not logo_pix.isNull():
+            logo.setPixmap(logo_pix)
+            logo.setFixedSize(logo_pix.size())
+        logo.setToolTip("GFT Inc")
+        logo.setStyleSheet("background: transparent; border: none;")
 
         title = QLabel("AI-Assisted Substation Protection & Control Design")
         title.setFont(QFont("Arial", 12, QFont.Weight.Bold))
@@ -1556,6 +2089,7 @@ class SubstationGuiMockup(QMainWindow):
         self.run_btn = QPushButton("Run Evaluation")
         self.run_btn.clicked.connect(self._on_run_evaluation_clicked)
 
+        layout.addWidget(logo)
         layout.addWidget(title)
         layout.addStretch()
         layout.addWidget(QLabel("Project:"))
@@ -1861,6 +2395,10 @@ class SubstationGuiMockup(QMainWindow):
         self._workspace_original = pm
         if hasattr(self, "workspace_view"):
             self.workspace_view.set_background_pixmap(pm)
+        if hasattr(self, "pdf_show_cb"):
+            self.pdf_show_cb.setEnabled(True)
+            self.pdf_show_cb.setChecked(True)
+            self.pdf_show_cb.setToolTip("Show or hide the imported PDF background")
         if hasattr(self, "footer_status_label"):
             self.footer_status_label.setText(f"Imported: {pdf_path}")
 
