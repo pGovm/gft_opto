@@ -2329,13 +2329,16 @@ class SubstationGuiMockup(QMainWindow):
             return
 
         data = dialog.component_data()
+        # data only contains "Rating" for a Bus, and only contains the
+        # trip coil / motor current keys for everything else — use
+        # .get() so neither branch KeyErrors on the other's fields.
         properties = {
-            "rating_kv": data["Rating"],
-            "trip_coil_1_a": data["TripCoil1"],
-            "trip_coil_2_a": data["TripCoil2"],
-            "close_coil_a": data["CloseCoil"],
-            "motor_inrush_a": data["MotorInrushCurrent"],
-            "motor_run_a": data["MotorRunCurrent"],
+            "rating_kv": data.get("Rating", 0),
+            "trip_coil_1_a": data.get("TripCoil1", 0),
+            "trip_coil_2_a": data.get("TripCoil2", 0),
+            "close_coil_a": data.get("CloseCoil", 0),
+            "motor_inrush_a": data.get("MotorInrushCurrent", 0),
+            "motor_run_a": data.get("MotorRunCurrent", 0),
         }
 
         slug = "".join(ch if ch.isalnum() else "_" for ch in name.strip().lower())
