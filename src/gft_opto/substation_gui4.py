@@ -1,20 +1,25 @@
 """
-Layout:
-  - Constants & ID helpers
-  - Symbol graphics items (equipment + connections)
-  - Undo/redo commands
-  - Equipment library drag source
-  - Workspace canvas (drop, move, wire, zoom)
-  - Main window (panels, PDF import, properties)
+AI-Assisted Substation Design Tool — main GUI.
+
+File layout:
+  1. Constants & helpers          (IDs, grid snap, wire routing, logo)
+  2. Symbol graphics items        (AEP one-line glyphs + wires)
+  3. Equipment library registry   (EQUIPMENT_DEFS + Create Component factory)
+  4. Undo / redo commands
+  5. Equipment library drag source
+  6. Workspace canvas             (grid, wire, move, drop, zoom)
+  7. Main window                  (header, panels, PDF import, properties)
 """
 
-import sys
+import functools
 import math
+import sys
 import time
 from collections import defaultdict
 from pathlib import Path
 from typing import Callable
 
+import pymupdf
 from PySide6.QtCore import Qt, QPointF, QRectF, QByteArray, QMimeData
 from PySide6.QtGui import (
     QFont, QPixmap, QImage, QDrag, QPainter, QPen, QBrush, QColor,
@@ -29,29 +34,35 @@ from PySide6.QtWidgets import (
     QMessageBox,
 )
 
-import pymupdf
-import functools
-
-from gft_opto.customWidgetTool import ComponentDialog
+from gft_opto.customWidgetTool import ComponentDialog, SYMBOL_TYPE_CHOICES
 from gft_opto.test_netlist import run_fake_evaluation
 
 
 # ---------------------------------------------------------------------------
-# Constants & helpers
+# Constants
 # ---------------------------------------------------------------------------
 
+# Drag-and-drop mime type for the equipment library
 MIME_EQUIPMENT = "application/x-substation-equipment"
-PORT_HIT_RADIUS = 14.0       # px — how close the cursor must be to snap to a port
-PORT_DOT_RADIUS = 4.0        # px — visual size of port handles
-WIRE_DRAG_THRESHOLD = 6.0    # px — min drag before rubber-band wire appears
-WIRE_HIT_RADIUS = 10.0       # px — how close to a wire to tee / place a junction
+
+# Port / wire hit testing
+PORT_HIT_RADIUS = 14.0       # px — cursor must be this close to grab a port
+PORT_DOT_RADIUS = 4.0        # px — drawn port handle size
+WIRE_DRAG_THRESHOLD = 6.0    # px — move this far before a wire drag starts
+WIRE_HIT_RADIUS = 10.0       # px — how close to a wire to tee into it
+
+# Default empty workspace size (before a PDF is imported)
 DEFAULT_WORKSPACE_WIDTH = 2400.0
 DEFAULT_WORKSPACE_HEIGHT = 1800.0
+
+# Alignment grid
 GRID_SPACING = 25.0          # scene units — matches PDF pixel coords after import
 GRID_MAJOR_EVERY = 5         # every Nth line is drawn heavier
 DEFAULT_GRID_OPACITY = 0.25
-RESIZE_HANDLE_SIZE = 8.0     # px — corner handle size in item coords
-RESIZE_HANDLE_HIT = 12.0     # px — how close the cursor must be to grab a handle
+
+# Symbol resize / rotate handles
+RESIZE_HANDLE_SIZE = 8.0
+RESIZE_HANDLE_HIT = 12.0
 MIN_SYMBOL_SCALE = 0.5
 MAX_SYMBOL_SCALE = 3.0
 SYMBOL_SCALE_STEP = 0.25     # snap resize to this increment
@@ -60,12 +71,18 @@ ROTATE_HANDLE_OFFSET = 28.0  # px above symbol AABB top edge
 ROTATE_HANDLE_RADIUS = 8.0
 ROTATE_HANDLE_HIT = 14.0
 ROTATE_DRAG_SNAP = 15.0      # degrees — snap while dragging the rotate handle
+
+# Branding / theme
 UI_ACCENT = "#006A4E"        # bottle green — primary GUI accent
 GFT_LOGO_PATH = Path(__file__).resolve().parent / "assets" / "gft_logo.png"
 GFT_LOGO_HEIGHT = 34         # px — header wordmark height
 
 _instance_counters: dict[str, int] = defaultdict(int)
 
+
+# ---------------------------------------------------------------------------
+# Helpers — logo, IDs, grid snap, wire geometry
+# ---------------------------------------------------------------------------
 
 def load_gft_logo_pixmap(height: int = GFT_LOGO_HEIGHT) -> QPixmap:
     """Load the GFT wordmark, clear near-white background, and size for the header."""
@@ -158,6 +175,7 @@ def route_wire_on_grid(
     if abs(p1.x() - p2.x()) < 0.01:
         return [p1, p2]
 
+    # Horizontal → vertical → horizontal bend at the midpoint column
     bend_x = snap_point_to_grid(
         QPointF((p1.x() + p2.x()) / 2, p1.y()),
         spacing,
@@ -182,6 +200,7 @@ def wire_path_from_points(points: list[QPointF]) -> QPainterPath:
 
 
 def simplify_route_points(points: list[QPointF]) -> list[QPointF]:
+    """Drop consecutive duplicate vertices from a route."""
     if not points:
         return []
     simplified: list[QPointF] = [QPointF(points[0])]
@@ -205,7 +224,7 @@ def point_to_segment_distance(p: QPointF, a: QPointF, b: QPointF) -> tuple[float
 
 
 # ---------------------------------------------------------------------------
-# Symbol graphics items
+# Symbol graphics items — base class
 # ---------------------------------------------------------------------------
 
 class OneLineSymbolItem(QGraphicsItem):
@@ -446,6 +465,10 @@ class OneLineSymbolItem(QGraphicsItem):
         return super().itemChange(change, value)
 
 
+# ---------------------------------------------------------------------------
+# AEP one-line equipment glyphs
+# ---------------------------------------------------------------------------
+
 class Transformer2WItem(OneLineSymbolItem):
     """AEP-style two-winding power transformer (interlocking circles)."""
 
@@ -623,6 +646,10 @@ class GroundItem(OneLineSymbolItem):
         self._end_paint(painter)
 
 
+# ---------------------------------------------------------------------------
+# Auto tee node + fallback custom box
+# ---------------------------------------------------------------------------
+
 class JunctionItem(OneLineSymbolItem):
     """
     Auto-placed tee node. Looks exactly like a component blue port so you can
@@ -677,6 +704,10 @@ class CustomComponentItem(OneLineSymbolItem):
         self._end_paint(painter)
 
 
+# ---------------------------------------------------------------------------
+# Wires (orthogonal connections between ports)
+# ---------------------------------------------------------------------------
+
 class ConnectionItem(QGraphicsPathItem):
     """A wire between two symbol ports; routes orthogonally along the grid."""
 
@@ -726,14 +757,7 @@ class ConnectionItem(QGraphicsPathItem):
 
     def paint(self, painter: QPainter, option, widget=None):
         super().paint(painter, option, widget)
-        # Ports at orthogonal bend / tee corners (same look as component ports).
-        color = QColor("#000000") if self.isSelected() else QColor("#1f2933")
-        painter.setPen(QPen(color, 1.5))
-        painter.setBrush(QBrush(color))
-        r = PORT_DOT_RADIUS
-        for pt in self.bend_points():
-            local = self.mapFromScene(pt)
-            painter.drawEllipse(QRectF(local.x() - r, local.y() - r, 2 * r, 2 * r))
+        # Bend corners are path geometry only — real tee junctions use JunctionItem.
 
     def attach(self):
         if self.from_item is not None:
@@ -749,7 +773,12 @@ class ConnectionItem(QGraphicsPathItem):
             self.to_item.remove_connection(self)
 
 
-# Maps equipment type keys to display labels and factory callables.
+# ---------------------------------------------------------------------------
+# Equipment library registry
+# ---------------------------------------------------------------------------
+
+# Built-in types shown in the left-panel library (Create Component can also
+# register extra entries at runtime via make_user_equipment).
 EQUIPMENT_DEFS = {
     "xfmr_2w": {"label": "Transformer (2-winding)", "factory": Transformer2WItem},
     "xfmr_3w": {"label": "Transformer (3-winding)", "factory": Transformer3WItem},
@@ -760,6 +789,25 @@ EQUIPMENT_DEFS = {
     "pt": {"label": "Potential Transformer (PT/VT)", "factory": PotentialTransformerItem},
     "ground": {"label": "Ground", "factory": GroundItem},
 }
+
+
+def make_user_equipment(
+    symbol_key: str,
+    name: str,
+    properties: dict | None = None,
+) -> OneLineSymbolItem:
+    """
+    Build a library/canvas item for a user-created component.
+    Uses the real AEP glyph when symbol_key matches a built-in type.
+    """
+    props = dict(properties or {})
+    if symbol_key == "custom" or symbol_key not in EQUIPMENT_DEFS:
+        return CustomComponentItem(name=name, properties=props)
+
+    item = EQUIPMENT_DEFS[symbol_key]["factory"]()
+    item.label = name
+    item.properties = props
+    return item
 
 
 # ---------------------------------------------------------------------------
@@ -798,60 +846,33 @@ class AddConnectionCommand(QUndoCommand):
         self.from_port = from_port
         self.to_item = to_item
         self.to_port = to_port
-        # May include JunctionItems + one or more ConnectionItems (bent routes).
-        self.created_items: list[QGraphicsItem] = []
+        self.conn: ConnectionItem | None = None
 
     def redo(self):
-        if self.created_items:
-            for item in self.created_items:
-                if item.scene() is not self.scene:
-                    self.scene.addItem(item)
-                if isinstance(item, ConnectionItem):
-                    item.attach()
-                    item.update_path()
+        if self.conn is None:
+            self.conn = ConnectionItem(
+                self.from_item, self.from_port, self.to_item, self.to_port
+            )
+            self.scene.addItem(self.conn)
             return
 
-        p1 = self.from_item.port_scene_pos(self.from_port)
-        p2 = self.to_item.port_scene_pos(self.to_port)
-        points = simplify_route_points(
-            route_wire_on_grid(
-                p1,
-                p2,
-                snap_endpoints=OneLineSymbolItem.snap_to_grid_enabled,
-            )
-        )
-
-        prev_item: OneLineSymbolItem = self.from_item
-        prev_port = self.from_port
-        for bend in points[1:-1]:
-            junction = JunctionItem()
-            pos = snap_point_to_grid(bend) if OneLineSymbolItem.snap_to_grid_enabled else QPointF(bend)
-            junction.setPos(pos)
-            junction.setZValue(100)
-            self.scene.addItem(junction)
-            self.created_items.append(junction)
-            seg = ConnectionItem(prev_item, prev_port, junction, "node")
-            self.scene.addItem(seg)
-            self.created_items.append(seg)
-            prev_item = junction
-            prev_port = "node"
-
-        seg = ConnectionItem(prev_item, prev_port, self.to_item, self.to_port)
-        self.scene.addItem(seg)
-        self.created_items.append(seg)
+        if self.conn.scene() is not self.scene:
+            self.scene.addItem(self.conn)
+        self.conn.attach()
+        self.conn.update_path()
 
     def undo(self):
-        for item in reversed(self.created_items):
-            if isinstance(item, ConnectionItem):
-                item.detach()
-            if item.scene() is self.scene:
-                self.scene.removeItem(item)
+        if self.conn is None:
+            return
+        self.conn.detach()
+        if self.conn.scene() is self.scene:
+            self.scene.removeItem(self.conn)
 
 
 class SplitWireCommand(QUndoCommand):
     """
-    Insert a blue-port junction on an existing wire at `point`, splitting it
-    into two segments. Optionally also attach a new branch wire to the junction.
+    Insert a junction on an existing wire at `point`, splitting it into two
+    segments. Optionally also attach a new branch wire to the junction.
     """
 
     def __init__(
@@ -1153,6 +1174,8 @@ class WorkspaceView(QGraphicsView):
         self.undo_stack: QUndoStack | None = None
         self.status_callback: Callable[[str], None] | None = None
 
+    # --- Grid / PDF / snap --------------------------------------------------
+
     def _init_grid(self):
         scn = self.scene()
         if scn is None:
@@ -1253,12 +1276,18 @@ class WorkspaceView(QGraphicsView):
         scn = self.scene()
         if scn is None:
             return None
+        # Only consider symbols near the cursor — never scan the whole scene
+        # (that made distant ports steal clicks meant for move/pan).
+        hit_rect = QRectF(
+            scene_pos.x() - PORT_HIT_RADIUS,
+            scene_pos.y() - PORT_HIT_RADIUS,
+            2 * PORT_HIT_RADIUS,
+            2 * PORT_HIT_RADIUS,
+        )
         candidates = [
-            it for it in scn.items(scene_pos)
+            it for it in scn.items(hit_rect)
             if isinstance(it, OneLineSymbolItem)
         ]
-        if not candidates:
-            candidates = [it for it in scn.items() if isinstance(it, OneLineSymbolItem)]
         best = None
         best_dist = PORT_HIT_RADIUS
         for item in candidates:
@@ -1297,6 +1326,8 @@ class WorkspaceView(QGraphicsView):
                     best = (item, point)
         return best
 
+    # --- Hit testing (resize / rotate handles) ------------------------------
+
     def _find_resize_handle_at(self, scene_pos: QPointF):
         scn = self.scene()
         if scn is None:
@@ -1319,6 +1350,8 @@ class WorkspaceView(QGraphicsView):
             if item.rotation_handle_at(item.mapFromScene(scene_pos)):
                 return item
         return None
+
+    # --- Rotate / resize gestures -------------------------------------------
 
     @staticmethod
     def _angle_about_item(item: OneLineSymbolItem, scene_pos: QPointF) -> float:
@@ -1620,35 +1653,9 @@ class WorkspaceView(QGraphicsView):
                 event.accept()
                 return
 
-            # Click on an existing wire / bend → insert blue junction and start a branch.
-            wire_hit = self._find_wire_at(scene_pos)
-            if wire_hit is not None:
-                wire, point = wire_hit
-                cmd = SplitWireCommand(self.scene(), wire, point)
-                self._push(cmd)
-                junction = cmd.junction
-                if junction is None:
-                    event.accept()
-                    return
-                self._move_origins = {}
-                self._saved_drag_mode = self.dragMode()
-                self.setDragMode(QGraphicsView.DragMode.NoDrag)
-                self.setCursor(Qt.CursorShape.CrossCursor)
-                self._pending = (junction, "node")
-                self._wire_start_pos = scene_pos
-                self._wiring = False
-                self._temp_line = QGraphicsPathItem()
-                self._temp_line.setPen(QPen(QColor(UI_ACCENT), 2, Qt.PenStyle.DashLine))
-                self._temp_line.setZValue(200)
-                start = junction.port_scene_pos("node")
-                self._temp_line.setPath(wire_path_from_points([start, start]))
-                self._temp_line.setVisible(False)
-                self.scene().addItem(self._temp_line)
-                self._set_status(f"Drag to a port from {junction.instance_id}")
-                event.accept()
-                return
-
             # Not on a port — track positions for a possible move undo.
+            # (Tee junctions are created only when a wire drag is dropped onto
+            # an existing wire — never on a plain click.)
             self._capture_move_origins(scene_pos)
 
         super().mousePressEvent(event)
@@ -1710,7 +1717,7 @@ class WorkspaceView(QGraphicsView):
                     event.accept()
                     return
 
-            # Drop onto an existing wire → tee with an auto blue-port junction.
+            # Drop onto an existing wire → tee with an auto junction.
             if self._wiring:
                 wire_hit = self._find_wire_at(scene_pos)
                 if wire_hit is not None:
@@ -2323,15 +2330,15 @@ class SubstationGuiMockup(QMainWindow):
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
 
-        name = dialog.component_name()
+        data = dialog.component_data()
+        name = data["name"]
+        symbol_key = str(data.get("symbol_type", "custom"))
         if not name:
             QMessageBox.warning(self, "Create Component", "Please enter a component name.")
             return
 
-        data = dialog.component_data()
-        # data only contains "Rating" for a Bus, and only contains the
-        # trip coil / motor current keys for everything else — use
-        # .get() so neither branch KeyErrors on the other's fields.
+        # Bus only sends Rating; other types send coil / motor currents.
+        # Use .get() so neither branch KeyErrors on the other's fields.
         properties = {
             "rating_kv": data.get("Rating", 0),
             "trip_coil_1_a": data.get("TripCoil1", 0),
@@ -2339,6 +2346,7 @@ class SubstationGuiMockup(QMainWindow):
             "close_coil_a": data.get("CloseCoil", 0),
             "motor_inrush_a": data.get("MotorInrushCurrent", 0),
             "motor_run_a": data.get("MotorRunCurrent", 0),
+            "symbol_type": symbol_key,
         }
 
         slug = "".join(ch if ch.isalnum() else "_" for ch in name.strip().lower())
@@ -2352,7 +2360,10 @@ class SubstationGuiMockup(QMainWindow):
         EQUIPMENT_DEFS[equip_id] = {
             "label": name,
             "factory": functools.partial(
-                CustomComponentItem, name=name, properties=properties
+                make_user_equipment,
+                symbol_key,
+                name,
+                properties,
             ),
         }
 
@@ -2360,8 +2371,14 @@ class SubstationGuiMockup(QMainWindow):
         item.setData(Qt.ItemDataRole.UserRole, equip_id)
         self.equipment_list.addItem(item)
 
+        glyph = next(
+            (label for key, label in SYMBOL_TYPE_CHOICES if key == symbol_key),
+            symbol_key,
+        )
         if hasattr(self, "footer_status_label"):
-            self.footer_status_label.setText(f"Added '{name}' to the Equipment Library")
+            self.footer_status_label.setText(
+                f"Added '{name}' ({glyph}) to the Equipment Library"
+            )
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -2420,8 +2437,9 @@ class SubstationGuiMockup(QMainWindow):
         if isinstance(item, OneLineSymbolItem):
             self.prop_type.setText(item.label)
             self.prop_name.setText(item.instance_id)
-            if isinstance(item, CustomComponentItem):
-                self._set_custom_component_properties(item.properties)
+            props = getattr(item, "properties", None)
+            if isinstance(props, dict) and props:
+                self._set_custom_component_properties(props)
             else:
                 self._clear_custom_component_properties()
         elif isinstance(item, ConnectionItem):
