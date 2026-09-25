@@ -1,6 +1,6 @@
-PWD c:\Users\athen\gft_opto\documentation
+PWD c:\Users\athen\gft_opto\documentation\Progress_Report1
 INPUT C:\Users\athen\AppData\Local\MiKTeX\miktex\data\le\pdftex\pdflatex.fmt
-INPUT c:\Users\athen\gft_opto\documentation\Introduction.tex
+INPUT c:\Users\athen\gft_opto\documentation\Progress_Report1\Introduction.tex
 OUTPUT Introduction.log
 INPUT C:\Users\athen\AppData\Local\Programs\MiKTeX\tex\latex\base\article.cls
 INPUT C:\Users\athen\AppData\Local\Programs\MiKTeX\tex\latex\base\article.cls

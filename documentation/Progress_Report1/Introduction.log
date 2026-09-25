@@ -1,10 +1,10 @@
-This is pdfTeX, Version 3.141592653-2.6-1.40.28 (MiKTeX 25.12) (preloaded format=pdflatex 2026.9.17)  24 SEP 2026 14:50
+This is pdfTeX, Version 3.141592653-2.6-1.40.28 (MiKTeX 25.12) (preloaded format=pdflatex 2026.9.17)  25 SEP 2026 16:31
 entering extended mode
  restricted \write18 enabled.
  file:line:error style messages enabled.
  %&-line parsing enabled.
-**c:/Users/athen/gft_opto/documentation/Introduction.tex
-(c:/Users/athen/gft_opto/documentation/Introduction.tex
+**c:/Users/athen/gft_opto/documentation/Progress_Report1/Introduction.tex
+(c:/Users/athen/gft_opto/documentation/Progress_Report1/Introduction.tex
 LaTeX2e <2025-11-01>
 L3 programming layer <2025-12-24>
 (C:\Users\athen\AppData\Local\Programs\MiKTeX\tex/latex/base\article.cls
@@ -53,12 +53,12 @@ L3 programming layer <2025-12-24>
  ) 
 Here is how much of TeX's memory you used:
  433 strings out of 467871
- 8340 string characters out of 5418376
+ 8459 string characters out of 5418376
  436733 words of memory out of 5000000
  29390 multiletter control sequences out of 15000+600000
  628326 words of font info for 42 fonts, out of 8000000 for 9000
  1141 hyphenation exceptions out of 8191
- 35i,5n,38p,191b,126s stack positions out of 10000i,1000n,20000p,200000b,200000s
+ 35i,5n,38p,208b,126s stack positions out of 10000i,1000n,20000p,200000b,200000s
 <C:/Users/athen/AppData/Local/Programs/MiKTeX/fonts/type1/public/amsfonts/cm/cmbx12.pfb><C:/Users/athen/AppData/Local/Programs/MiKTeX/fonts/type1/public/amsfonts/cm/cmr10.pfb>
 Output written on Introduction.pdf (1 page, 30211 bytes).
 PDF statistics:
