@@ -34,8 +34,8 @@ from PySide6.QtWidgets import (
     QMessageBox,
 )
 
-from gft_opto.customWidgetTool import ComponentDialog, SYMBOL_TYPE_CHOICES
-from gft_opto.test_netlist import run_fake_evaluation
+from gft_opto.gui.custom_widget_tool import ComponentDialog, SYMBOL_TYPE_CHOICES
+from tests.test_netlist import run_fake_evaluation
 
 
 # ---------------------------------------------------------------------------
