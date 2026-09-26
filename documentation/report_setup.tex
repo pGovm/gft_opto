@@ -1,0 +1,48 @@
+%Glossary Package
+\makeglossary 
+%Needed to make the glossary
+\usepackage{todonotes} 
+%For making to-do notes in the pdf
+\usepackage{float} 
+%Redefine the float, now we can use 'H' instead of 'h'
+\usepackage{array} 
+%Extend the array environment
+\usepackage{pdfpages} 
+%Allows the inclusion of external pdf's 
+\usepackage{color, colortbl}
+%Allows us to manage the colour of items in the final output 
+\usepackage{fancyhdr}
+%Allows control of the headers and footers
+\usepackage{nameref}
+%Refer to sections by their name
+\usepackage{chemfig} 
+%Draw chemical diagrams
+\usepackage{listings} 
+%Typeset programming languages
+\lstset{language=bash, numbers=left, frame=single, breaklines=true, numberstyle=\footnotesize}
+%Set-up date for listings package
+\usepackage{framed} 
+%Framed or shaded regions that can break across pages
+\usepackage[os=win]{menukeys}
+%Format menu sequences, paths and keystrokes from lists
+\usepackage{tikz} 
+%Used for drawing within the package
+\usetikzlibrary{positioning,decorations.markings,patterns}
+\usepackage{multirow} 
+%Create tabular cells spanning multiple rows
+\usepackage[scientific-notation=true]{siunitx} 
+%For putting certain scientific notation i.e. x10^.
+\usepackage{titlesec} 
+%Custom titles
+\usepackage[normalem]{ulem}
+%Strikethrough text with \sout{}
+\usepackage{titlesec}
+\usepackage{tikz}
+\renewcommand{\familydefault}{\sfdefault}
+
+\titleformat*{\section}{\Huge\bfseries}
+\titleformat*{\subsection}{\LARGE\bfseries}
+\titleformat*{\subsubsection}{\Large\bfseries}
+
+\setcounter{tocdepth}{3}
+\setcounter{secnumdepth}{3}
