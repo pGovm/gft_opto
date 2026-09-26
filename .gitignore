@@ -1,4 +1,5 @@
-src/gft_opto/__pycache__/*
+# Virtual environment and its subfolders
 .venv/
-src/gft_opto/momentary_results.json
-src/gft_opto/momentary_results.csv
+
+# Python cache folder
+src/gft_opto/__pycache__/*
