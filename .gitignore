@@ -1,6 +1,9 @@
+src/gft_opto/__pycache__/*
 .venv/
 .venv5/
 __pycache__/
-/tutorial.py
+src/gft_opto/momentary_results.json
+src/gft_opto/momentary_results.csv
+
 /tutorial1.py
 *.json
