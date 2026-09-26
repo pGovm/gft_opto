@@ -2,3 +2,11 @@ src/gft_opto/__pycache__/*
 .venv/
 src/gft_opto/momentary_results.json
 src/gft_opto/momentary_results.csv
+**/*.aux
+**/*.fdb_latexmk
+**/*.fls
+**/*.lof
+**/*.log
+**/*.lot
+**/*.out
+**/*.synctex.gz
