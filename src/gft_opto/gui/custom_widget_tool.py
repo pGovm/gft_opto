@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (
 
 # ---------------------------------------------------------------------------
 # Symbol types offered in the Create Component dialog
-# (keys match EQUIPMENT_DEFS in substation_gui4.py; "bus" uses the custom box)
+# (keys match EQUIPMENT_DEFS in substation_gui4.py
 # ---------------------------------------------------------------------------
 
 SYMBOL_TYPE_CHOICES: list[tuple[str, str]] = [
