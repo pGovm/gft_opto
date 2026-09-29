@@ -50,6 +50,8 @@ PORT_HIT_RADIUS = 14.0       # px — cursor must be this close to grab a port
 PORT_DOT_RADIUS = 4.0        # px — drawn port handle size
 WIRE_DRAG_THRESHOLD = 6.0    # px — move this far before a wire drag starts
 WIRE_HIT_RADIUS = 10.0       # px — how close to a wire to tee into it
+BUS_DROP_RADIUS = 16.0       # px — how close to a bus bar to drop a new node
+MIN_BUS_LENGTH = 40.0        # base units — shortest a bus can be dragged
 
 # Default empty workspace size (before a PDF is imported)
 DEFAULT_WORKSPACE_WIDTH = 2400.0
@@ -74,7 +76,7 @@ ROTATE_DRAG_SNAP = 15.0      # degrees — snap while dragging the rotate handle
 
 # Branding / theme
 UI_ACCENT = "#006A4E"        # bottle green — primary GUI accent
-GFT_LOGO_PATH = Path(__file__).resolve().parent / "assets" / "gft_logo.png"
+GFT_LOGO_PATH = Path(__file__).resolve().parent.parent / "assets" / "gft_logo.png"
 GFT_LOGO_HEIGHT = 34         # px — header wordmark height
 
 _instance_counters: dict[str, int] = defaultdict(int)
@@ -231,6 +233,7 @@ class OneLineSymbolItem(QGraphicsItem):
     """Base class for draggable one-line equipment symbols with named ports."""
 
     snap_to_grid_enabled = True
+    max_scale = MAX_SYMBOL_SCALE  # None means resize is not capped
 
     def __init__(self, equip_type: str, label: str, ports: dict[str, QPointF]):
         super().__init__()
@@ -266,7 +269,9 @@ class OneLineSymbolItem(QGraphicsItem):
         return self._local_transform().mapRect(self._rect)
 
     def set_scale_factor(self, scale: float):
-        scale = max(MIN_SYMBOL_SCALE, min(MAX_SYMBOL_SCALE, float(scale)))
+        scale = max(MIN_SYMBOL_SCALE, float(scale))
+        if self.max_scale is not None:
+            scale = min(self.max_scale, scale)
         if abs(scale - self.scale_factor) < 1e-6:
             return
         self.prepareGeometryChange()
@@ -646,6 +651,174 @@ class GroundItem(OneLineSymbolItem):
         self._end_paint(painter)
 
 
+class BusItem(OneLineSymbolItem):
+    """Thick horizontal bus bar. Extra nodes are ports added along the bar."""
+
+    HALF_LENGTH = 80.0
+    max_scale = None
+
+    def __init__(self):
+        half = self.HALF_LENGTH
+        super().__init__(
+            "bus",
+            "Bus",
+            {
+                "left": QPointF(-half, 0),
+                "right": QPointF(half, 0),
+            },
+        )
+        self._tap_seq = 0
+        self._sync_bus_rect()
+
+    def _sync_bus_rect(self):
+        left = self._base_ports["left"].x()
+        right = self._base_ports["right"].x()
+        self._rect = QRectF(left, -12, right - left, 24)
+
+    def paint(self, painter: QPainter, option, widget=None):
+        self._begin_paint(painter)
+        pen = painter.pen()
+        pen.setWidthF(6.0 / max(self.scale_factor, 1e-6))
+        pen.setCapStyle(Qt.PenCapStyle.FlatCap)
+        painter.setPen(pen)
+        painter.drawLine(
+            self._base_ports["left"].x(),
+            0,
+            self._base_ports["right"].x(),
+            0,
+        )
+        self._end_paint(painter)
+
+    def _bar_span(self) -> tuple[QPointF, QPointF, float]:
+        """Scene start, end, and squared length of the bus axis."""
+        start = self.port_scene_pos("left")
+        end = self.port_scene_pos("right")
+        span = end - start
+        return start, span, span.x() ** 2 + span.y() ** 2
+
+    def project_onto_axis(self, scene_pos: QPointF) -> QPointF:
+        """Project onto the infinite line through the bus, past either end."""
+        start, span, length_sq = self._bar_span()
+        if length_sq < 1e-6:
+            return QPointF(start)
+        t = (
+            (scene_pos.x() - start.x()) * span.x()
+            + (scene_pos.y() - start.y()) * span.y()
+        ) / length_sq
+        return QPointF(start.x() + t * span.x(), start.y() + t * span.y())
+
+    def project_onto_bar(self, scene_pos: QPointF) -> QPointF:
+        """Closest point on the bus segment to a scene position."""
+        start, span, length_sq = self._bar_span()
+        if length_sq < 1e-6:
+            return QPointF(start)
+        t = (
+            (scene_pos.x() - start.x()) * span.x()
+            + (scene_pos.y() - start.y()) * span.y()
+        ) / length_sq
+        t = max(0.0, min(1.0, t))
+        return QPointF(start.x() + t * span.x(), start.y() + t * span.y())
+
+    def point_on_bar(self, scene_pos: QPointF) -> QPointF:
+        return self.project_onto_bar(scene_pos)
+
+    def distance_to_bar(self, scene_pos: QPointF) -> float:
+        delta = self.project_onto_bar(scene_pos) - scene_pos
+        return (delta.x() ** 2 + delta.y() ** 2) ** 0.5
+
+    def _unclamped_base_x(self, scene_pos: QPointF) -> float:
+        local = self.mapFromScene(scene_pos)
+        inverse, ok = self._local_transform().inverted()
+        if not ok:
+            return 0.0
+        return inverse.map(local).x()
+
+    def _clamp_to_bar(self, base_x: float) -> float:
+        left = self._base_ports["left"].x()
+        right = self._base_ports["right"].x()
+        return max(left, min(right, float(base_x)))
+
+    def base_x_for_scene(self, scene_pos: QPointF) -> float:
+        """Bar coordinate (before scale/rotation) for a scene point on the bus."""
+        return self._clamp_to_bar(self._unclamped_base_x(scene_pos))
+
+    def set_end_base_x(self, port: str, base_x: float):
+        """Move one end along the bar. The other end and existing nodes stay."""
+        if port not in ("left", "right"):
+            return
+        base_x = float(base_x)
+        left = self._base_ports["left"].x()
+        right = self._base_ports["right"].x()
+        taps = [
+            pt.x()
+            for name, pt in self._base_ports.items()
+            if name not in ("left", "right")
+        ]
+        if port == "left":
+            limit = right - MIN_BUS_LENGTH
+            if taps:
+                limit = min(limit, min(taps))
+            base_x = min(base_x, limit)
+        else:
+            limit = left + MIN_BUS_LENGTH
+            if taps:
+                limit = max(limit, max(taps))
+            base_x = max(base_x, limit)
+        if abs(base_x - self._base_ports[port].x()) < 1e-6:
+            return
+        self.prepareGeometryChange()
+        self._base_ports[port] = QPointF(base_x, 0.0)
+        self._sync_bus_rect()
+        self.update()
+        for conn in self._connections:
+            conn.update_path()
+
+    def add_tap(self, base_x: float, name: str | None = None) -> tuple[str, bool]:
+        """
+        Add a node on the bar. Reuse a port already within 2 units.
+        Returns (port_name, created_new).
+        """
+        base_x = self._clamp_to_bar(base_x)
+        for existing, pt in self._base_ports.items():
+            if abs(pt.x() - base_x) <= 2.0:
+                return existing, False
+        if name is None or name in self._base_ports:
+            self._tap_seq += 1
+            name = f"node_{self._tap_seq}"
+            while name in self._base_ports:
+                self._tap_seq += 1
+                name = f"node_{self._tap_seq}"
+        self.prepareGeometryChange()
+        self._base_ports[name] = QPointF(base_x, 0.0)
+        self.update()
+        for conn in self._connections:
+            conn.update_path()
+        return name, True
+
+    def remove_tap(self, name: str) -> bool:
+        """Remove a dropped node. Built-in left/right ports stay."""
+        if name in ("left", "right") or name not in self._base_ports:
+            return False
+        self.prepareGeometryChange()
+        del self._base_ports[name]
+        self.update()
+        return True
+
+    def restore_tap(self, name: str, base_x: float):
+        """Put a removed node back at the same place (used by undo)."""
+        if name in ("left", "right") or name in self._base_ports:
+            return
+        self.prepareGeometryChange()
+        self._base_ports[name] = QPointF(float(base_x), 0.0)
+        self.update()
+
+    def resize_handle_at(self, local_pos: QPointF, hit_radius: float = RESIZE_HANDLE_HIT):
+        return None
+
+    def _draw_resize_handles(self, painter: QPainter):
+        return
+
+
 # ---------------------------------------------------------------------------
 # Auto tee node + fallback custom box
 # ---------------------------------------------------------------------------
@@ -788,6 +961,7 @@ EQUIPMENT_DEFS = {
     "ct": {"label": "Current Transformer (CT/BCT)", "factory": CurrentTransformerItem},
     "pt": {"label": "Potential Transformer (PT/VT)", "factory": PotentialTransformerItem},
     "ground": {"label": "Ground", "factory": GroundItem},
+    "bus": {"label": "Bus", "factory": BusItem},
 }
 
 
@@ -867,6 +1041,71 @@ class AddConnectionCommand(QUndoCommand):
         self.conn.detach()
         if self.conn.scene() is self.scene:
             self.scene.removeItem(self.conn)
+
+
+class ConnectToBusCommand(QUndoCommand):
+    """Drop a wire on a bus bar and create a node at that spot."""
+
+    def __init__(
+        self,
+        scene: QGraphicsScene,
+        from_item: OneLineSymbolItem,
+        from_port: str,
+        bus: BusItem,
+        scene_pos: QPointF,
+    ):
+        super().__init__(
+            f"Connect {from_item.instance_id}:{from_port} → {bus.instance_id}"
+        )
+        self.scene = scene
+        self.from_item = from_item
+        self.from_port = from_port
+        self.bus = bus
+        drop = self._drop_point(bus, scene_pos)
+        self.base_x = bus.base_x_for_scene(drop)
+        self.port_name: str | None = None
+        self._created_port = False
+        self.conn: ConnectionItem | None = None
+
+    @staticmethod
+    def _drop_point(bus: BusItem, scene_pos: QPointF) -> QPointF:
+        projected = bus.project_onto_bar(scene_pos)
+        if OneLineSymbolItem.snap_to_grid_enabled:
+            projected = snap_point_to_grid(projected)
+            return bus.point_on_bar(projected)
+        return projected
+
+    def redo(self):
+        name, created = self.bus.add_tap(self.base_x, self.port_name)
+        if self.port_name is None:
+            self.port_name = name
+            self._created_port = created
+        elif name != self.port_name:
+            self.port_name = name
+            self._created_port = False
+        self.setText(
+            f"Connect {self.from_item.instance_id}:{self.from_port} → "
+            f"{self.bus.instance_id}:{self.port_name}"
+        )
+        if self.conn is None:
+            self.conn = ConnectionItem(
+                self.from_item, self.from_port, self.bus, self.port_name
+            )
+            self.scene.addItem(self.conn)
+            return
+        self.conn.to_port = self.port_name
+        if self.conn.scene() is not self.scene:
+            self.scene.addItem(self.conn)
+        self.conn.attach()
+        self.conn.update_path()
+
+    def undo(self):
+        if self.conn is not None:
+            self.conn.detach()
+            if self.conn.scene() is self.scene:
+                self.scene.removeItem(self.conn)
+        if self._created_port and self.port_name is not None:
+            self.bus.remove_tap(self.port_name)
 
 
 class SplitWireCommand(QUndoCommand):
@@ -982,6 +1221,21 @@ class ResizeEquipmentCommand(QUndoCommand):
         self.item.set_scale_factor(self.old_scale)
 
 
+class ResizeBusCommand(QUndoCommand):
+    def __init__(self, bus: BusItem, port: str, old_x: float, new_x: float):
+        super().__init__(f"Resize {bus.instance_id}")
+        self.bus = bus
+        self.port = port
+        self.old_x = old_x
+        self.new_x = new_x
+
+    def redo(self):
+        self.bus.set_end_base_x(self.port, self.new_x)
+
+    def undo(self):
+        self.bus.set_end_base_x(self.port, self.old_x)
+
+
 class RotateEquipmentCommand(QUndoCommand):
     def __init__(self, rotations: list[tuple[OneLineSymbolItem, float, float]]):
         label = (
@@ -1022,19 +1276,57 @@ class DeleteSelectionCommand(QUndoCommand):
 
         self.symbols = symbols
         self.connections = connections
+        self.removed_taps: list[tuple[BusItem, str, QPointF]] = []
+        self._taps_recorded = False
         count = len(self.symbols) + len(self.connections)
         self.setText(f"Delete {count} item(s)")
+
+    def _orphan_bus_taps(self) -> list[tuple[BusItem, str, QPointF]]:
+        """Dropped bus nodes whose wires are all part of this delete."""
+        deleted = set(self.symbols)
+        found: list[tuple[BusItem, str, QPointF]] = []
+        seen: set[tuple[int, str]] = set()
+        for conn in self.connections:
+            for item, port in (
+                (conn.from_item, conn.from_port),
+                (conn.to_item, conn.to_port),
+            ):
+                if not isinstance(item, BusItem) or item in deleted:
+                    continue
+                if port in ("left", "right") or port not in item._base_ports:
+                    continue
+                key = (id(item), port)
+                if key in seen:
+                    continue
+                still_used = any(
+                    (other.from_item is item and other.from_port == port)
+                    or (other.to_item is item and other.to_port == port)
+                    for other in item.connections()
+                    if other not in self.connections
+                )
+                if still_used:
+                    continue
+                seen.add(key)
+                found.append((item, port, QPointF(item._base_ports[port])))
+        return found
 
     def redo(self):
         for conn in self.connections:
             conn.detach()
             if conn.scene() is self.scene:
                 self.scene.removeItem(conn)
+        if not self._taps_recorded:
+            self.removed_taps = self._orphan_bus_taps()
+            self._taps_recorded = True
+        for bus, name, _pt in self.removed_taps:
+            bus.remove_tap(name)
         for symbol in self.symbols:
             if symbol.scene() is self.scene:
                 self.scene.removeItem(symbol)
 
     def undo(self):
+        for bus, name, pt in self.removed_taps:
+            bus.restore_tap(name, pt.x())
         for symbol in self.symbols:
             if symbol.scene() is not self.scene:
                 self.scene.addItem(symbol)
@@ -1157,6 +1449,12 @@ class WorkspaceView(QGraphicsView):
         self._drop_preview: OneLineSymbolItem | None = None
         self._drop_preview_equip_id: str | None = None
 
+        # Bus end-port drag (changes length, keeps the other end fixed)
+        self._bus_resize_item: BusItem | None = None
+        self._bus_resize_port: str | None = None
+        self._bus_resize_origin_x = 0.0
+        self._bus_resize_was_movable = True
+
         # Resize tracking (corner-handle drag)
         self._resize_item: OneLineSymbolItem | None = None
         self._resize_origin_scale = 1.0
@@ -1247,16 +1545,25 @@ class WorkspaceView(QGraphicsView):
 
     # --- Wiring helpers -----------------------------------------------------
 
-    def _wire_preview_path(self, start: QPointF, end: QPointF) -> QPainterPath:
+    def _wire_preview_path(
+        self,
+        start: QPointF,
+        end: QPointF,
+        exclude: OneLineSymbolItem | None = None,
+    ) -> QPainterPath:
         hit = self._find_port_at(end)
-        if hit is not None:
+        if hit is not None and hit[0] is not exclude:
             end = hit[0].port_scene_pos(hit[1])
         else:
-            wire_hit = self._find_wire_at(end)
-            if wire_hit is not None:
-                end = wire_hit[1]
-            elif self._snap_to_grid:
-                end = snap_point_to_grid(end)
+            bus = self._find_bus_at(end, exclude=exclude)
+            if bus is not None:
+                end = ConnectToBusCommand._drop_point(bus, end)
+            else:
+                wire_hit = self._find_wire_at(end)
+                if wire_hit is not None:
+                    end = wire_hit[1]
+                elif self._snap_to_grid:
+                    end = snap_point_to_grid(end)
         points = route_wire_on_grid(start, end, snap_endpoints=self._snap_to_grid)
         return wire_path_from_points(points)
 
@@ -1299,6 +1606,26 @@ class WorkspaceView(QGraphicsView):
             if dist <= best_dist:
                 best_dist = dist
                 best = (item, port)
+        return best
+
+    def _find_bus_at(
+        self,
+        scene_pos: QPointF,
+        exclude: OneLineSymbolItem | None = None,
+    ) -> BusItem | None:
+        """Return a bus whose bar is within BUS_DROP_RADIUS of scene_pos."""
+        scn = self.scene()
+        if scn is None:
+            return None
+        best: BusItem | None = None
+        best_dist = BUS_DROP_RADIUS
+        for item in scn.items():
+            if not isinstance(item, BusItem) or item is exclude:
+                continue
+            dist = item.distance_to_bar(scene_pos)
+            if dist <= best_dist:
+                best_dist = dist
+                best = item
         return best
 
     def _find_wire_at(self, scene_pos: QPointF, exclude: ConnectionItem | None = None):
@@ -1444,7 +1771,9 @@ class WorkspaceView(QGraphicsView):
         dist = (local.x() ** 2 + local.y() ** 2) ** 0.5
         raw = self._resize_origin_scale * (dist / self._resize_start_dist)
         snapped = round(raw / SYMBOL_SCALE_STEP) * SYMBOL_SCALE_STEP
-        snapped = max(MIN_SYMBOL_SCALE, min(MAX_SYMBOL_SCALE, snapped))
+        snapped = max(MIN_SYMBOL_SCALE, snapped)
+        if item.max_scale is not None:
+            snapped = min(item.max_scale, snapped)
         item.set_scale_factor(snapped)
         self._set_status(f"Resize {item.instance_id} → {snapped:g}×")
 
@@ -1465,6 +1794,69 @@ class WorkspaceView(QGraphicsView):
             self._set_status(f"Resized {item.instance_id} to {new_scale:g}×")
         else:
             self._set_status("Ready")
+
+    def _begin_bus_resize(self, bus: BusItem, port: str):
+        self._move_origins = {}
+        self._clear_snap_ports()
+        self._bus_resize_item = bus
+        self._bus_resize_port = port
+        self._bus_resize_origin_x = bus._base_ports[port].x()
+        self._bus_resize_was_movable = bool(
+            bus.flags() & QGraphicsItem.GraphicsItemFlag.ItemIsMovable
+        )
+        bus.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, False)
+        self._saved_drag_mode = self.dragMode()
+        self.setDragMode(QGraphicsView.DragMode.NoDrag)
+        deg = bus.rotation_deg % 180.0
+        cursor = (
+            Qt.CursorShape.SizeVerCursor
+            if 45.0 <= deg < 135.0
+            else Qt.CursorShape.SizeHorCursor
+        )
+        self.setCursor(cursor)
+        self._set_status(f"Drag {bus.instance_id} {port} end to change length")
+
+    def _update_bus_resize(self, scene_pos: QPointF):
+        bus = self._bus_resize_item
+        port = self._bus_resize_port
+        if bus is None or port is None:
+            return
+        point = bus.project_onto_axis(scene_pos)
+        if self._snap_to_grid:
+            point = bus.project_onto_axis(snap_point_to_grid(point))
+        bus.set_end_base_x(port, bus._unclamped_base_x(point))
+        self._set_status(f"Resize {bus.instance_id}")
+
+    def _commit_bus_resize_if_any(self):
+        bus = self._bus_resize_item
+        port = self._bus_resize_port
+        if bus is None or port is None:
+            return
+        old_x = self._bus_resize_origin_x
+        new_x = bus._base_ports[port].x()
+        bus.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, self._bus_resize_was_movable)
+        self._bus_resize_item = None
+        self._bus_resize_port = None
+        self.setDragMode(self._saved_drag_mode)
+        self.unsetCursor()
+        if abs(new_x - old_x) > 1e-6:
+            self._push(ResizeBusCommand(bus, port, old_x, new_x))
+            self._set_status(f"Resized {bus.instance_id}")
+        else:
+            self._set_status("Ready")
+
+    def _cancel_bus_resize(self):
+        bus = self._bus_resize_item
+        port = self._bus_resize_port
+        if bus is None or port is None:
+            return
+        bus.set_end_base_x(port, self._bus_resize_origin_x)
+        bus.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, self._bus_resize_was_movable)
+        self._bus_resize_item = None
+        self._bus_resize_port = None
+        self.setDragMode(self._saved_drag_mode)
+        self.unsetCursor()
+        self._set_status("Resize cancelled")
 
     # --- Move tracking for undo ---------------------------------------------
 
@@ -1577,6 +1969,10 @@ class WorkspaceView(QGraphicsView):
             self._cancel_rotate()
             event.accept()
             return
+        if event.key() == Qt.Key.Key_Escape and self._bus_resize_item is not None:
+            self._cancel_bus_resize()
+            event.accept()
+            return
         if event.key() == Qt.Key.Key_Escape and self._resize_item is not None:
             item = self._resize_item
             old_scale = self._resize_origin_scale
@@ -1617,6 +2013,16 @@ class WorkspaceView(QGraphicsView):
 
         if event.button() == Qt.MouseButton.LeftButton:
             scene_pos = self.mapToScene(event.position().toPoint())
+
+            hit = self._find_port_at(scene_pos)
+            if (
+                hit is not None
+                and isinstance(hit[0], BusItem)
+                and hit[1] in ("left", "right")
+            ):
+                self._begin_bus_resize(hit[0], hit[1])
+                event.accept()
+                return
 
             rotate_item = self._find_rotate_handle_at(scene_pos)
             if rotate_item is not None:
@@ -1669,6 +2075,10 @@ class WorkspaceView(QGraphicsView):
             self._update_resize(self.mapToScene(event.position().toPoint()))
             event.accept()
             return
+        if self._bus_resize_item is not None:
+            self._update_bus_resize(self.mapToScene(event.position().toPoint()))
+            event.accept()
+            return
         if self._pending is not None and self._temp_line is not None:
             from_item, from_port = self._pending
             start = from_item.port_scene_pos(from_port)
@@ -1680,7 +2090,9 @@ class WorkspaceView(QGraphicsView):
                     self._wiring = True
                     self._temp_line.setVisible(True)
             if self._wiring:
-                self._temp_line.setPath(self._wire_preview_path(start, end))
+                self._temp_line.setPath(
+                    self._wire_preview_path(start, end, exclude=from_item)
+                )
             event.accept()
             return
         super().mouseMoveEvent(event)
@@ -1693,6 +2105,11 @@ class WorkspaceView(QGraphicsView):
 
         if event.button() == Qt.MouseButton.LeftButton and self._resize_item is not None:
             self._commit_resize_if_any()
+            event.accept()
+            return
+
+        if event.button() == Qt.MouseButton.LeftButton and self._bus_resize_item is not None:
+            self._commit_bus_resize_if_any()
             event.accept()
             return
 
@@ -1713,6 +2130,23 @@ class WorkspaceView(QGraphicsView):
                     self._set_status(
                         f"Connected {from_item.instance_id}:{from_port} → "
                         f"{to_item.instance_id}:{to_port}"
+                    )
+                    event.accept()
+                    return
+
+            # Drop onto a bus bar → add a node where the wire lands.
+            if self._wiring:
+                bus = self._find_bus_at(scene_pos, exclude=from_item)
+                if bus is not None:
+                    self._push(
+                        ConnectToBusCommand(
+                            self.scene(), from_item, from_port, bus, scene_pos
+                        )
+                    )
+                    self._cancel_pending()
+                    self._set_status(
+                        f"Connected {from_item.instance_id}:{from_port} → "
+                        f"{bus.instance_id}"
                     )
                     event.accept()
                     return
