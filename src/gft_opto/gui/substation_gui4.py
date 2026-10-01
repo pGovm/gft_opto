@@ -36,6 +36,10 @@ from PySide6.QtWidgets import (
 
 from gft_opto.gui.custom_widget_tool import ComponentDialog, SYMBOL_TYPE_CHOICES
 from tests.test_netlist import run_fake_evaluation
+from html import escape
+import json
+from PySide6.QtGui import QTextDocument
+from PySide6.QtPrintSupport import QPrinter
 
 
 # ---------------------------------------------------------------------------
@@ -237,6 +241,11 @@ class OneLineSymbolItem(QGraphicsItem):
 
     def __init__(self, equip_type: str, label: str, ports: dict[str, QPointF]):
         super().__init__()
+
+        self.last_netlist: dict | None = None
+        self.last_result: dict | None = None
+        self.setWindowTitle("AI-Assisted Substation Design Tool")
+
         self.equip_type = equip_type
         self.equip_id = equip_type  # legacy alias used by the properties panel
         self.instance_id = next_instance_id(equip_type)
@@ -2468,7 +2477,6 @@ class SubstationGuiMockup(QMainWindow):
         opacity_row.addWidget(QLabel("Grid Opacity:"))
         self.grid_opacity_slider = QSlider(Qt.Orientation.Horizontal)
         self.grid_opacity_slider.setRange(0, 100)
-        self.grid_opacity_slider.setValue(int(DEFAULT_GRID_OPACITY * 100))
         self.grid_opacity_label = QLabel(f"{self.grid_opacity_slider.value()}%")
         opacity_row.addWidget(self.grid_opacity_slider, 1)
         opacity_row.addWidget(self.grid_opacity_label)
@@ -2530,6 +2538,10 @@ class SubstationGuiMockup(QMainWindow):
         self.run_btn = QPushButton("Run Evaluation")
         self.run_btn.clicked.connect(self._on_run_evaluation_clicked)
 
+        self.save_results_btn = QPushButton("Save Calculation Results")
+        self.save_results_btn.clicked.connect(self._on_save_results_clicked)
+        self.save_results_btn.setEnabled(False)
+
         layout.addWidget(logo)
         layout.addWidget(title)
         layout.addStretch()
@@ -2538,6 +2550,7 @@ class SubstationGuiMockup(QMainWindow):
         layout.addWidget(self.load_btn)
         layout.addWidget(save_btn)
         layout.addWidget(self.run_btn)
+        layout.addWidget(self.save_results_btn)
         return frame
 
     def _build_content(self):
@@ -2714,6 +2727,10 @@ class SubstationGuiMockup(QMainWindow):
             if hasattr(self, "footer_status_label"):
                 self.footer_status_label.setText(f"Evaluation failed: {e}")
             return
+        
+        self.last_netlist = netlist
+        self.last_result = result
+        self.save_results_btn.setEnabled(True)
 
         elapsed_ms = (time.perf_counter() - started) * 1000.0
         if hasattr(self, "response_time_label"):
@@ -2752,6 +2769,147 @@ class SubstationGuiMockup(QMainWindow):
             self.footer_status_label.setText(
                 f"Evaluation complete — peak {result.get('peak_current_A', 0):g} A"
             )
+
+    def _on_save_results_clicked(self):
+        if self.last_result is None or self.last_netlist is None:
+            QMessageBox.information(
+                self, "Save Calculation Results", "Run an evaluation first."
+            )
+            return
+
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save Calculation Results",
+            "calculation_results.pdf",
+            "PDF Files (*.pdf)",
+        )
+
+        if not file_path:
+            return
+
+        if not file_path.lower().endswith(".pdf"):
+            file_path += ".pdf"
+
+        result = self.last_result
+
+        loads = result.get("loads") or []
+        load_rows = "".join(
+            "<tr>"
+            f"<td>{escape(str(load.get('name', 'Load')))}</td>"
+            f"<td>{escape(str(load.get('total_amps', 'N/A')))} A</td>"
+            f"<td>{escape(str(load.get('note', '')))}</td>"
+            "</tr>"
+            for load in loads
+        ) or "<tr><td colspan='3'>No loads returned.</td></tr>"
+
+        steps = result.get("calculation_steps") or []
+
+        if isinstance(steps, str):
+            steps = [steps]
+
+        steps_html = (
+            "".join(
+                f"<li>{escape(str(step))}</li>"
+                for step in steps
+            )
+            if steps
+            else "<li>The evaluator did not return individual calculation steps.</li>"
+        )
+
+        output_html = escape(self.output_box.toPlainText())
+
+        raw_data = escape(
+            json.dumps(
+                {
+                    "netlist": self.last_netlist,
+                    "result": result,
+                },
+                indent=2,
+                default=str,
+            )
+        )
+
+        html = f"""
+        <html>
+        <head>
+          <style>
+            body {{ font-family: sans-serif; font-size: 10pt; }}
+            h1, h2 {{ color: #006A4E; }}
+            table {{ border-collapse: collapse; width: 100%; }}
+            th, td {{
+                border: 1px solid #cbd2d9;
+                padding: 6px;
+                text-align: left;
+            }}
+            pre {{ white-space: pre-wrap; }}
+          </style>
+        </head>
+
+        <body>
+          <h1>Calculation Results</h1>
+
+          <p>
+            <b>System:</b>
+            {escape(str(result.get('scenario_name', 'N/A')))}
+          </p>
+
+          <p>
+            <b>Voltage:</b>
+            {escape(str(result.get('voltage_V', 'N/A')))} V
+          </p>
+
+          <p>
+            <b>Peak current:</b>
+            {escape(str(result.get('peak_current_A', 'N/A')))} A
+          </p>
+
+          <h2>Loads</h2>
+
+          <table>
+            <tr>
+                <th>Load</th>
+                <th>Total current</th>
+                <th>Note</th>
+            </tr>
+
+            {load_rows}
+          </table>
+
+          <h2>Calculation Steps</h2>
+
+          <ol>
+            {steps_html}
+          </ol>
+
+          <h2>Evaluation Output</h2>
+
+          <pre>{output_html}</pre>
+
+          <h2>Netlist and Result Data</h2>
+
+          <pre>{raw_data}</pre>
+        </body>
+        </html>
+        """
+
+        printer = QPrinter()
+        printer.setOutputFormat(QPrinter.OutputFormat.PdfFormat)
+        printer.setOutputFileName(file_path)
+
+        document = QTextDocument()
+        document.setHtml(html)
+
+        try:
+            document.print_(printer)
+        except Exception as error:
+            QMessageBox.critical(
+            self, "Save Failed", f"Could not create the PDF:\n{error}"
+         )
+        return
+
+        self.footer_status_label.setText(
+            f"Results saved: {file_path}"
+        )
 
     def _on_create_component_clicked(self):
         """
