@@ -35,7 +35,7 @@ from PySide6.QtWidgets import (
 )
 
 from gft_opto.gui.custom_widget_tool import ComponentDialog, SYMBOL_TYPE_CHOICES
-from gft_opto.gui.test_netlist import run_fake_evaluation
+from gft_opto.examples.example_netlist import run_fake_evaluation
 from html import escape
 import json
 from PySide6.QtGui import QTextDocument
