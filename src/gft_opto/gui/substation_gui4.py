@@ -35,7 +35,7 @@ from PySide6.QtWidgets import (
 )
 
 from gft_opto.gui.custom_widget_tool import ComponentDialog, SYMBOL_TYPE_CHOICES
-from tests.test_netlist import run_fake_evaluation
+from gft_opto.gui.test_netlist import run_fake_evaluation
 from html import escape
 import json
 from PySide6.QtGui import QTextDocument
@@ -676,6 +676,7 @@ class BusItem(OneLineSymbolItem):
         )
         self._tap_seq = 0
         self.display_name = self.label
+        self.properties = {}
         self._sync_bus_rect()
 
     def _sync_bus_rect(self):
@@ -690,10 +691,8 @@ class BusItem(OneLineSymbolItem):
         pen.setCapStyle(Qt.PenCapStyle.FlatCap)
         painter.setPen(pen)
         painter.drawLine(
-            self._base_ports["left"].x(),
-            0,
-            self._base_ports["right"].x(),
-            0,
+            self._base_ports["left"],
+            self._base_ports["right"],
         )
         label_rect = self._label_base_rect()
         text_pen = QPen(Qt.GlobalColor.black)
