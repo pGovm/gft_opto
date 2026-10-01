@@ -22,7 +22,7 @@ from typing import Callable
 import pymupdf
 from PySide6.QtCore import Qt, QPointF, QRectF, QByteArray, QMimeData
 from PySide6.QtGui import (
-    QFont, QPixmap, QImage, QDrag, QPainter, QPen, QBrush, QColor,
+    QFont, QFontMetricsF, QPixmap, QImage, QDrag, QPainter, QPen, QBrush, QColor,
     QKeySequence, QUndoStack, QUndoCommand, QPainterPath, QTransform,
 )
 from PySide6.QtWidgets import (
@@ -57,12 +57,15 @@ WIRE_HIT_RADIUS = 10.0       # px — how close to a wire to tee into it
 BUS_DROP_RADIUS = 16.0       # px — how close to a bus bar to drop a new node
 MIN_BUS_LENGTH = 40.0        # base units — shortest a bus can be dragged
 
-# Default empty workspace size (before a PDF is imported)
-DEFAULT_WORKSPACE_WIDTH = 2400.0
-DEFAULT_WORKSPACE_HEIGHT = 1800.0
+# Default AEP/ANSI E landscape drawing sheet (48 in wide × 36 in high)
+AEP_SHEET_WIDTH_IN = 48.0
+AEP_SHEET_HEIGHT_IN = 36.0
+SCENE_UNITS_PER_INCH = 50.0
+DEFAULT_WORKSPACE_WIDTH = AEP_SHEET_WIDTH_IN * SCENE_UNITS_PER_INCH
+DEFAULT_WORKSPACE_HEIGHT = AEP_SHEET_HEIGHT_IN * SCENE_UNITS_PER_INCH
 
-# Alignment grid
-GRID_SPACING = 25.0          # scene units — matches PDF pixel coords after import
+# Alignment grid: half-inch divisions on the AEP sheet
+GRID_SPACING = SCENE_UNITS_PER_INCH / 2.0
 GRID_MAJOR_EVERY = 5         # every Nth line is drawn heavier
 DEFAULT_GRID_OPACITY = 0.25
 
@@ -241,11 +244,6 @@ class OneLineSymbolItem(QGraphicsItem):
 
     def __init__(self, equip_type: str, label: str, ports: dict[str, QPointF]):
         super().__init__()
-
-        self.last_netlist: dict | None = None
-        self.last_result: dict | None = None
-        self.setWindowTitle("AI-Assisted Substation Design Tool")
-
         self.equip_type = equip_type
         self.equip_id = equip_type  # legacy alias used by the properties panel
         self.instance_id = next_instance_id(equip_type)
@@ -677,6 +675,7 @@ class BusItem(OneLineSymbolItem):
             },
         )
         self._tap_seq = 0
+        self.display_name = self.label
         self._sync_bus_rect()
 
     def _sync_bus_rect(self):
@@ -687,7 +686,7 @@ class BusItem(OneLineSymbolItem):
     def paint(self, painter: QPainter, option, widget=None):
         self._begin_paint(painter)
         pen = painter.pen()
-        pen.setWidthF(6.0 / max(self.scale_factor, 1e-6))
+        pen.setWidthF(4.0 / max(self.scale_factor, 1e-6))
         pen.setCapStyle(Qt.PenCapStyle.FlatCap)
         painter.setPen(pen)
         painter.drawLine(
@@ -696,7 +695,45 @@ class BusItem(OneLineSymbolItem):
             self._base_ports["right"].x(),
             0,
         )
+        label_rect = self._label_base_rect()
+        text_pen = QPen(Qt.GlobalColor.black)
+        text_pen.setWidthF(0)
+        painter.setPen(text_pen)
+        painter.setFont(self._label_font())
+        painter.drawText(label_rect, Qt.AlignmentFlag.AlignCenter, self._caption())
         self._end_paint(painter)
+
+    def _caption(self) -> str:
+        """Custom name plus voltage rating, drawn above the bar."""
+        name = self.display_name.strip()
+        props = getattr(self, "properties", None)
+        rating = props.get("rating_kv") if isinstance(props, dict) else None
+        if rating is None:
+            return name
+        voltage = f"{rating:g} kV"
+        return f"{name}  {voltage}" if name else voltage
+
+    def _label_font(self) -> QFont:
+        """Keep the name the same visual size when the bus is scaled."""
+        font = QFont("Sans-Serif", 11)
+        font.setWeight(QFont.Weight.Bold)
+        font.setPointSizeF(11.0 / max(self.scale_factor, 1e-6))
+        return font
+
+    def _label_base_rect(self) -> QRectF:
+        """Name centered just above the bar, in unscaled bus coordinates."""
+        metrics = QFontMetricsF(self._label_font())
+        width = metrics.horizontalAdvance(self._caption()) + 4
+        height = metrics.height()
+        left = self._base_ports["left"].x()
+        right = self._base_ports["right"].x()
+        gap = 8.0 / max(self.scale_factor, 1e-6)
+        return QRectF((left + right - width) / 2, -gap - height, width, height)
+
+    def boundingRect(self) -> QRectF:
+        rect = super().boundingRect()
+        label = self._local_transform().mapRect(self._label_base_rect())
+        return rect.united(label)
 
     def _bar_span(self) -> tuple[QPointF, QPointF, float]:
         """Scene start, end, and squared length of the bus axis."""
@@ -989,6 +1026,8 @@ def make_user_equipment(
 
     item = EQUIPMENT_DEFS[symbol_key]["factory"]()
     item.label = name
+    if isinstance(item, BusItem):
+        item.display_name = name
     item.properties = props
     return item
 
@@ -1421,6 +1460,11 @@ class WorkspaceGridItem(QGraphicsItem):
             painter.setPen(QPen(color, width))
             painter.drawLine(left, y, right, y)
 
+        # Sheet edge makes the 36 × 48 drawing boundary explicit.
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.setPen(QPen(QColor("#52606d"), 2.0))
+        painter.drawRect(self._rect)
+
 
 class WorkspaceView(QGraphicsView):
     """
@@ -1568,7 +1612,7 @@ class WorkspaceView(QGraphicsView):
             if bus is not None:
                 end = ConnectToBusCommand._drop_point(bus, end)
             else:
-                wire_hit = self._find_wire_at(end)
+                wire_hit = self._find_wire_at(end, exclude_endpoint=exclude)
                 if wire_hit is not None:
                     end = wire_hit[1]
                 elif self._snap_to_grid:
@@ -1637,8 +1681,17 @@ class WorkspaceView(QGraphicsView):
                 best = item
         return best
 
-    def _find_wire_at(self, scene_pos: QPointF, exclude: ConnectionItem | None = None):
-        """Return (ConnectionItem, point_on_wire) if cursor is near a wire segment."""
+    def _find_wire_at(
+        self,
+        scene_pos: QPointF,
+        exclude: ConnectionItem | None = None,
+        exclude_endpoint: OneLineSymbolItem | None = None,
+    ):
+        """Return (ConnectionItem, point_on_wire) if cursor is near a wire segment.
+
+        exclude_endpoint skips wires that already terminate on that symbol, so
+        dragging one of its ports onto its own connection does not add a node.
+        """
         scn = self.scene()
         if scn is None:
             return None
@@ -1646,6 +1699,10 @@ class WorkspaceView(QGraphicsView):
         best_dist = WIRE_HIT_RADIUS
         for item in scn.items():
             if not isinstance(item, ConnectionItem) or item is exclude:
+                continue
+            if exclude_endpoint is not None and (
+                item.from_item is exclude_endpoint or item.to_item is exclude_endpoint
+            ):
                 continue
             pts = item.route_points()
             if len(pts) < 2:
@@ -1953,13 +2010,31 @@ class WorkspaceView(QGraphicsView):
         else:
             self._set_status(f"Rotated {len(rotations)} items")
 
-    def set_background_pixmap(self, pixmap: QPixmap):
+    def set_background_pixmap(
+        self,
+        pixmap: QPixmap,
+        scene_width: float | None = None,
+        scene_height: float | None = None,
+    ):
+        """Place a PDF image at its physical drawing-sheet size."""
         scn = self.scene()
         if self._background_item is not None and scn is not None:
             scn.removeItem(self._background_item)
             self._background_item = None
 
         self._background_item = QGraphicsPixmapItem(pixmap)
+        if (
+            scene_width is not None
+            and scene_height is not None
+            and pixmap.width() > 0
+            and pixmap.height() > 0
+        ):
+            self._background_item.setTransform(
+                QTransform.fromScale(
+                    scene_width / pixmap.width(),
+                    scene_height / pixmap.height(),
+                )
+            )
         self._background_item.setZValue(-10_000)
         self._background_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, False)
         self._background_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, False)
@@ -1967,7 +2042,10 @@ class WorkspaceView(QGraphicsView):
         scn = self.scene()
         if scn is not None:
             scn.addItem(self._background_item)
-            scn.setSceneRect(self._background_item.boundingRect())
+            if scene_width is not None and scene_height is not None:
+                scn.setSceneRect(QRectF(0, 0, scene_width, scene_height))
+            else:
+                scn.setSceneRect(self._background_item.sceneBoundingRect())
             self._sync_grid_to_scene()
         self.fitInView(self.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
 
@@ -2161,8 +2239,9 @@ class WorkspaceView(QGraphicsView):
                     return
 
             # Drop onto an existing wire → tee with an auto junction.
+            # A wire that already ends on this component is not a valid tee.
             if self._wiring:
-                wire_hit = self._find_wire_at(scene_pos)
+                wire_hit = self._find_wire_at(scene_pos, exclude_endpoint=from_item)
                 if wire_hit is not None:
                     wire, point = wire_hit
                     self._push(
@@ -2328,6 +2407,8 @@ class SubstationGuiMockup(QMainWindow):
 
     def __init__(self):
         super().__init__()
+        self.last_netlist: dict | None = None
+        self.last_result: dict | None = None
         self.setWindowTitle("AI-Assisted Substation Design Tool")
         self.setMinimumSize(1400, 800)
         self._apply_stylesheet()
@@ -2661,37 +2742,67 @@ class SubstationGuiMockup(QMainWindow):
         properties_layout.addWidget(self.prop_type, 0, 1)
         properties_layout.addWidget(QLabel("Name:"), 1, 0)
         self.prop_name = QLineEdit("—")
+        self.prop_name.textChanged.connect(self._on_property_name_changed)
         properties_layout.addWidget(self.prop_name, 1, 1)
 
-        properties_layout.addWidget(QLabel("Status:"), 2, 0)
-        status_cb = QComboBox()
-        status_cb.addItems(["Closed", "Open", "Maintenance"])
-        properties_layout.addWidget(status_cb, 2, 1)
+        self.prop_status_label = QLabel("Status:")
+        properties_layout.addWidget(self.prop_status_label, 2, 0)
+        self.prop_status = QComboBox()
+        self.prop_status.addItems(["Closed", "Open", "Maintenance"])
+        properties_layout.addWidget(self.prop_status, 2, 1)
 
-        properties_layout.addWidget(QLabel("Trip Coil 1 (A):"), 3, 0)
+        self.prop_trip_coil_1_label = QLabel("Trip Coil 1 (A):")
+        properties_layout.addWidget(self.prop_trip_coil_1_label, 3, 0)
         self.prop_trip_coil_1 = QLineEdit("—")
         self.prop_trip_coil_1.setReadOnly(True)
         properties_layout.addWidget(self.prop_trip_coil_1, 3, 1)
 
-        properties_layout.addWidget(QLabel("Trip Coil 2 (A):"), 4, 0)
+        self.prop_trip_coil_2_label = QLabel("Trip Coil 2 (A):")
+        properties_layout.addWidget(self.prop_trip_coil_2_label, 4, 0)
         self.prop_trip_coil_2 = QLineEdit("—")
         self.prop_trip_coil_2.setReadOnly(True)
         properties_layout.addWidget(self.prop_trip_coil_2, 4, 1)
 
-        properties_layout.addWidget(QLabel("Close Coil (A):"), 5, 0)
+        self.prop_close_coil_label = QLabel("Close Coil (A):")
+        properties_layout.addWidget(self.prop_close_coil_label, 5, 0)
         self.prop_close_coil = QLineEdit("—")
         self.prop_close_coil.setReadOnly(True)
         properties_layout.addWidget(self.prop_close_coil, 5, 1)
 
-        properties_layout.addWidget(QLabel("Motor Inrush Current (A):"), 6, 0)
+        self.prop_motor_inrush_label = QLabel("Motor Inrush Current (A):")
+        properties_layout.addWidget(self.prop_motor_inrush_label, 6, 0)
         self.prop_motor_inrush = QLineEdit("—")
         self.prop_motor_inrush.setReadOnly(True)
         properties_layout.addWidget(self.prop_motor_inrush, 6, 1)
 
-        properties_layout.addWidget(QLabel("Motor Run Current (A):"), 7, 0)
+        self.prop_motor_run_label = QLabel("Motor Run Current (A):")
+        properties_layout.addWidget(self.prop_motor_run_label, 7, 0)
         self.prop_motor_run = QLineEdit("—")
         self.prop_motor_run.setReadOnly(True)
         properties_layout.addWidget(self.prop_motor_run, 7, 1)
+
+        self.prop_voltage_label = QLabel("Voltage (kV):")
+        properties_layout.addWidget(self.prop_voltage_label, 8, 0)
+        self.prop_voltage = QLineEdit("—")
+        self.prop_voltage.setPlaceholderText("kV")
+        self.prop_voltage.textChanged.connect(self._on_property_voltage_changed)
+        properties_layout.addWidget(self.prop_voltage, 8, 1)
+
+        self._non_bus_property_widgets = [
+            self.prop_status_label,
+            self.prop_status,
+            self.prop_trip_coil_1_label,
+            self.prop_trip_coil_1,
+            self.prop_trip_coil_2_label,
+            self.prop_trip_coil_2,
+            self.prop_close_coil_label,
+            self.prop_close_coil,
+            self.prop_motor_inrush_label,
+            self.prop_motor_inrush,
+            self.prop_motor_run_label,
+            self.prop_motor_run,
+        ]
+        self._set_bus_property_mode(False)
 
         analysis_group = QGroupBox("Analysis Output")
         analysis_layout = QVBoxLayout(analysis_group)
@@ -2987,6 +3098,16 @@ class SubstationGuiMockup(QMainWindow):
             doc = pymupdf.open(pdf_path)
             try:
                 page = doc.load_page(0)
+                page_rect = page.rect
+                # PDF coordinates are points (72 points per inch). Converting
+                # them to the grid's scene scale makes a 48 × 36 inch AEP
+                # sheet exactly 2400 × 1800 scene units.
+                scene_width = (
+                    page_rect.width / 72.0 * SCENE_UNITS_PER_INCH
+                )
+                scene_height = (
+                    page_rect.height / 72.0 * SCENE_UNITS_PER_INCH
+                )
                 zoom = 2.0
                 mat = pymupdf.Matrix(zoom, zoom)
                 pix = page.get_pixmap(matrix=mat, alpha=False)
@@ -3006,13 +3127,22 @@ class SubstationGuiMockup(QMainWindow):
 
         self._workspace_original = pm
         if hasattr(self, "workspace_view"):
-            self.workspace_view.set_background_pixmap(pm)
+            self.workspace_view.set_background_pixmap(
+                pm,
+                scene_width=scene_width,
+                scene_height=scene_height,
+            )
         if hasattr(self, "pdf_show_cb"):
             self.pdf_show_cb.setEnabled(True)
             self.pdf_show_cb.setChecked(True)
             self.pdf_show_cb.setToolTip("Show or hide the imported PDF background")
         if hasattr(self, "footer_status_label"):
-            self.footer_status_label.setText(f"Imported: {pdf_path}")
+            sheet_width = scene_width / SCENE_UNITS_PER_INCH
+            sheet_height = scene_height / SCENE_UNITS_PER_INCH
+            self.footer_status_label.setText(
+                f"Imported: {pdf_path} "
+                f"({sheet_width:g} × {sheet_height:g} in)"
+            )
 
     def _on_selection_changed(self):
         """Update the properties panel when the user selects a symbol or wire."""
@@ -3022,13 +3152,28 @@ class SubstationGuiMockup(QMainWindow):
         if not items:
             self.prop_type.setText("—")
             self.prop_name.setText("—")
+            self._set_bus_property_mode(False)
             self._clear_custom_component_properties()
             return
 
         item = items[0]
-        if isinstance(item, OneLineSymbolItem):
+        if isinstance(item, BusItem):
+            self.prop_type.setText(
+                EQUIPMENT_DEFS.get(item.equip_type, {}).get("label", "Bus")
+            )
+            self.prop_name.blockSignals(True)
+            self.prop_name.setText(item.display_name)
+            self.prop_name.blockSignals(False)
+            self._set_bus_property_mode(True)
+            props = getattr(item, "properties", None)
+            rating = props.get("rating_kv") if isinstance(props, dict) else None
+            self.prop_voltage.blockSignals(True)
+            self.prop_voltage.setText("" if rating is None else f"{rating:g}")
+            self.prop_voltage.blockSignals(False)
+        elif isinstance(item, OneLineSymbolItem):
             self.prop_type.setText(item.label)
             self.prop_name.setText(item.instance_id)
+            self._set_bus_property_mode(False)
             props = getattr(item, "properties", None)
             if isinstance(props, dict) and props:
                 self._set_custom_component_properties(props)
@@ -3040,10 +3185,60 @@ class SubstationGuiMockup(QMainWindow):
                 f"{item.from_item.instance_id}:{item.from_port} → "
                 f"{item.to_item.instance_id}:{item.to_port}"
             )
+            self._set_bus_property_mode(False)
             self._clear_custom_component_properties()
         else:
             self.prop_type.setText(type(item).__name__)
+            self._set_bus_property_mode(False)
             self._clear_custom_component_properties()
+
+    def _on_property_name_changed(self, text: str):
+        """The name typed in the properties panel is the name drawn on a bus."""
+        if not hasattr(self, "workspace_scene"):
+            return
+        selected = self.workspace_scene.selectedItems()
+        if len(selected) != 1 or not isinstance(selected[0], BusItem):
+            return
+        bus = selected[0]
+        bus.prepareGeometryChange()
+        bus.display_name = text
+        bus.update()
+
+    def _on_property_voltage_changed(self, text: str):
+        """Store a typed bus voltage and refresh the rating drawn on the bar."""
+        if not hasattr(self, "workspace_scene"):
+            return
+        selected = self.workspace_scene.selectedItems()
+        if len(selected) != 1 or not isinstance(selected[0], BusItem):
+            return
+        bus = selected[0]
+        raw = text.strip().lower().removesuffix("kv").strip()
+        if raw in ("", "—", "-"):
+            rating = None
+        else:
+            try:
+                rating = float(raw)
+            except ValueError:
+                return
+        if not isinstance(getattr(bus, "properties", None), dict):
+            bus.properties = {}
+        if rating is None:
+            bus.properties.pop("rating_kv", None)
+        else:
+            bus.properties["rating_kv"] = rating
+        bus.prepareGeometryChange()
+        bus.update()
+
+    def _set_bus_property_mode(self, is_bus: bool):
+        """A bus shows voltage only. Other selections keep the coil fields."""
+        for widget in self._non_bus_property_widgets:
+            widget.setVisible(not is_bus)
+        self.prop_voltage_label.setVisible(is_bus)
+        self.prop_voltage.setVisible(is_bus)
+        if not is_bus:
+            self.prop_voltage.blockSignals(True)
+            self.prop_voltage.setText("—")
+            self.prop_voltage.blockSignals(False)
 
     def _set_custom_component_properties(self, properties: dict):
         """Fill the Trip Coil / Motor Current rows from a CustomComponentItem."""
