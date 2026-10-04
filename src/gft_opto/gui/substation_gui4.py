@@ -204,6 +204,15 @@ class SubstationGuiMockup(QMainWindow):
     }
     QFrame#canvasFrame { background: white; border: 2px dashed #9fb3c8; border-radius: 14px; }
     QFrame#toolbarFrame { background: white; border: 1px solid #d9e2ec; border-radius: 12px; }
+
+    QMessageBox {
+        background-color: #ffffff;
+    }
+    QMessageBox QLabel {
+        color: #1f2933;
+        background-color: transparent;
+        font-size: 11pt;
+    }
 """)
 
     # --- Undo / redo wiring -------------------------------------------------
@@ -559,8 +568,6 @@ class SubstationGuiMockup(QMainWindow):
         lines.append("Short circuits:" if shorts else "Short circuits: none")
         for issue in shorts:
             lines.append(f"  • {issue}")
-        if hasattr(self, "output_box"):
-            self.output_box.setPlainText("\n".join(lines))
         if hasattr(self, "footer_status_label"):
             if report["ok"]:
                 self.footer_status_label.setText("Circuit check passed")
@@ -570,6 +577,11 @@ class SubstationGuiMockup(QMainWindow):
                 self.footer_status_label.setText(
                     f"Circuit check: {len(open_ends)} open, {len(shorts)} short"
                 )
+        message = "\n".join(lines)
+        if report["ok"]:
+            QMessageBox.information(self, "Validate", message)
+        else:
+            QMessageBox.warning(self, "Validate", message)
 
     def _on_run_evaluation_clicked(self):
         """
