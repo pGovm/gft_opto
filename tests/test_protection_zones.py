@@ -9,7 +9,7 @@ These fakes mimic OneLineSymbolItem/ConnectionItem closely enough to
 exercise the algorithm without needing PySide6 installed.
 """
 
-from protection_zones import (
+from gft_opto.logic.protection_zones import (
     identify_zones,
     find_enclosed_zones,
     independent_zones,
