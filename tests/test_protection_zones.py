@@ -42,19 +42,61 @@ class FakeConnection:
         b._connections.append(self)
 
 
-def summarize(zones, enclosures=None):
+def _plain_list(names):
+    """Join a list of names the way a person would say them out loud."""
+    names = list(names)
+    if not names:
+        return "none"
+    if len(names) == 1:
+        return names[0]
+    return ", ".join(names[:-1]) + " and " + names[-1]
+
+
+def describe_zone(zone, label=None):
+    """One plain-English sentence describing what's inside a zone and what guards it."""
+    core = sorted(i.instance_id for i in zone.core_items)
+    bound = sorted(i.instance_id for i in zone.boundary_items)
+    name = label or zone.zone_id
+    contains = _plain_list(core) if core else "nothing (boundary-only)"
+    if bound:
+        guard = f"guarded by current transformer(s) {_plain_list(bound)}"
+    else:
+        guard = "not guarded by any current transformer (open end of the network)"
+    return f"  • {name}: contains {contains} — {guard}"
+
+
+def report_header(title, plain_english):
+    print(f"\n{'=' * 70}")
+    print(f"  {title}")
+    print(f"{'-' * 70}")
+    print(f"  What this checks: {plain_english}")
+    print(f"{'=' * 70}")
+
+
+def report_pass(plain_conclusion):
+    print(f"\n  ✅ PASS — {plain_conclusion}")
+
+
+def summarize(zones, enclosures=None, labels=None):
+    """Kept for any older callers; prints the plain-English zone list."""
+    labels = labels or {}
     for z in zones:
-        core = sorted(i.instance_id for i in z.core_items)
-        bound = sorted(i.instance_id for i in z.boundary_items)
-        line = f"  {z.zone_id}: core={core} boundary={bound}"
-        if enclosures is not None:
-            line += f"  enclosed_in={enclosures[z.zone_id]}"
+        line = describe_zone(z, labels.get(z.zone_id))
+        if enclosures is not None and enclosures.get(z.zone_id):
+            enclosed_in = [labels.get(e, e) for e in enclosures[z.zone_id]]
+            line += f"\n      → sits entirely inside: {_plain_list(enclosed_in)}"
         print(line)
 
 
 def test_linear_topology_with_two_cts():
     """A - CT1 - B - CT2 - C  =>  3 zones, each bounded by the CT(s) it touches."""
-    print("\n=== Test 1: Linear topology, A-CT1-B-CT2-C ===")
+    report_header(
+        "TEST 1 — Three components in a row, split by two current transformers",
+        "A simple chain (A — CT1 — B — CT2 — C). Each current transformer (CT) "
+        "should mark the edge of a protection zone, and the component in the "
+        "middle should be watched by BOTH of its neighboring CTs — that overlap "
+        "is intentional and matches real substation protection design.",
+    )
     a, ct1, b, ct2, c = FakeItem("A"), CT("CT1"), FakeItem("B"), CT("CT2"), FakeItem("C")
     FakeConnection(a, ct1)
     FakeConnection(ct1, b)
@@ -63,7 +105,9 @@ def test_linear_topology_with_two_cts():
 
     all_items = [a, ct1, b, ct2, c]
     zones = identify_zones(all_items, boundary_types=(CT,))
-    summarize(zones)
+    labels = {z.zone_id: f"Zone around {sorted(i.instance_id for i in z.core_items)[0]}" for z in zones}
+    print("\n  Zones the tool identified:")
+    summarize(zones, labels=labels)
 
     assert len(zones) == 3, f"expected 3 zones, got {len(zones)}"
     cores = sorted(tuple(sorted(i.instance_id for i in z.core_items)) for z in zones)
@@ -75,48 +119,70 @@ def test_linear_topology_with_two_cts():
     assert zone_a.boundary_items == {ct1}
     assert zone_b.boundary_items == {ct1, ct2}
     assert zone_c.boundary_items == {ct2}
-    print("PASS")
+    report_pass(
+        "the tool correctly split the chain into 3 zones, and correctly gave "
+        "the middle component (B) protection from both CTs on either side of it."
+    )
 
 
 def test_no_boundaries_forms_one_zone():
     """No CTs anywhere => everything connected collapses into a single zone."""
-    print("\n=== Test 2: No CTs, fully connected network ===")
+    report_header(
+        "TEST 2 — A network with no protection devices at all",
+        "If a group of components is wired together with no current transformers "
+        "anywhere, there's nothing to split them into separate zones — they should "
+        "all be treated as one unprotected zone. This checks the tool doesn't "
+        "invent fake zone boundaries where none exist.",
+    )
     a, b, c = FakeItem("A"), FakeItem("B"), FakeItem("C")
     FakeConnection(a, b)
     FakeConnection(b, c)
 
     zones = identify_zones([a, b, c], boundary_types=(CT,))
+    print("\n  Zones the tool identified:")
     summarize(zones)
     assert len(zones) == 1, f"expected 1 zone, got {len(zones)}"
     assert zones[0].core_items == {a, b, c}
     assert zones[0].boundary_items == set()
-    print("PASS")
+    report_pass("all 3 components correctly merged into a single zone.")
 
 
 def test_disconnected_components_form_separate_zones():
     """Two electrically separate islands (no path between them) => 2 zones."""
-    print("\n=== Test 3: Disconnected islands ===")
+    report_header(
+        "TEST 3 — Two completely separate circuits on the same diagram",
+        "If the diagram contains two groups of equipment that aren't wired to "
+        "each other at all, the tool should never lump them into the same zone, "
+        "since they have nothing electrically to do with one another.",
+    )
     a, b = FakeItem("A"), FakeItem("B")
     FakeConnection(a, b)
     x, y = FakeItem("X"), FakeItem("Y")
     FakeConnection(x, y)
 
     zones = identify_zones([a, b, x, y], boundary_types=(CT,))
+    print("\n  Zones the tool identified:")
     summarize(zones)
     assert len(zones) == 2, f"expected 2 zones, got {len(zones)}"
-    print("PASS")
+    report_pass("the two disconnected circuits were correctly kept as 2 separate zones.")
 
 
 def test_isolated_item_with_no_connections():
     """A component with zero connections should still form its own zone."""
-    print("\n=== Test 4: Fully isolated component ===")
+    report_header(
+        "TEST 4 — A single component with nothing connected to it",
+        "A basic stability check: the tool should never crash or error out "
+        "on an incomplete or in-progress diagram — a lone, unconnected "
+        "component should still produce a valid (if trivial) zone.",
+    )
     a = FakeItem("A")
     zones = identify_zones([a], boundary_types=(CT,))
+    print("\n  Zones the tool identified:")
     summarize(zones)
     assert len(zones) == 1
     assert zones[0].core_items == {a}
     assert zones[0].boundary_items == set()
-    print("PASS")
+    report_pass("no crash, and the lone component correctly got its own zone.")
 
 
 def test_bus_with_multiple_cts_shared_boundary():
@@ -125,7 +191,13 @@ def test_bus_with_multiple_cts_shared_boundary():
     This is the realistic case that matters for substations: one zone
     (the bus zone) sharing boundaries with three adjacent feeder zones.
     """
-    print("\n=== Test 5: Bus with 3 CTs (realistic substation shape) ===")
+    report_header(
+        "TEST 5 — A bus feeding three separate circuits (realistic substation layout)",
+        "This is the shape that actually matters for GFT_OPTO: one bus with "
+        "three current transformers, each leading out to a different feeder. "
+        "The bus's own zone should be watched by all 3 CTs simultaneously, "
+        "while each feeder gets its own separate zone.",
+    )
     bus = FakeItem("BUS")
     ct1, ct2, ct3 = CT("CT1"), CT("CT2"), CT("CT3")
     f1, f2, f3 = FakeItem("F1"), FakeItem("F2"), FakeItem("F3")
@@ -138,12 +210,16 @@ def test_bus_with_multiple_cts_shared_boundary():
 
     all_items = [bus, ct1, ct2, ct3, f1, f2, f3]
     zones = identify_zones(all_items, boundary_types=(CT,))
+    print("\n  Zones the tool identified:")
     summarize(zones)
 
     assert len(zones) == 4, f"expected 4 zones (bus + 3 feeders), got {len(zones)}"
     bus_zone = next(z for z in zones if bus in z.core_items)
     assert bus_zone.boundary_items == {ct1, ct2, ct3}, "bus zone should touch all 3 CTs"
-    print("PASS")
+    report_pass(
+        "the bus correctly got its own zone watched by all 3 current transformers, "
+        "with each feeder getting a separate zone of its own."
+    )
 
 
 def test_enclosure_detection_never_fires_under_normal_partitioning():
@@ -159,7 +235,15 @@ def test_enclosure_detection_never_fires_under_normal_partitioning():
     composite zones (see Test 8) are required for enclosure to mean
     anything.
     """
-    print("\n=== Test 6: Enclosure detection on primary zones only (no composites) ===")
+    report_header(
+        "TEST 6 — Checking for \"zones inside zones\" with only the basic zones",
+        "Sponsors asked for zones that sit fully inside a bigger zone to be "
+        "excluded from the battery load calculation. This test confirms that, "
+        "using only the most basic zone breakdown, no zone is ever found "
+        "inside another — which makes sense, since at this basic level every "
+        "zone only touches its own unique piece of equipment. (The next test "
+        "shows how the tool handles the real \"zone inside a zone\" case.)",
+    )
     a, ct1, b, ct2, c = FakeItem("A"), CT("CT1"), FakeItem("B"), CT("CT2"), FakeItem("C")
     FakeConnection(a, ct1)
     FakeConnection(ct1, b)
@@ -168,16 +252,18 @@ def test_enclosure_detection_never_fires_under_normal_partitioning():
 
     zones = identify_zones([a, ct1, b, ct2, c], boundary_types=(CT,))
     enclosures = find_enclosed_zones(zones)
+    print("\n  Zones the tool identified:")
     summarize(zones, enclosures)
 
     total_enclosures = sum(len(v) for v in enclosures.values())
-    print(f"  total enclosure relationships found: {total_enclosures}")
+    print(f"\n  Zones found sitting inside another zone: {total_enclosures}")
     assert total_enclosures == 0, (
         "Expected 0 enclosures among primary zones alone — this is "
         "expected and is why composite zones (Test 8) are needed."
     )
-    print("CONFIRMED (expected): primary zones alone never show enclosure; "
-          "see Test 8 for the fix.")
+    report_pass(
+        "as expected, no zone was found enclosed in another at this basic level."
+    )
 
 
 def test_transformer_enclosed_in_bay_zone_with_breaker():
@@ -195,7 +281,15 @@ def test_transformer_enclosed_in_bay_zone_with_breaker():
     - The Transformer's primary zone should now be ENCLOSED within that
       composite bay zone, matching the described real-world relationship.
     """
-    print("\n=== Test 8: Transformer zone enclosed in a bigger bay zone (with breaker) ===")
+    report_header(
+        "TEST 8 — The real-world example: a transformer's zone inside a bigger zone",
+        "This is the specific case the project sponsors described: a transformer "
+        "has its own small protection zone, but there's also a bigger zone that "
+        "wraps around the transformer AND an adjacent breaker. The small "
+        "transformer zone should be correctly recognized as sitting INSIDE that "
+        "bigger zone — so it gets left out of the battery load calculation, "
+        "while the bigger zone is the one actually used for that calculation.",
+    )
     feeder = FakeItem("FEEDER")
     ct_in = CT("CT_IN")
     xfmr = FakeItem("TRANSFORMER")
@@ -213,16 +307,16 @@ def test_transformer_enclosed_in_bay_zone_with_breaker():
 
     all_items = [feeder, ct_in, xfmr, ct_out, breaker, ct_far, bus]
     primary_zones = identify_zones(all_items, boundary_types=(CT,))
-    print("Primary zones:")
+    print("\n  Step 1 — the basic, device-by-device zones:")
     summarize(primary_zones)
 
     composite_zones = generate_composite_zones(primary_zones)
-    print("Composite zones (one merge level out):")
+    print("\n  Step 2 — bigger zones formed by combining neighboring devices:")
     summarize(composite_zones)
 
     all_zones = primary_zones + composite_zones
     enclosures = find_enclosed_zones(all_zones)
-    print("Enclosure results:")
+    print("\n  Step 3 — checking which zones sit inside a bigger zone:")
     summarize(all_zones, enclosures)
 
     xfmr_zone = next(z for z in primary_zones if xfmr in z.core_items)
@@ -245,7 +339,11 @@ def test_transformer_enclosed_in_bay_zone_with_breaker():
         "Expected at least one enclosing composite zone to contain the breaker"
     )
     assert xfmr in enclosing_zone.core_items
-    print(f"PASS — transformer zone is enclosed in: {enclosing_zone}")
+    report_pass(
+        "the transformer's small zone was correctly recognized as sitting "
+        "inside a bigger zone that also contains the breaker — exactly the "
+        "relationship the sponsors described."
+    )
 
     # And the transformer's primary zone should now be excluded from the
     # "independent" set used for the battery load calc, per the supporter
@@ -258,14 +356,22 @@ def test_transformer_enclosed_in_bay_zone_with_breaker():
     assert enclosing_zone.zone_id in indep_ids, (
         "The bigger bay zone should remain in the battery load calc set"
     )
-    print("PASS — independent_zones() correctly excludes the enclosed transformer "
-          "zone and keeps the bay zone")
+    report_pass(
+        "the transformer's small (enclosed) zone was correctly LEFT OUT of the "
+        "battery load calculation, while the bigger zone that contains it was "
+        "correctly KEPT IN — so the load only gets counted once, not twice."
+    )
 
 
 def test_independent_zones_matches_full_list_given_no_enclosures():
     """Given the finding above, independent_zones() will always return
     every zone, since none are ever marked enclosed."""
-    print("\n=== Test 7: independent_zones() given no enclosures ever fire ===")
+    report_header(
+        "TEST 7 — Confirming the battery load calc gets ALL zones when none are enclosed",
+        "A sanity check in the other direction from Test 8: when no zone is "
+        "enclosed inside another, every zone should be included in the "
+        "battery load calculation — nothing should be dropped by accident.",
+    )
     a, ct1, b = FakeItem("A"), CT("CT1"), FakeItem("B")
     FakeConnection(a, ct1)
     FakeConnection(ct1, b)
@@ -273,21 +379,47 @@ def test_independent_zones_matches_full_list_given_no_enclosures():
     zones = identify_zones([a, ct1, b], boundary_types=(CT,))
     enclosures = find_enclosed_zones(zones)
     indep = independent_zones(zones, enclosures)
-    print(f"  zones: {len(zones)}, independent_zones: {len(indep)}")
+    print(f"\n  Zones identified: {len(zones)}  |  Zones used for the battery load calc: {len(indep)}")
     assert len(indep) == len(zones), (
         "independent_zones() should currently return everything, since "
         "nothing is ever flagged as enclosed."
     )
-    print("PASS (but flags the same underlying gap as Test 6)")
+    report_pass("all zones were correctly included — none were dropped.")
 
 
 if __name__ == "__main__":
-    test_linear_topology_with_two_cts()
-    test_no_boundaries_forms_one_zone()
-    test_disconnected_components_form_separate_zones()
-    test_isolated_item_with_no_connections()
-    test_bus_with_multiple_cts_shared_boundary()
-    test_enclosure_detection_never_fires_under_normal_partitioning()
-    test_transformer_enclosed_in_bay_zone_with_breaker()
-    test_independent_zones_matches_full_list_given_no_enclosures()
-    print("\nAll tests completed.")
+    tests = [
+        test_linear_topology_with_two_cts,
+        test_no_boundaries_forms_one_zone,
+        test_disconnected_components_form_separate_zones,
+        test_isolated_item_with_no_connections,
+        test_bus_with_multiple_cts_shared_boundary,
+        test_enclosure_detection_never_fires_under_normal_partitioning,
+        test_transformer_enclosed_in_bay_zone_with_breaker,
+        test_independent_zones_matches_full_list_given_no_enclosures,
+    ]
+    for t in tests:
+        t()
+
+    print(f"\n{'=' * 70}")
+    print("  SUMMARY FOR PROJECT SPONSORS")
+    print(f"{'=' * 70}")
+    print(f"""
+  All {len(tests)} checks passed. In plain terms, this confirms the tool can:
+
+    1. Correctly split a one-line diagram into protection zones, using
+       current transformers as the boundary between zones.
+    2. Correctly handle edge cases without crashing — no protection
+       devices present, disconnected circuits, and lone components.
+    3. Recognize the realistic substation shape of a bus feeding
+       multiple circuits.
+    4. Recognize when one protection zone (e.g. a transformer's own
+       zone) sits fully inside a bigger zone (e.g. one that also
+       includes an adjacent breaker) — and correctly count that
+       bigger zone's load only once, rather than double-counting it
+       with the smaller zone inside it.
+
+  This logic is not yet connected to the tool's graphical interface —
+  it has only been verified in isolation, against constructed test
+  circuits, as shown above.
+""")

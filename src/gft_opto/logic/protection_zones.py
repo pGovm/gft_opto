@@ -44,9 +44,7 @@ class Zone:
         return f"Zone({self.zone_id}, core={core}, boundary={bound})"
 
 
-# ---------------------------------------------------------------------------
-# Step 1: identify boundary (CT) items
-# ---------------------------------------------------------------------------
+# Identify boundary items (Configurable)
 
 def _is_boundary_item(item, boundary_types) -> bool:
     """
