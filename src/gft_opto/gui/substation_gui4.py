@@ -47,12 +47,13 @@ from gft_opto.gui.symbols import (
     make_user_equipment,
 )
 from gft_opto.gui.workspace import WorkspaceView
-from gft_opto.gui.test_netlist import run_fake_evaluation
 from gft_opto.examples.example_netlist import run_fake_evaluation
 from html import escape
 import json
 from PySide6.QtGui import QTextDocument
 from PySide6.QtPrintSupport import QPrinter
+from pathlib import Path
+from collections import defaultdict
 
 
 # ---------------------------------------------------------------------------

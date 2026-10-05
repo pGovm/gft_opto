@@ -227,7 +227,7 @@ def loads_from_component(component: dict) -> list:
     return loads
 
 
-def scenario_from_netlist(netlist: dict, name: str = None, voltage: float = None) -> Scenario:
+def scenario_from_netlist(netlist: dict, name: str | None = None, voltage: float | None = None) -> Scenario:
     """
     Build a single worst-case Scenario directly from a GUI-exported
     netlist dict (every listed current firing at once).
@@ -242,14 +242,14 @@ def scenario_from_netlist(netlist: dict, name: str = None, voltage: float = None
     return scenario
 
 
-def calculator_from_netlist(netlist: dict, system_name: str = None) -> MomentaryLoadCalculator:
+def calculator_from_netlist(netlist: dict, system_name: str | None = None) -> MomentaryLoadCalculator:
     """Wrap a netlist dict as a one-scenario MomentaryLoadCalculator."""
     calc = MomentaryLoadCalculator(system_name or netlist.get("system_name", "Netlist Study"))
     calc.add_scenario(scenario_from_netlist(netlist))
     return calc
 
 
-def calculator_from_netlist_file(path: str, system_name: str = None) -> MomentaryLoadCalculator:
+def calculator_from_netlist_file(path: str, system_name: str | None = None) -> MomentaryLoadCalculator:
     """Load a netlist JSON file from disk and wrap it as a calculator run."""
     with open(path) as f:
         netlist = json.load(f)

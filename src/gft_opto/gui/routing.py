@@ -5,6 +5,8 @@ from pathlib import Path
 from PySide6.QtCore import QPointF, QRectF
 from PySide6.QtGui import QPainterPath
 
+from gft_opto.gui.symbols import OneLineSymbolItem
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
