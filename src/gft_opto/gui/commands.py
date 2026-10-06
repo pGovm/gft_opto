@@ -19,7 +19,7 @@ from gft_opto.gui.symbols import (
 
 class AddEquipmentCommand(QUndoCommand):
     def __init__(self, scene: QGraphicsScene, item: OneLineSymbolItem):
-        super().__init__(f"Place {item.instance_id}")
+        super().__init__(f"Place {item.visible_id()}")
         self.scene = scene
         self.item = item
 
@@ -42,7 +42,7 @@ class AddConnectionCommand(QUndoCommand):
         to_port: str,
     ):
         super().__init__(
-            f"Connect {from_item.instance_id}:{from_port} → {to_item.instance_id}:{to_port}"
+            f"Connect {from_item.visible_id()}:{from_port} → {to_item.visible_id()}:{to_port}"
         )
         self.scene = scene
         self.from_item = from_item
@@ -85,7 +85,7 @@ class ConnectToBusCommand(QUndoCommand):
         scene_pos: QPointF,
     ):
         super().__init__(
-            f"Connect {from_item.instance_id}:{from_port} → {bus.instance_id}"
+            f"Connect {from_item.visible_id()}:{from_port} → {bus.visible_id()}"
         )
         self.scene = scene
         self.from_item = from_item
@@ -114,8 +114,8 @@ class ConnectToBusCommand(QUndoCommand):
             self.port_name = name
             self._created_port = False
         self.setText(
-            f"Connect {self.from_item.instance_id}:{self.from_port} → "
-            f"{self.bus.instance_id}:{self.port_name}"
+            f"Connect {self.from_item.visible_id()}:{self.from_port} → "
+            f"{self.bus.visible_id()}:{self.port_name}"
         )
         if self.conn is None:
             self.conn = ConnectionItem(
@@ -228,7 +228,7 @@ class SplitWireCommand(QUndoCommand):
 
 class MoveEquipmentCommand(QUndoCommand):
     def __init__(self, moves: list[tuple[OneLineSymbolItem, QPointF, QPointF]]):
-        label = "Move equipment" if len(moves) != 1 else f"Move {moves[0][0].instance_id}"
+        label = "Move equipment" if len(moves) != 1 else f"Move {moves[0][0].visible_id()}"
         super().__init__(label)
         self.moves = [(item, QPointF(old), QPointF(new)) for item, old, new in moves]
 
@@ -243,7 +243,7 @@ class MoveEquipmentCommand(QUndoCommand):
 
 class ResizeEquipmentCommand(QUndoCommand):
     def __init__(self, item: OneLineSymbolItem, old_scale: float, new_scale: float):
-        super().__init__(f"Resize {item.instance_id}")
+        super().__init__(f"Resize {item.visible_id()}")
         self.item = item
         self.old_scale = old_scale
         self.new_scale = new_scale
@@ -257,7 +257,7 @@ class ResizeEquipmentCommand(QUndoCommand):
 
 class ResizeBusCommand(QUndoCommand):
     def __init__(self, bus: BusItem, port: str, old_x: float, new_x: float):
-        super().__init__(f"Resize {bus.instance_id}")
+        super().__init__(f"Resize {bus.visible_id()}")
         self.bus = bus
         self.port = port
         self.old_x = old_x
@@ -275,7 +275,7 @@ class RotateEquipmentCommand(QUndoCommand):
         label = (
             "Rotate equipment"
             if len(rotations) != 1
-            else f"Rotate {rotations[0][0].instance_id}"
+            else f"Rotate {rotations[0][0].visible_id()}"
         )
         super().__init__(label)
         self.rotations = [

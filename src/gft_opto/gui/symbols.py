@@ -33,9 +33,16 @@ from gft_opto.gui.routing import (
 _instance_counters: dict[str, int] = defaultdict(int)
 
 def next_instance_id(equip_type: str) -> str:
-    """Assign a unique id per placed symbol (e.g. mos_1, mos_2)."""
+    """Assign a unique id per equipment type (breaker_1, then mos_1)."""
     _instance_counters[equip_type] += 1
     return f"{equip_type}_{_instance_counters[equip_type]}"
+
+
+def release_instance_id(equip_type: str) -> None:
+    """Give back an id taken by a drag preview that was never placed."""
+    count = _instance_counters[equip_type]
+    if count > 0:
+        _instance_counters[equip_type] = count - 1
 
 
 def _same_label_rect(a: QRectF | None, b: QRectF | None) -> bool:
@@ -65,6 +72,7 @@ class OneLineSymbolItem(QGraphicsItem):
         self.equip_type = equip_type
         self.equip_id = equip_type  # legacy alias used by the properties panel
         self.instance_id = next_instance_id(equip_type)
+        self.display_id = ""  # user override; empty means show instance_id
         self.label = label
         self.display_name = label
         self.show_name_label = True
@@ -214,9 +222,14 @@ class OneLineSymbolItem(QGraphicsItem):
             rect = rect.united(handle_rect).united(stem_rect)
         return rect.adjusted(-pad, -pad, pad, pad)
 
+    def visible_id(self) -> str:
+        """Id drawn for the user. A typed override replaces the automatic id."""
+        shown = (self.display_id or "").strip()
+        return shown or self.instance_id
+
     def _caption(self) -> str:
-        """Name drawn above the symbol, same style as a bus."""
-        return (self.display_name or "").strip()
+        """Abbreviation and per-type number drawn beside the symbol."""
+        return self.visible_id()
 
     def _label_font(self) -> QFont:
         """Keep the name the same visual size when the symbol is scaled."""
@@ -653,8 +666,8 @@ class BusItem(OneLineSymbolItem):
         self._end_paint(painter)
 
     def _caption(self) -> str:
-        """Custom name plus voltage rating, drawn above the bar."""
-        name = self.display_name.strip()
+        """Abbreviation, per-type number, and voltage rating, drawn above the bar."""
+        name = self.visible_id()
         props = getattr(self, "properties", None)
         rating = props.get("rating_kv") if isinstance(props, dict) else None
         if rating is None:

@@ -50,8 +50,7 @@ class _PortUnion:
 
 
 def _symbol_caption(item: OneLineSymbolItem) -> str:
-    name = (getattr(item, "display_name", "") or "").strip()
-    return name or item.label or item.instance_id
+    return item.visible_id() or item.label
 
 
 def check_circuit(scene: QGraphicsScene) -> dict:

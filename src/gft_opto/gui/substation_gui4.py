@@ -527,9 +527,9 @@ class SubstationGuiMockup(QMainWindow):
         self.prop_type = QLineEdit("—")
         self.prop_type.setReadOnly(True)
         properties_layout.addWidget(self.prop_type, 0, 1)
-        properties_layout.addWidget(QLabel("Name:"), 1, 0)
+        properties_layout.addWidget(QLabel("ID:"), 1, 0)
         self.prop_name = QLineEdit("—")
-        self.prop_name.textChanged.connect(self._on_property_name_changed)
+        self.prop_name.textChanged.connect(self._on_property_id_changed)
         properties_layout.addWidget(self.prop_name, 1, 1)
 
         self.prop_status_label = QLabel("Status:")
@@ -971,6 +971,7 @@ class SubstationGuiMockup(QMainWindow):
         items = self.workspace_scene.selectedItems()
         if not items:
             self.prop_type.setText("—")
+            self.prop_name.setReadOnly(True)
             self.prop_name.setText("—")
             self._set_bus_property_mode(False)
             self._clear_custom_component_properties()
@@ -978,8 +979,9 @@ class SubstationGuiMockup(QMainWindow):
 
         item = items[0]
         if isinstance(item, OneLineSymbolItem):
+            self.prop_name.setReadOnly(False)
             self.prop_name.blockSignals(True)
-            self.prop_name.setText(item.display_name)
+            self.prop_name.setText(item.visible_id())
             self.prop_name.blockSignals(False)
         if isinstance(item, BusItem):
             self.prop_type.setText(
@@ -1001,27 +1003,34 @@ class SubstationGuiMockup(QMainWindow):
                 self._clear_custom_component_properties()
         elif isinstance(item, ConnectionItem):
             self.prop_type.setText("Connection")
+            self.prop_name.setReadOnly(True)
             self.prop_name.setText(
-                f"{item.from_item.instance_id}:{item.from_port} → "
-                f"{item.to_item.instance_id}:{item.to_port}"
+                f"{item.from_item.visible_id()}:{item.from_port} → "
+                f"{item.to_item.visible_id()}:{item.to_port}"
             )
             self._set_bus_property_mode(False)
             self._clear_custom_component_properties()
         else:
             self.prop_type.setText(type(item).__name__)
+            self.prop_name.setReadOnly(True)
             self._set_bus_property_mode(False)
             self._clear_custom_component_properties()
 
-    def _on_property_name_changed(self, text: str):
-        """The name typed in the properties panel is drawn above the symbol."""
+    def _on_property_id_changed(self, text: str):
+        """The id typed in the properties panel is drawn beside the symbol."""
         if not hasattr(self, "workspace_scene"):
             return
         selected = self.workspace_scene.selectedItems()
         if len(selected) != 1 or not isinstance(selected[0], OneLineSymbolItem):
             return
+        new_id = text.strip()
+        if not new_id or new_id == "—":
+            return
         symbol = selected[0]
+        if new_id == symbol.visible_id():
+            return
         symbol.prepareGeometryChange()
-        symbol.display_name = text
+        symbol.display_id = new_id
         symbol._label_rect_cache = None
         symbol.refresh_label_placement()
         symbol.update()

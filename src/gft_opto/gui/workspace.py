@@ -56,8 +56,8 @@ from gft_opto.gui.symbols import (
     ConnectionItem,
     JunctionItem,
     OneLineSymbolItem,
-    _instance_counters,
     make_user_equipment,
+    release_instance_id,
 )
 
 # ---------------------------------------------------------------------------
@@ -423,7 +423,7 @@ class WorkspaceView(QGraphicsView):
         self._saved_drag_mode = self.dragMode()
         self.setDragMode(QGraphicsView.DragMode.NoDrag)
         self.setCursor(Qt.CursorShape.ClosedHandCursor)
-        self._set_status(f"Rotate {item.instance_id} ({item.rotation_deg:g}°)")
+        self._set_status(f"Rotate {item.visible_id()} ({item.rotation_deg:g}°)")
 
     def _update_rotate(self, scene_pos: QPointF):
         item = self._rotate_item
@@ -442,7 +442,7 @@ class WorkspaceView(QGraphicsView):
             if snapped < 0:
                 snapped += 360.0
         item.set_rotation_deg(snapped)
-        self._set_status(f"Rotate {item.instance_id} → {snapped:g}°")
+        self._set_status(f"Rotate {item.visible_id()} → {snapped:g}°")
 
     def _commit_rotate_if_any(self):
         item = self._rotate_item
@@ -456,7 +456,7 @@ class WorkspaceView(QGraphicsView):
         self.unsetCursor()
         if abs(new_rot - old_rot) > 1e-6:
             self._push(RotateEquipmentCommand([(item, old_rot, new_rot)]))
-            self._set_status(f"Rotated {item.instance_id} to {new_rot:g}°")
+            self._set_status(f"Rotated {item.visible_id()} to {new_rot:g}°")
         else:
             self._set_status("Ready")
 
@@ -485,7 +485,7 @@ class WorkspaceView(QGraphicsView):
         self._saved_drag_mode = self.dragMode()
         self.setDragMode(QGraphicsView.DragMode.NoDrag)
         self.setCursor(Qt.CursorShape.SizeAllCursor)
-        self._set_status(f"Resize {item.instance_id} (scale {item.scale_factor:g})")
+        self._set_status(f"Resize {item.visible_id()} (scale {item.scale_factor:g})")
 
     def _update_resize(self, scene_pos: QPointF):
         item = self._resize_item
@@ -499,7 +499,7 @@ class WorkspaceView(QGraphicsView):
         if item.max_scale is not None:
             snapped = min(item.max_scale, snapped)
         item.set_scale_factor(snapped)
-        self._set_status(f"Resize {item.instance_id} → {snapped:g}×")
+        self._set_status(f"Resize {item.visible_id()} → {snapped:g}×")
 
     def _commit_resize_if_any(self):
         item = self._resize_item
@@ -515,7 +515,7 @@ class WorkspaceView(QGraphicsView):
             # Undo stack expects redo() to apply the new value; item is already there,
             # so push a command that no-ops on first redo by setting again.
             self._push(ResizeEquipmentCommand(item, old_scale, new_scale))
-            self._set_status(f"Resized {item.instance_id} to {new_scale:g}×")
+            self._set_status(f"Resized {item.visible_id()} to {new_scale:g}×")
         else:
             self._set_status("Ready")
 
@@ -538,7 +538,7 @@ class WorkspaceView(QGraphicsView):
             else Qt.CursorShape.SizeHorCursor
         )
         self.setCursor(cursor)
-        self._set_status(f"Drag {bus.instance_id} {port} end to change length")
+        self._set_status(f"Drag {bus.visible_id()} {port} end to change length")
 
     def _update_bus_resize(self, scene_pos: QPointF):
         bus = self._bus_resize_item
@@ -549,7 +549,7 @@ class WorkspaceView(QGraphicsView):
         if self._snap_to_grid:
             point = bus.project_onto_axis(snap_point_to_grid(point))
         bus.set_end_base_x(port, bus._unclamped_base_x(point))
-        self._set_status(f"Resize {bus.instance_id}")
+        self._set_status(f"Resize {bus.visible_id()}")
 
     def _commit_bus_resize_if_any(self):
         bus = self._bus_resize_item
@@ -565,7 +565,7 @@ class WorkspaceView(QGraphicsView):
         self.unsetCursor()
         if abs(new_x - old_x) > 1e-6:
             self._push(ResizeBusCommand(bus, port, old_x, new_x))
-            self._set_status(f"Resized {bus.instance_id}")
+            self._set_status(f"Resized {bus.visible_id()}")
         else:
             self._set_status("Ready")
 
@@ -620,7 +620,7 @@ class WorkspaceView(QGraphicsView):
         if moves:
             self._push(MoveEquipmentCommand(moves))
             if len(moves) == 1:
-                self._set_status(f"Moved {moves[0][0].instance_id}")
+                self._set_status(f"Moved {moves[0][0].visible_id()}")
             else:
                 self._set_status(f"Moved {len(moves)} items")
 
@@ -663,7 +663,7 @@ class WorkspaceView(QGraphicsView):
         self._push(RotateEquipmentCommand(rotations))
         if len(rotations) == 1:
             self._set_status(
-                f"Rotated {rotations[0][0].instance_id} to {rotations[0][2]:g}°"
+                f"Rotated {rotations[0][0].visible_id()} to {rotations[0][2]:g}°"
             )
         else:
             self._set_status(f"Rotated {len(rotations)} items")
@@ -800,7 +800,7 @@ class WorkspaceView(QGraphicsView):
                 self._temp_line.setPath(wire_path_from_points([start, start]))
                 self._temp_line.setVisible(False)
                 self.scene().addItem(self._temp_line)
-                self._set_status(f"Drag to a port from {item.instance_id}:{port}")
+                self._set_status(f"Drag to a port from {item.visible_id()}:{port}")
                 event.accept()
                 return
 
@@ -879,8 +879,8 @@ class WorkspaceView(QGraphicsView):
                     )
                     self._cancel_pending()
                     self._set_status(
-                        f"Connected {from_item.instance_id}:{from_port} → "
-                        f"{to_item.instance_id}:{to_port}"
+                        f"Connected {from_item.visible_id()}:{from_port} → "
+                        f"{to_item.visible_id()}:{to_port}"
                     )
                     event.accept()
                     return
@@ -896,8 +896,8 @@ class WorkspaceView(QGraphicsView):
                     )
                     self._cancel_pending()
                     self._set_status(
-                        f"Connected {from_item.instance_id}:{from_port} → "
-                        f"{bus.instance_id}"
+                        f"Connected {from_item.visible_id()}:{from_port} → "
+                        f"{bus.visible_id()}"
                     )
                     event.accept()
                     return
@@ -919,7 +919,7 @@ class WorkspaceView(QGraphicsView):
                     )
                     self._cancel_pending()
                     self._set_status(
-                        f"Teed {from_item.instance_id}:{from_port} into wire junction"
+                        f"Teed {from_item.visible_id()}:{from_port} into wire junction"
                     )
                     event.accept()
                     return
@@ -978,10 +978,10 @@ class WorkspaceView(QGraphicsView):
             return self._drop_preview
 
         self._clear_drop_preview()
-        # Avoid burning a permanent instance id on the transient ghost.
-        prior_count = _instance_counters[equip_id]
+        # The ghost is not the placed symbol. Give its id back so drop
+        # shows the same number the user saw while dragging.
         symbol = meta["factory"]()
-        _instance_counters[equip_id] = prior_count
+        release_instance_id(symbol.equip_type)
 
         symbol.setOpacity(0.55)
         symbol.setZValue(300)
@@ -1041,9 +1041,8 @@ class WorkspaceView(QGraphicsView):
         ):
             pos = QPointF(self._drop_preview.pos())
         else:
-            prior_count = _instance_counters[equip_id]
             temp = meta["factory"]()
-            _instance_counters[equip_id] = prior_count
+            release_instance_id(temp.equip_type)
             pos = self._snapped_place_pos(
                 self.mapToScene(event.position().toPoint()),
                 temp,
@@ -1058,7 +1057,7 @@ class WorkspaceView(QGraphicsView):
         OneLineSymbolItem.snap_to_grid_enabled = was_snap
         symbol.setZValue(100)
         self._push(AddEquipmentCommand(self.scene(), symbol))
-        self._set_status(f"Placed {symbol.instance_id}")
+        self._set_status(f"Placed {symbol.visible_id()}")
         event.acceptProposedAction()
 
 
