@@ -97,7 +97,15 @@ ROTATE_DRAG_SNAP = 15.0      # degrees — snap while dragging the rotate handle
 
 # Branding / theme
 UI_ACCENT = "#006A4E"        # bottle green — primary GUI accent
-GFT_LOGO_PATH = Path(__file__).resolve().parent.parent / "assets" / "gft_logo.png"
+def _resource_root() -> Path:
+    """Package directory in a checkout, or the frozen bundle root in an .exe."""
+    bundled = getattr(sys, "_MEIPASS", None)
+    if bundled:
+        return Path(bundled)
+    return Path(__file__).resolve().parent.parent
+
+
+GFT_LOGO_PATH = _resource_root() / "assets" / "gft_logo.png"
 GFT_LOGO_HEIGHT = 34         # px — header wordmark height
 
 _instance_counters: dict[str, int] = defaultdict(int)
@@ -1094,10 +1102,15 @@ class SubstationGuiMockup(QMainWindow):
 # Entry point
 # ---------------------------------------------------------------------------
 
-if __name__ == "__main__":
+def main() -> None:
+    """Open the substation design window."""
     app = QApplication(sys.argv)
     app.setFont(QFont("Segoe UI", 11))
 
     window = SubstationGuiMockup()
     window.showMaximized()
     sys.exit(app.exec())
+
+
+if __name__ == "__main__":
+    main()
