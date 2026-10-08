@@ -14,14 +14,15 @@ from html import escape
 import pymupdf
 from PySide6.QtCore import Qt, QByteArray, QMimeData, QRectF
 from PySide6.QtGui import (
-    QDrag, QFont, QImage, QKeySequence, QPixmap, QTextDocument, QUndoStack,
+    QAction, QDrag, QFont, QImage, QKeySequence, QPixmap, QTextDocument,
+    QUndoStack,
 )
 from PySide6.QtPrintSupport import QPrinter
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFrame, QGraphicsScene,
     QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget,
     QListWidgetItem, QMainWindow, QMessageBox, QPushButton, QSlider, QTextEdit,
-    QVBoxLayout, QWidget,
+    QMenu, QVBoxLayout, QWidget,
 )
 
 from gft_opto.gui.circuit_check import check_circuit
@@ -413,8 +414,15 @@ class SubstationGuiMockup(QMainWindow):
         self.run_btn = QPushButton("Run Evaluation")
         self.run_btn.clicked.connect(self._on_run_evaluation_clicked)
 
-        self.save_results_btn = QPushButton("Save Calculation Results")
-        self.save_results_btn.clicked.connect(self._on_save_results_clicked)
+        self.save_results_btn = QPushButton("Save Results")
+        save_results_menu = QMenu(self.save_results_btn)
+        save_calculation_action = QAction("Save Calculation PDF", self)
+        save_netlist_action = QAction("Save Netlist PDF", self)
+        save_results_menu.addAction(save_calculation_action)
+        save_results_menu.addAction(save_netlist_action)
+        self.save_results_btn.setMenu(save_results_menu)
+        save_calculation_action.triggered.connect(self._on_save_calculation_pdf)
+        save_netlist_action.triggered.connect(self._on_save_netlist_pdf)
         self.save_results_btn.setEnabled(False)
 
         layout.addWidget(logo)
@@ -709,25 +717,12 @@ class SubstationGuiMockup(QMainWindow):
                 f"Evaluation complete — peak {result.get('peak_current_A', 0):g} A"
             )
 
-    def _on_save_results_clicked(self):
-        if self.last_result is None or self.last_netlist is None:
+    def _on_save_calculation_pdf(self):
+        if self.last_result is None:
             QMessageBox.information(
-                self, "Save Calculation Results", "Run an evaluation first."
+                self, "Save Calculation PDF", "Run an evaluation first."
             )
             return
-
-        file_path, _ = QFileDialog.getSaveFileName(
-            self,
-            "Save Calculation Results",
-            "calculation_results.pdf",
-            "PDF Files (*.pdf)",
-        )
-
-        if not file_path:
-            return
-
-        if not file_path.lower().endswith(".pdf"):
-            file_path += ".pdf"
 
         result = self.last_result
 
@@ -756,17 +751,6 @@ class SubstationGuiMockup(QMainWindow):
         )
 
         output_html = escape(self.output_box.toPlainText())
-
-        raw_data = escape(
-            json.dumps(
-                {
-                    "netlist": self.last_netlist,
-                    "result": result,
-                },
-                indent=2,
-                default=str,
-            )
-        )
 
         html = f"""
         <html>
@@ -823,13 +807,55 @@ class SubstationGuiMockup(QMainWindow):
           <h2>Evaluation Output</h2>
 
           <pre>{output_html}</pre>
-
-          <h2>Netlist and Result Data</h2>
-
-          <pre>{raw_data}</pre>
         </body>
         </html>
         """
+
+        self._save_html_as_pdf(
+            "Save Calculation PDF",
+            "calculation_results.pdf",
+            html,
+        )
+
+    def _on_save_netlist_pdf(self):
+        if self.last_netlist is None:
+            QMessageBox.information(
+                self, "Save Netlist PDF", "Run an evaluation first."
+            )
+            return
+
+        netlist_json = escape(
+            json.dumps(self.last_netlist, indent=2, default=str)
+        )
+        html = f"""
+        <html>
+        <head>
+          <style>
+            body {{ font-family: sans-serif; font-size: 10pt; }}
+            h1 {{ color: #006A4E; }}
+            pre {{ white-space: pre-wrap; }}
+          </style>
+        </head>
+        <body>
+          <h1>Netlist</h1>
+          <pre>{netlist_json}</pre>
+        </body>
+        </html>
+        """
+        self._save_html_as_pdf("Save Netlist PDF", "netlist.pdf", html)
+
+    def _save_html_as_pdf(self, title: str, default_filename: str, html: str):
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            title,
+            default_filename,
+            "PDF Files (*.pdf)",
+        )
+        if not file_path:
+            return
+
+        if not file_path.lower().endswith(".pdf"):
+            file_path += ".pdf"
 
         printer = QPrinter()
         printer.setOutputFormat(QPrinter.OutputFormat.PdfFormat)
@@ -842,12 +868,12 @@ class SubstationGuiMockup(QMainWindow):
             document.print_(printer)
         except Exception as error:
             QMessageBox.critical(
-            self, "Save Failed", f"Could not create the PDF:\n{error}"
-         )
-        return
+                self, "Save Failed", f"Could not create the PDF:\n{error}"
+            )
+            return
 
         self.footer_status_label.setText(
-            f"Results saved: {file_path}"
+            f"PDF saved: {file_path}"
         )
 
     def _on_create_component_clicked(self):
