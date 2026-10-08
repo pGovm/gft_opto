@@ -56,6 +56,10 @@ from PySide6.QtPrintSupport import QPrinter
 from pathlib import Path
 from collections import defaultdict
 
+from gft_opto.logic.netlist_manager import (
+    build_netlist,
+    export_netlist_json,
+)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -425,6 +429,11 @@ class SubstationGuiMockup(QMainWindow):
         save_netlist_action.triggered.connect(self._on_save_netlist_pdf)
         self.save_results_btn.setEnabled(False)
 
+        self.export_netlist_btn = QPushButton("Export Netlist JSON")
+        self.export_netlist_btn.clicked.connect(
+            self._on_export_netlist_json
+        )
+
         layout.addWidget(logo)
         layout.addWidget(title)
         layout.addStretch()
@@ -435,6 +444,7 @@ class SubstationGuiMockup(QMainWindow):
         layout.addWidget(self.check_btn)
         layout.addWidget(self.run_btn)
         layout.addWidget(self.save_results_btn)
+        layout.addWidget(self.export_netlist_btn)
         return frame
 
     def _build_content(self):
@@ -818,14 +828,10 @@ class SubstationGuiMockup(QMainWindow):
         )
 
     def _on_save_netlist_pdf(self):
-        if self.last_netlist is None:
-            QMessageBox.information(
-                self, "Save Netlist PDF", "Run an evaluation first."
-            )
-            return
-
+        netlist = self._build_current_netlist()
+        self.last_netlist = netlist
         netlist_json = escape(
-            json.dumps(self.last_netlist, indent=2, default=str)
+            json.dumps(netlist, indent=2, default=str)
         )
         html = f"""
         <html>
@@ -843,6 +849,48 @@ class SubstationGuiMockup(QMainWindow):
         </html>
         """
         self._save_html_as_pdf("Save Netlist PDF", "netlist.pdf", html)
+
+    def _build_current_netlist(self):
+        """Build a netlist from the live diagram and selected project."""
+        project_name = (
+            self.project_box.currentText()
+            if hasattr(self, "project_box")
+            else "Untitled Project"
+        )
+        return build_netlist(
+            self.workspace_scene,
+            project_name=project_name,
+        )
+
+    def _on_export_netlist_json(self):
+        """Export the current diagram, not the test netlist."""
+        try:
+            netlist = self._build_current_netlist()
+
+            file_path, _ = QFileDialog.getSaveFileName(
+                self,
+                "Export Netlist JSON",
+                "netlist.json",
+                "JSON Files (*.json)",
+            )
+
+            if not file_path:
+                return
+
+            if not file_path.lower().endswith(".json"):
+                file_path += ".json"
+
+            export_netlist_json(netlist, file_path)
+            self.last_netlist = netlist
+            self.footer_status_label.setText(
+                f"Netlist exported: {file_path}"
+            )
+        except Exception as error:
+            QMessageBox.critical(
+                self,
+                "Netlist Export Failed",
+                f"Could not export the netlist:\n{error}",
+            )
 
     def _save_html_as_pdf(self, title: str, default_filename: str, html: str):
         file_path, _ = QFileDialog.getSaveFileName(
