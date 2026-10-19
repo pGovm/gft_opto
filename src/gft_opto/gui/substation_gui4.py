@@ -12,12 +12,13 @@ import time
 import math
 import os
 import tempfile
+import copy
 from html import escape
 
 import pymupdf
 from PySide6.QtCore import Qt, QByteArray, QMimeData, QRectF
 from PySide6.QtGui import (
-    QAction,
+    QAction, QColor, QPen, QBrush,
     QDrag, QFont, QImage, QKeySequence, QPixmap, QTextDocument, QUndoStack,
 )
 from PySide6.QtPrintSupport import QPrinter
@@ -25,7 +26,7 @@ from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFrame, QGraphicsScene,
     QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget,
     QListWidgetItem, QMainWindow, QMessageBox, QPushButton, QSlider, QTextEdit,
-    QVBoxLayout, QWidget,
+    QVBoxLayout, QWidget, QGraphicsRectItem, QGraphicsPathItem,
 )
 
 from gft_opto.gui.circuit_check import check_circuit
@@ -52,8 +53,10 @@ from gft_opto.gui.symbols import (
 )
 from gft_opto.gui.workspace import WorkspaceView
 from gft_opto.gui.commands import EditPropertyCommand
-from gft_opto.gui.layout_io import scene_data, build_scene, reserve_ids, write_layout, validate_properties
-from gft_opto.logic.momentary_calc2 import netlist_from_scene, scenario_from_netlist
+from gft_opto.gui.layout_io import scene_data, build_scene, reserve_ids, write_layout
+from gft_opto.logic.momentary_calc2 import netlist_from_scene
+from gft_opto.logic.protection_zones import propose_zones, evaluate_zones
+from gft_opto.gui.zone_dialog import ZoneDialog
 from pathlib import Path
 from collections import defaultdict
 
@@ -198,6 +201,9 @@ class SubstationGuiMockup(QMainWindow):
         self._saved_snapshot = None
         self.last_netlist: dict | None = None
         self.last_result: dict | None = None
+        self.protection_zones = []
+        self._zone_overlays = []
+        self._zone_report = None
         self.setWindowTitle("AI-Assisted Substation Design Tool")
         self.setMinimumSize(1000, 700)
         self._apply_stylesheet()
@@ -360,6 +366,7 @@ class SubstationGuiMockup(QMainWindow):
             "version": 1, "project": self.project_box.text().strip() or "Untitled Project",
             "scene_rect": [rect.x(), rect.y(), rect.width(), rect.height()],
             "pdf": self.pdf_path,
+            "zones": copy.deepcopy(self.protection_zones),
             "library": {key: meta["definition"] for key, meta in EQUIPMENT_DEFS.items()},
             "settings": {"grid_visible": self.grid_show_cb.isChecked(),
                          "grid_opacity": self.grid_opacity_slider.value(),
@@ -369,6 +376,12 @@ class SubstationGuiMockup(QMainWindow):
         }
 
     def _invalidate_results(self):
+        self._clear_zone_highlights()
+        self._zone_report = None
+        self.zone_view.blockSignals(True)
+        self.zone_view.clear()
+        self.zone_view.addItem("Run Evaluation to display zones")
+        self.zone_view.blockSignals(False)
         if self.last_result is not None:
             self.output_box.append("\nResults are outdated. Run Evaluation again before exporting.")
         self.last_result = self.last_netlist = None
@@ -473,6 +486,9 @@ class SubstationGuiMockup(QMainWindow):
 
     def _install_layout(self, data, staged_scene, path, pixmap):
         self._loading = True
+        self._clear_zone_highlights()
+        self._zone_report = None
+        self.protection_zones = copy.deepcopy(data.get("zones", []))
         view = self.workspace_view
         view._cancel_pending()
         view._clear_drop_preview()
@@ -522,6 +538,10 @@ class SubstationGuiMockup(QMainWindow):
         self.last_result = self.last_netlist = None
         self.output_box.clear()
         self.save_results_btn.setEnabled(False)
+        self.zone_view.blockSignals(True)
+        self.zone_view.clear()
+        self.zone_view.addItem("Run Evaluation to display zones")
+        self.zone_view.blockSignals(False)
         self._on_selection_changed()
         self._saved_snapshot = self._layout_data()
         self._loading = False
@@ -848,6 +868,16 @@ class SubstationGuiMockup(QMainWindow):
 
         analysis_group = QGroupBox("Analysis Output")
         analysis_layout = QVBoxLayout(analysis_group)
+        self.zone_setup_btn = QPushButton("Configure Protection Zones")
+        self.zone_setup_btn.clicked.connect(self._configure_protection_zones)
+        analysis_layout.addWidget(self.zone_setup_btn)
+        self.expand_analysis_btn = QPushButton("Expand Analysis")
+        self.expand_analysis_btn.clicked.connect(self._expand_zone_analysis)
+        analysis_layout.addWidget(self.expand_analysis_btn)
+        self.zone_view = QComboBox()
+        self.zone_view.addItem("Run Evaluation to display zones")
+        self.zone_view.currentIndexChanged.connect(self._show_zone_highlights)
+        analysis_layout.addWidget(self.zone_view)
         self.output_box = QTextEdit()
         self.output_box.setPlaceholderText("Analysis results will appear here...")
         self.output_box.setReadOnly(True)
@@ -896,90 +926,158 @@ class SubstationGuiMockup(QMainWindow):
         else:
             QMessageBox.warning(self, "Validate", message)
 
-    def _on_run_evaluation_clicked(self):
-        """Evaluate the currents entered on the actual drawing."""
-        system_name = self.project_box.text().strip() or "Untitled Project"
+    def _protection_netlist(self):
+        netlist = netlist_from_scene(self.workspace_scene,
+            system_name=self.project_box.text().strip() or "Untitled Project")
+        labels = {item.instance_id: item.visible_id() for item in self.workspace_scene.items()
+                  if isinstance(item, OneLineSymbolItem)}
+        for component in netlist["components"]:
+            component["label"] = labels[component["id"]]
+        return netlist
 
-        started = time.perf_counter()
-        try:
-            netlist = netlist_from_scene(self.workspace_scene, system_name=system_name)
-            for component in netlist["components"]:
-                validate_properties(component["properties"])
-                component["label"] = next(
-                    item.visible_id() for item in self.workspace_scene.items()
-                    if isinstance(item, OneLineSymbolItem) and item.instance_id == component["id"]
-                )
-            scenario = scenario_from_netlist(netlist)
-            if not scenario.loads:
-                self.last_result = self.last_netlist = None
-                self.save_results_btn.setEnabled(False)
-                self.output_box.setPlainText(
-                    "No current loads to evaluate. Place components and enter their coil or motor currents."
-                )
-                self.footer_status_label.setText("No current loads to evaluate")
-                return
-            result = scenario.calculate()
-            if not math.isfinite(result["peak_current_A"]):
-                raise ValueError("The total current is too large. Check the entered loads.")
-            result["calculation_steps"] = [
-                "Assume all entered coil and motor currents operate simultaneously.",
-                "Peak current = sum of all entered loads = "
-                + " + ".join(f"{load.total_amps():g}" for load in scenario.loads)
-                + f" = {result['peak_current_A']:g} A.",
-                "Connectivity and switch status do not select loads; this is not a network simulation or an amp-hour battery sizing calculation.",
-            ]
-        except Exception as e:
-            self.last_result = self.last_netlist = None
-            self.save_results_btn.setEnabled(False)
-            if hasattr(self, "output_box"):
-                self.output_box.setPlainText(f"Evaluation failed:\n{e}")
-            if hasattr(self, "footer_status_label"):
-                self.footer_status_label.setText(f"Evaluation failed: {e}")
+    def _configure_protection_zones(self):
+        netlist = self._protection_netlist()
+        dialog = ZoneDialog(netlist, self.protection_zones or propose_zones(netlist), self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.protection_zones = dialog.zones
+            self._mark_modified()
+            self._on_run_evaluation_clicked()
+
+    def _expand_zone_analysis(self):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Momentary Load Analysis")
+        dialog.resize(950, 700)
+        layout = QVBoxLayout(dialog)
+        text = QTextEdit()
+        text.setReadOnly(True)
+        text.setPlainText(self.output_box.toPlainText() or "Run Evaluation to generate a protection-zone study.")
+        layout.addWidget(text)
+        close = QPushButton("Close")
+        close.clicked.connect(dialog.accept)
+        layout.addWidget(close)
+        dialog.exec()
+
+    def _clear_zone_highlights(self):
+        for overlay in self._zone_overlays:
+            if overlay.scene() is not None:
+                overlay.scene().removeItem(overlay)
+        self._zone_overlays = []
+
+    def _show_zone_highlights(self, *_):
+        self._clear_zone_highlights()
+        if self._zone_report is None:
             return
-        
-        self.last_netlist = netlist
-        self.last_result = result
-        self._evaluated_snapshot = self._layout_data()
-        self.save_results_btn.setEnabled(True)
+        selected = self.zone_view.currentData()
+        symbols = {item.instance_id: item for item in self.workspace_scene.items()
+                   if isinstance(item, OneLineSymbolItem)}
+        colors = ("#0072b2", "#d55e00", "#009e73", "#cc79a7", "#e69f00", "#56b4e9")
+        for index, zone in enumerate(self._zone_report["zones"]):
+            if selected and zone["id"] != selected:
+                continue
+            color = QColor(colors[index % len(colors)])
+            pen = QPen(color, 3)
+            if not zone["complete"]:
+                pen.setStyle(Qt.PenStyle.DashLine)
+            member_ids = set(zone["members"])
+            for ident in member_ids:
+                if ident not in symbols:
+                    continue
+                margin = 8 + (index % 3) * 4
+                overlay = QGraphicsRectItem(symbols[ident].sceneBoundingRect().adjusted(-margin, -margin, margin, margin))
+                overlay.setPen(pen)
+                fill = QColor(color)
+                fill.setAlpha(25)
+                overlay.setBrush(QBrush(fill))
+                self._add_zone_overlay(overlay, zone["name"])
+            for wire in self.workspace_scene.items():
+                if isinstance(wire, ConnectionItem) and wire.from_item.instance_id in member_ids and wire.to_item.instance_id in member_ids:
+                    overlay = QGraphicsPathItem(wire.path())
+                    wire_pen = QPen(color, 7)
+                    wire_pen.setCosmetic(True)
+                    overlay.setPen(wire_pen)
+                    overlay.setOpacity(0.4)
+                    self._add_zone_overlay(overlay, zone["name"])
 
-        elapsed_ms = (time.perf_counter() - started) * 1000.0
-        if hasattr(self, "response_time_label"):
-            self.response_time_label.setText(f"Response time: {elapsed_ms:.0f} ms")
+    def _add_zone_overlay(self, overlay, name):
+        overlay.setZValue(10)
+        overlay.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+        overlay.setToolTip(name)
+        self.workspace_scene.addItem(overlay)
+        self._zone_overlays.append(overlay)
 
-        lines: list[str] = []
-        lines.append("Momentary peak current — all entered loads operating simultaneously")
-        lines.append("Connections and switch status do not select loads. Battery capacity (Ah) is not calculated.")
-        lines.append(f"System: {result.get('scenario_name', system_name)}")
-        lines.append(f"Voltage: {result.get('voltage_V', 125):g} V")
-        lines.append(f"Components: {len(netlist.get('components', []))}")
-        lines.append(f"Connections: {len(netlist.get('connections', []))}")
-        lines.append("")
-        lines.append(f"Peak current: {result.get('peak_current_A', 0):g} A")
-        lines.append("")
-        loads = result.get("loads") or []
-        if loads:
-            lines.append("Loads:")
-            for ld in loads:
-                note = f"  ({ld['note']})" if ld.get("note") else ""
-                lines.append(
-                    f"  • {ld.get('name', '?')}: {ld.get('total_amps', 0):g} A{note}"
-                )
-        else:
-            lines.append("Loads: (none)")
-
-        warnings = result.get("warnings") or []
-        if warnings:
-            lines.append("")
-            lines.append("Warnings:")
-            for w in warnings:
-                lines.append(f"  ⚠ {w}")
-
-        if hasattr(self, "output_box"):
+    def _on_run_evaluation_clicked(self):
+        """Propose zones, evaluate explicit actions, and display complete or draft results."""
+        started = time.perf_counter()
+        self._invalidate_results()
+        try:
+            netlist = self._protection_netlist()
+            if not netlist["components"]:
+                self.output_box.setPlainText("No components to evaluate. Rebuild the one-line and enter its current loads.")
+                self.footer_status_label.setText("Place components before evaluating protection zones")
+                return
+            if not self.protection_zones:
+                self.protection_zones = propose_zones(netlist)
+                self._mark_modified()
+            if not self.protection_zones:
+                self.output_box.setPlainText("No bus or transformer zones could be proposed. Use Configure Protection Zones to add a line or manual zone.")
+                self.footer_status_label.setText("Configure protection zones before evaluating")
+                return
+            report = evaluate_zones(netlist, self.protection_zones)
+            self._zone_report = report
+            self.zone_view.blockSignals(True)
+            self.zone_view.clear()
+            self.zone_view.addItem("All zones (dashed = incomplete)", None)
+            for index, zone in enumerate(report["zones"]):
+                self.zone_view.addItem(f"{index + 1}. {zone['name']} — {'confirmed' if zone['complete'] else 'review required'}", zone["id"])
+            self.zone_view.blockSignals(False)
+            self._show_zone_highlights()
+            lines = [f"Momentary DC protection-zone study: {netlist['system_name']}",
+                "COMPLETE" if report["complete"] else "INCOMPLETE — configure/review flagged zones; partial totals are not final.",
+                "Each zone is a separate fault event. Same-stage loads are simultaneous; other stages are separate.",
+                "DC supplies are reported separately. No battery amp-hour calculation.", ""]
+            all_loads, warnings = [], list(report["warnings"])
+            lines.extend(f"REVIEW: {warning}" for warning in warnings)
+            for zone in report["zones"]:
+                lines.extend([f"{zone['name']} ({zone['kind']})", "  CT boundaries: " + ", ".join(zone["boundaries"]),
+                              "  Equipment: " + ", ".join(zone["members"])])
+                for warning in zone["warnings"]:
+                    lines.append(f"  REVIEW: {warning}")
+                    warnings.append(f"{zone['name']}: {warning}")
+                for scenario in zone["scenarios"]:
+                    prefix = "" if zone["complete"] else "Provisional "
+                    lines.append(f"  {prefix}{scenario['stage']}: {scenario['peak_current_A']:g} A across assigned supplies")
+                    for supply, current in scenario["supplies"].items():
+                        lines.append(f"    {supply}: {current:g} A")
+                    for load in scenario["loads"]:
+                        lines.append(f"    {load['name']}: {load['amps_per_unit']:g} A × {load['quantity']} = {load['total_amps']:g} A ({load['supply']})")
+                    all_loads.extend(scenario["loads"])
+                lines.append("")
+            lines.append("Peak per supply among confirmed, complete zones:")
+            for supply, peak in report["supply_peaks"].items():
+                lines.append(f"  {supply}: {peak['peak_current_A']:g} A — {peak['zone']} / {peak['stage']}")
+            if not report["supply_peaks"]:
+                lines.append("  Not available until zone assignments and currents are complete.")
+            worst_supply = max(report["supply_peaks"],
+                key=lambda supply: report["supply_peaks"][supply]["peak_current_A"], default=None)
+            self.last_result = {"scenario_name": netlist["system_name"], "voltage_V": netlist["voltage_V"],
+                "peak_current_A": report["supply_peaks"][worst_supply]["peak_current_A"] if worst_supply and report["complete"] else "Incomplete study",
+                "worst_case_supply": worst_supply,
+                "loads": all_loads, "warnings": warnings, "protection_analysis": report,
+                "calculation_steps": ["Group actions by zone and operating stage.",
+                    "Count each physical coil or motor once per stage; multiply entered current by the verified unit count.",
+                    "Sum currents per DC supply within each stage, then take each supply's maximum across complete zones.",
+                    "Stages and separate zone faults are not added together. Flagged zones have provisional results only."]}
+            netlist["zones"] = copy.deepcopy(self.protection_zones)
+            self.last_netlist = netlist
+            self._evaluated_snapshot = self._layout_data()
+            self.save_results_btn.setEnabled(True)
             self.output_box.setPlainText("\n".join(lines))
-        if hasattr(self, "footer_status_label"):
-            self.footer_status_label.setText(
-                f"Evaluation complete — peak {result.get('peak_current_A', 0):g} A"
-            )
+            self.footer_status_label.setText("Zone evaluation complete" if report["complete"] else "Zone evaluation needs review — Configure Protection Zones")
+        except Exception as error:
+            self._invalidate_results()
+            self.output_box.setPlainText(f"Evaluation failed:\n{error}")
+            self.footer_status_label.setText("Zone evaluation failed; see analysis output")
+        self.response_time_label.setText(f"Response time: {(time.perf_counter() - started) * 1000:.0f} ms")
 
     def _on_save_results_clicked(self):
         if self.last_result is not None and self._layout_data() != self._evaluated_snapshot:
@@ -1004,6 +1102,9 @@ class SubstationGuiMockup(QMainWindow):
             file_path += ".pdf"
 
         result = self.last_result
+        peak = result.get("peak_current_A", "Not available")
+        peak_display = f"{peak:g} A" if isinstance(peak, (int, float)) else str(peak)
+        study_status = "COMPLETE" if result.get("protection_analysis", {}).get("complete") else "INCOMPLETE — provisional study"
 
         loads = result.get("loads") or []
         load_rows = "".join(
@@ -1060,6 +1161,7 @@ class SubstationGuiMockup(QMainWindow):
 
         <body>
           <h1>Calculation Results</h1>
+          <p><b>{escape(study_status)}</b></p>
 
           <p>
             <b>System:</b>
@@ -1072,8 +1174,9 @@ class SubstationGuiMockup(QMainWindow):
           </p>
 
           <p>
-            <b>Peak current:</b>
-            {escape(str(result.get('peak_current_A', 'N/A')))} A
+            <b>Highest peak on one DC supply:</b>
+            {escape(peak_display)}
+            ({escape(str(result.get('worst_case_supply') or 'not available'))})
           </p>
 
           <h2>Loads</h2>

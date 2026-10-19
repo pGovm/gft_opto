@@ -1,0 +1,582 @@
+{
+  "version": 1,
+  "project": "Two-zone momentary load demo",
+  "pdf": null,
+  "scene_rect": [
+    0,
+    0,
+    1200,
+    900
+  ],
+  "library": {},
+  "settings": {
+    "grid_visible": true,
+    "grid_opacity": 25,
+    "snap": true,
+    "pdf_visible": true
+  },
+  "zones": [
+    {
+      "id": "transformer_zone",
+      "name": "T1 Transformer Differential",
+      "kind": "Transformer",
+      "seed": "xfmr_2w_1",
+      "boundary_cts": [
+        "ct_1",
+        "ct_2"
+      ],
+      "confirmed": true,
+      "topology_signature": "{\"components\": [[\"breaker_1\", \"breaker\", \"Closed\"], [\"breaker_2\", \"breaker\", \"Closed\"], [\"breaker_3\", \"breaker\", \"Closed\"], [\"breaker_4\", \"breaker\", \"Closed\"], [\"bus_1\", \"bus\", \"Closed\"], [\"ct_1\", \"ct\", \"Closed\"], [\"ct_2\", \"ct\", \"Closed\"], [\"ct_3\", \"ct\", \"Closed\"], [\"ct_4\", \"ct\", \"Closed\"], [\"ct_5\", \"ct\", \"Closed\"], [\"junction_1\", \"junction\", \"Closed\"], [\"junction_2\", \"junction\", \"Closed\"], [\"junction_3\", \"junction\", \"Closed\"], [\"xfmr_2w_1\", \"xfmr_2w\", \"Closed\"]], \"connections\": [[[\"breaker_1\", \"left\"], [\"junction_1\", \"node\"]], [[\"breaker_1\", \"right\"], [\"ct_1\", \"left\"]], [[\"breaker_2\", \"left\"], [\"ct_2\", \"right\"]], [[\"breaker_2\", \"right\"], [\"ct_3\", \"left\"]], [[\"breaker_3\", \"left\"], [\"ct_4\", \"right\"]], [[\"breaker_3\", \"right\"], [\"junction_2\", \"node\"]], [[\"breaker_4\", \"left\"], [\"ct_5\", \"right\"]], [[\"breaker_4\", \"right\"], [\"junction_3\", \"node\"]], [[\"bus_1\", \"feeder_1\"], [\"ct_4\", \"left\"]], [[\"bus_1\", \"feeder_2\"], [\"ct_5\", \"left\"]], [[\"bus_1\", \"infeed\"], [\"ct_3\", \"right\"]], [[\"ct_1\", \"right\"], [\"xfmr_2w_1\", \"H\"]], [[\"ct_2\", \"left\"], [\"xfmr_2w_1\", \"X\"]]]}",
+      "actions": [
+        {
+          "component": "breaker_1",
+          "load": "trip_coil_1_a",
+          "stage": "Primary trip",
+          "supply": "DC 1",
+          "units": 1
+        },
+        {
+          "component": "breaker_1",
+          "load": "trip_coil_2_a",
+          "stage": "Primary trip",
+          "supply": "DC 2",
+          "units": 1
+        },
+        {
+          "component": "breaker_2",
+          "load": "trip_coil_1_a",
+          "stage": "Primary trip",
+          "supply": "DC 1",
+          "units": 1
+        },
+        {
+          "component": "breaker_2",
+          "load": "trip_coil_2_a",
+          "stage": "Primary trip",
+          "supply": "DC 2",
+          "units": 1
+        }
+      ]
+    },
+    {
+      "id": "bus_zone",
+      "name": "BUS-1 Bus Differential",
+      "kind": "Bus",
+      "seed": "bus_1",
+      "boundary_cts": [
+        "ct_3",
+        "ct_4",
+        "ct_5"
+      ],
+      "confirmed": true,
+      "topology_signature": "{\"components\": [[\"breaker_1\", \"breaker\", \"Closed\"], [\"breaker_2\", \"breaker\", \"Closed\"], [\"breaker_3\", \"breaker\", \"Closed\"], [\"breaker_4\", \"breaker\", \"Closed\"], [\"bus_1\", \"bus\", \"Closed\"], [\"ct_1\", \"ct\", \"Closed\"], [\"ct_2\", \"ct\", \"Closed\"], [\"ct_3\", \"ct\", \"Closed\"], [\"ct_4\", \"ct\", \"Closed\"], [\"ct_5\", \"ct\", \"Closed\"], [\"junction_1\", \"junction\", \"Closed\"], [\"junction_2\", \"junction\", \"Closed\"], [\"junction_3\", \"junction\", \"Closed\"], [\"xfmr_2w_1\", \"xfmr_2w\", \"Closed\"]], \"connections\": [[[\"breaker_1\", \"left\"], [\"junction_1\", \"node\"]], [[\"breaker_1\", \"right\"], [\"ct_1\", \"left\"]], [[\"breaker_2\", \"left\"], [\"ct_2\", \"right\"]], [[\"breaker_2\", \"right\"], [\"ct_3\", \"left\"]], [[\"breaker_3\", \"left\"], [\"ct_4\", \"right\"]], [[\"breaker_3\", \"right\"], [\"junction_2\", \"node\"]], [[\"breaker_4\", \"left\"], [\"ct_5\", \"right\"]], [[\"breaker_4\", \"right\"], [\"junction_3\", \"node\"]], [[\"bus_1\", \"feeder_1\"], [\"ct_4\", \"left\"]], [[\"bus_1\", \"feeder_2\"], [\"ct_5\", \"left\"]], [[\"bus_1\", \"infeed\"], [\"ct_3\", \"right\"]], [[\"ct_1\", \"right\"], [\"xfmr_2w_1\", \"H\"]], [[\"ct_2\", \"left\"], [\"xfmr_2w_1\", \"X\"]]]}",
+      "actions": [
+        {
+          "component": "breaker_2",
+          "load": "trip_coil_1_a",
+          "stage": "Primary trip",
+          "supply": "DC 1",
+          "units": 1
+        },
+        {
+          "component": "breaker_2",
+          "load": "trip_coil_2_a",
+          "stage": "Primary trip",
+          "supply": "DC 2",
+          "units": 1
+        },
+        {
+          "component": "breaker_3",
+          "load": "trip_coil_1_a",
+          "stage": "Primary trip",
+          "supply": "DC 1",
+          "units": 1
+        },
+        {
+          "component": "breaker_3",
+          "load": "trip_coil_2_a",
+          "stage": "Primary trip",
+          "supply": "DC 2",
+          "units": 1
+        },
+        {
+          "component": "breaker_4",
+          "load": "trip_coil_1_a",
+          "stage": "Primary trip",
+          "supply": "DC 1",
+          "units": 1
+        },
+        {
+          "component": "breaker_4",
+          "load": "trip_coil_2_a",
+          "stage": "Primary trip",
+          "supply": "DC 2",
+          "units": 1
+        },
+        {
+          "component": "breaker_3",
+          "load": "close_coil_a",
+          "stage": "Reclose",
+          "supply": "DC 1",
+          "units": 1
+        },
+        {
+          "component": "breaker_2",
+          "load": "motor_inrush_a",
+          "stage": "Motor inrush",
+          "supply": "DC 1",
+          "units": 1
+        },
+        {
+          "component": "breaker_2",
+          "load": "motor_run_a",
+          "stage": "Motor run",
+          "supply": "DC 1",
+          "units": 1
+        }
+      ]
+    }
+  ],
+  "components": [
+    {
+      "id": "breaker_1",
+      "symbol": "breaker",
+      "name": "CB-HV",
+      "display_id": "CB-HV",
+      "properties": {
+        "status": "Closed",
+        "trip_coil_1_a": 10,
+        "trip_coil_2_a": 8,
+        "symbol_type": "breaker"
+      },
+      "position": [
+        270.0,
+        180.0
+      ],
+      "scale": 1.0,
+      "rotation": 0.0,
+      "ports": {
+        "left": [
+          -32.0,
+          0.0
+        ],
+        "right": [
+          32.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "id": "breaker_2",
+      "symbol": "breaker",
+      "name": "CB-LV",
+      "display_id": "CB-LV",
+      "properties": {
+        "status": "Closed",
+        "trip_coil_1_a": 12,
+        "trip_coil_2_a": 9,
+        "motor_inrush_a": 18,
+        "motor_run_a": 3,
+        "symbol_type": "breaker"
+      },
+      "position": [
+        960.0,
+        240.0
+      ],
+      "scale": 1.0,
+      "rotation": 90.0,
+      "ports": {
+        "left": [
+          -32.0,
+          0.0
+        ],
+        "right": [
+          32.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "id": "breaker_3",
+      "symbol": "breaker",
+      "name": "CB-F1",
+      "display_id": "CB-F1",
+      "properties": {
+        "status": "Closed",
+        "trip_coil_1_a": 6,
+        "trip_coil_2_a": 5,
+        "close_coil_a": 10,
+        "symbol_type": "breaker"
+      },
+      "position": [
+        450.0,
+        710.0
+      ],
+      "scale": 1.0,
+      "rotation": 90.0,
+      "ports": {
+        "left": [
+          -32.0,
+          0.0
+        ],
+        "right": [
+          32.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "id": "breaker_4",
+      "symbol": "breaker",
+      "name": "CB-F2",
+      "display_id": "CB-F2",
+      "properties": {
+        "status": "Closed",
+        "trip_coil_1_a": 7,
+        "trip_coil_2_a": 6,
+        "symbol_type": "breaker"
+      },
+      "position": [
+        800.0,
+        710.0
+      ],
+      "scale": 1.0,
+      "rotation": 90.0,
+      "ports": {
+        "left": [
+          -32.0,
+          0.0
+        ],
+        "right": [
+          32.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "id": "bus_1",
+      "symbol": "bus",
+      "name": "BUS-1",
+      "display_id": "BUS-1",
+      "properties": {
+        "rating_kv": 13.8,
+        "symbol_type": "bus"
+      },
+      "position": [
+        680.0,
+        470.0
+      ],
+      "scale": 1.0,
+      "rotation": 0.0,
+      "ports": {
+        "left": [
+          -360.0,
+          0.0
+        ],
+        "right": [
+          360.0,
+          0.0
+        ],
+        "infeed": [
+          280.0,
+          0.0
+        ],
+        "feeder_1": [
+          -230.0,
+          0.0
+        ],
+        "feeder_2": [
+          120.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "id": "ct_1",
+      "symbol": "ct",
+      "name": "CT-HV",
+      "display_id": "CT-HV",
+      "properties": {
+        "symbol_type": "ct"
+      },
+      "position": [
+        430.0,
+        180.0
+      ],
+      "scale": 1.0,
+      "rotation": 0.0,
+      "ports": {
+        "left": [
+          -28.0,
+          0.0
+        ],
+        "right": [
+          28.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "id": "ct_2",
+      "symbol": "ct",
+      "name": "CT-LV",
+      "display_id": "CT-LV",
+      "properties": {
+        "symbol_type": "ct"
+      },
+      "position": [
+        780.0,
+        180.0
+      ],
+      "scale": 1.0,
+      "rotation": 0.0,
+      "ports": {
+        "left": [
+          -28.0,
+          0.0
+        ],
+        "right": [
+          28.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "id": "ct_3",
+      "symbol": "ct",
+      "name": "CT-BUS-IN",
+      "display_id": "CT-BUS-IN",
+      "properties": {
+        "symbol_type": "ct"
+      },
+      "position": [
+        960.0,
+        360.0
+      ],
+      "scale": 1.0,
+      "rotation": 90.0,
+      "ports": {
+        "left": [
+          -28.0,
+          0.0
+        ],
+        "right": [
+          28.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "id": "ct_4",
+      "symbol": "ct",
+      "name": "CT-F1",
+      "display_id": "CT-F1",
+      "properties": {
+        "symbol_type": "ct"
+      },
+      "position": [
+        450.0,
+        590.0
+      ],
+      "scale": 1.0,
+      "rotation": 90.0,
+      "ports": {
+        "left": [
+          -28.0,
+          0.0
+        ],
+        "right": [
+          28.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "id": "ct_5",
+      "symbol": "ct",
+      "name": "CT-F2",
+      "display_id": "CT-F2",
+      "properties": {
+        "symbol_type": "ct"
+      },
+      "position": [
+        800.0,
+        590.0
+      ],
+      "scale": 1.0,
+      "rotation": 90.0,
+      "ports": {
+        "left": [
+          -28.0,
+          0.0
+        ],
+        "right": [
+          28.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "id": "junction_1",
+      "symbol": "junction",
+      "name": "Junction",
+      "display_id": "SOURCE (off-sheet)",
+      "properties": {},
+      "position": [
+        110.0,
+        180.0
+      ],
+      "scale": 1.0,
+      "rotation": 0.0,
+      "ports": {
+        "node": [
+          0.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "id": "junction_2",
+      "symbol": "junction",
+      "name": "Junction",
+      "display_id": "FEEDER 1 (off-sheet)",
+      "properties": {},
+      "position": [
+        450.0,
+        830.0
+      ],
+      "scale": 1.0,
+      "rotation": 0.0,
+      "ports": {
+        "node": [
+          0.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "id": "junction_3",
+      "symbol": "junction",
+      "name": "Junction",
+      "display_id": "FEEDER 2 (off-sheet)",
+      "properties": {},
+      "position": [
+        800.0,
+        830.0
+      ],
+      "scale": 1.0,
+      "rotation": 0.0,
+      "ports": {
+        "node": [
+          0.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "id": "xfmr_2w_1",
+      "symbol": "xfmr_2w",
+      "name": "T1",
+      "display_id": "T1",
+      "properties": {
+        "symbol_type": "xfmr_2w"
+      },
+      "position": [
+        610.0,
+        180.0
+      ],
+      "scale": 1.0,
+      "rotation": 0.0,
+      "ports": {
+        "H": [
+          -40.0,
+          0.0
+        ],
+        "X": [
+          40.0,
+          0.0
+        ]
+      }
+    }
+  ],
+  "connections": [
+    [
+      "breaker_1",
+      "right",
+      "ct_1",
+      "left"
+    ],
+    [
+      "breaker_2",
+      "right",
+      "ct_3",
+      "left"
+    ],
+    [
+      "breaker_3",
+      "right",
+      "junction_2",
+      "node"
+    ],
+    [
+      "breaker_4",
+      "right",
+      "junction_3",
+      "node"
+    ],
+    [
+      "bus_1",
+      "feeder_1",
+      "ct_4",
+      "left"
+    ],
+    [
+      "bus_1",
+      "feeder_2",
+      "ct_5",
+      "left"
+    ],
+    [
+      "ct_1",
+      "right",
+      "xfmr_2w_1",
+      "H"
+    ],
+    [
+      "ct_2",
+      "right",
+      "breaker_2",
+      "left"
+    ],
+    [
+      "ct_3",
+      "right",
+      "bus_1",
+      "infeed"
+    ],
+    [
+      "ct_4",
+      "right",
+      "breaker_3",
+      "left"
+    ],
+    [
+      "ct_5",
+      "right",
+      "breaker_4",
+      "left"
+    ],
+    [
+      "junction_1",
+      "node",
+      "breaker_1",
+      "left"
+    ],
+    [
+      "xfmr_2w_1",
+      "X",
+      "ct_2",
+      "left"
+    ]
+  ]
+}

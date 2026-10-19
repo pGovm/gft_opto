@@ -23,8 +23,10 @@ from gft_opto.gui.layout_io import build_scene, scene_data
 from gft_opto.gui.substation_gui4 import SubstationGuiMockup
 from gft_opto.gui.symbols import (
     BusItem, CircuitBreakerItem, ConnectionItem, EQUIPMENT_DEFS, OneLineSymbolItem,
-    make_user_equipment,
+    make_user_equipment, CurrentTransformerItem, GroundItem,
 )
+from gft_opto.logic.protection_zones import topology_signature
+from gft_opto.gui.zone_dialog import ZoneDialog
 
 
 class GuiWorkflows(unittest.TestCase):
@@ -60,16 +62,29 @@ class GuiWorkflows(unittest.TestCase):
         field.setText(text)
         field.editingFinished.emit()
 
+    def assign_test_zone(self, breaker):
+        w = self.window
+        bus, ct, ground = BusItem(), CurrentTransformerItem(), GroundItem()
+        for item in (bus, ct, ground):
+            w.workspace_scene.addItem(item)
+        for a, ap, b, bp in ((bus, "right", ct, "left"), (ct, "right", breaker, "left"), (breaker, "right", ground, "node")):
+            w.workspace_scene.addItem(ConnectionItem(a, ap, b, bp))
+        w.protection_zones = [{"id": "bus_zone", "name": "Test Bus Zone", "kind": "Bus",
+            "seed": bus.instance_id, "boundary_cts": [ct.instance_id], "confirmed": True,
+            "topology_signature": topology_signature(w._protection_netlist()),
+            "actions": [{"component": breaker.instance_id, "load": "trip_coil_1_a", "stage": "Primary trip", "supply": "DC 1", "units": 1}]}]
+
     def test_live_evaluation_and_stale_results(self):
         w = self.window
         w._on_run_evaluation_clicked()
         self.assertIsNone(w.last_result)
-        self.assertIn("No current loads", w.output_box.toPlainText())
+        self.assertIn("No components", w.output_box.toPlainText())
         item = self.add_breaker()
         self.commit_current("12")
+        self.assign_test_zone(item)
         w._on_run_evaluation_clicked()
         self.assertEqual(w.last_result["peak_current_A"], 12)
-        self.assertEqual(w.last_netlist["components"][0]["id"], item.instance_id)
+        self.assertIn(item.instance_id, [c["id"] for c in w.last_netlist["components"]])
         self.assertTrue(w.save_results_btn.isEnabled())
         self.commit_current("15")
         self.assertIsNone(w.last_result)
@@ -155,8 +170,9 @@ class GuiWorkflows(unittest.TestCase):
 
     def test_pdf_export_and_failure_feedback(self):
         w = self.window
-        self.add_breaker()
+        breaker = self.add_breaker()
         self.commit_current("18")
+        self.assign_test_zone(breaker)
         w._on_run_evaluation_clicked()
         path = Path(self.temp.name) / "results.pdf"
         with patch("gft_opto.gui.substation_gui4.QFileDialog.getSaveFileName", return_value=(str(path), "")):
@@ -229,6 +245,66 @@ class GuiWorkflows(unittest.TestCase):
             self.assertTrue(w._confirm_discard())
         w.new_layout()
         self.assertEqual(scene_data(w.workspace_scene)["components"], [])
+
+    def test_zone_dialog_edits_highlights_and_persistence(self):
+        w = self.window
+        breaker = self.add_breaker()
+        self.commit_current("12")
+        self.assign_test_zone(breaker)
+        dialog = ZoneDialog(w._protection_netlist(), w.protection_zones, w)
+        self.assertTrue(dialog.confirmed.isChecked())
+        dialog.actions.cellWidget(0, 4).setValue(3)
+        self.assertFalse(dialog.confirmed.isChecked())
+        dialog.confirmed.setChecked(True)
+        dialog.accept()
+        self.assertEqual(dialog.result(), dialog.DialogCode.Accepted)
+        w.protection_zones = dialog.zones
+        w._on_run_evaluation_clicked()
+        self.assertEqual(w.last_result["peak_current_A"], 36)
+        self.assertGreater(len(w._zone_overlays), 0)
+        self.assertEqual(w.zone_view.count(), 2)
+        # View-only highlights must not become saved electrical components.
+        self.assertEqual(len(scene_data(w.workspace_scene)["components"]), 4)
+        path = Path(self.temp.name) / "zones.json"
+        self.assertTrue(w.save_layout(path))
+        self.assertTrue(w.open_layout(str(path)))
+        self.assertEqual(w.protection_zones[0]["actions"][0]["units"], 3)
+        w._on_run_evaluation_clicked()
+        self.assertEqual(w.last_result["peak_current_A"], 36)
+        restored = next(i for i in w.workspace_scene.items() if isinstance(i, CircuitBreakerItem))
+        restored.setSelected(True)
+        w.prop_status.setCurrentText("Open")
+        self.assertFalse(w._zone_overlays)
+        self.assertIsNone(w.last_result)
+        dialog = ZoneDialog(w._protection_netlist(), w.protection_zones, w)
+        self.assertFalse(dialog.confirmed.isChecked())
+        dialog.reject()
+
+    def test_detected_zones_require_confirmation(self):
+        w = self.window
+        breaker = self.add_breaker()
+        self.commit_current("10")
+        self.assign_test_zone(breaker)
+        w.protection_zones = []
+        w._on_run_evaluation_clicked()
+        self.assertEqual(len(w.protection_zones), 1)
+        self.assertFalse(w.protection_zones[0]["confirmed"])
+        self.assertIn("INCOMPLETE", w.output_box.toPlainText())
+        self.assertEqual(w.last_result["protection_analysis"]["supply_peaks"], {})
+        self.assertGreater(len(w._zone_overlays), 0)
+
+    def test_dialog_cancel_and_stage_assignment(self):
+        w = self.window
+        breaker = self.add_breaker()
+        self.assign_test_zone(breaker)
+        before = w._layout_data()
+        dialog = ZoneDialog(w._protection_netlist(), w.protection_zones, w)
+        dialog.add_action({"component": breaker.instance_id, "load": "close_coil_a",
+                           "stage": "Reclose", "supply": "DC 2", "units": 1})
+        dialog.capture()
+        self.assertEqual(dialog.zones[0]["actions"][1]["stage"], "Reclose")
+        dialog.reject()
+        self.assertEqual(before, w._layout_data())
 
 
 if __name__ == "__main__":

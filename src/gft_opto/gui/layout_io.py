@@ -13,6 +13,7 @@ from gft_opto.gui.symbols import (
     BUILTIN_SYMBOLS, BusItem, ConnectionItem, JunctionItem, OneLineSymbolItem,
     _instance_counters, make_user_equipment,
 )
+from gft_opto.logic.protection_zones import validate_zones
 
 
 def scene_data(scene):
@@ -55,6 +56,7 @@ def build_scene(data):
     """Validate and construct a separate scene before touching the user's drawing."""
     if not isinstance(data, dict) or data.get("version") != 1:
         raise ValueError("Unsupported layout format or version.")
+    validate_zones(data.get("zones", []))
     if not isinstance(data.get("project"), str) or not data["project"].strip():
         raise ValueError("A project name is required.")
     rect = data["scene_rect"]
