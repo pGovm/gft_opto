@@ -17,6 +17,36 @@ from gft_opto.gui.symbols import (
 # Undo / redo commands
 # ---------------------------------------------------------------------------
 
+class EditPropertyCommand(QUndoCommand):
+    """Commit a complete property edit and refresh the selected-item panel."""
+
+    def __init__(self, item, key, value, refresh):
+        super().__init__(f"Edit {item.visible_id()} {key}")
+        self.item, self.key, self.value, self.refresh = item, key, value, refresh
+        self.old = item.display_id if key == "display_id" else getattr(item, "properties", {}).get(key)
+
+    def _apply(self, value):
+        self.item.prepareGeometryChange()
+        if self.key == "display_id":
+            self.item.display_id = value
+        else:
+            if not hasattr(self.item, "properties"):
+                self.item.properties = {}
+            if value is None:
+                self.item.properties.pop(self.key, None)
+            else:
+                self.item.properties[self.key] = value
+        self.item._label_rect_cache = None
+        self.item.refresh_label_placement()
+        self.item.update()
+        self.refresh()
+
+    def redo(self):
+        self._apply(self.value)
+
+    def undo(self):
+        self._apply(self.old)
+
 class AddEquipmentCommand(QUndoCommand):
     def __init__(self, scene: QGraphicsScene, item: OneLineSymbolItem):
         super().__init__(f"Place {item.visible_id()}")

@@ -9,11 +9,15 @@ import functools
 import json
 import sys
 import time
+import math
+import os
+import tempfile
 from html import escape
 
 import pymupdf
 from PySide6.QtCore import Qt, QByteArray, QMimeData, QRectF
 from PySide6.QtGui import (
+    QAction,
     QDrag, QFont, QImage, QKeySequence, QPixmap, QTextDocument, QUndoStack,
 )
 from PySide6.QtPrintSupport import QPrinter
@@ -47,11 +51,9 @@ from gft_opto.gui.symbols import (
     make_user_equipment,
 )
 from gft_opto.gui.workspace import WorkspaceView
-from gft_opto.examples.example_netlist import run_fake_evaluation
-from html import escape
-import json
-from PySide6.QtGui import QTextDocument
-from PySide6.QtPrintSupport import QPrinter
+from gft_opto.gui.commands import EditPropertyCommand
+from gft_opto.gui.layout_io import scene_data, build_scene, reserve_ids, write_layout, validate_properties
+from gft_opto.logic.momentary_calc2 import netlist_from_scene, scenario_from_netlist
 from pathlib import Path
 from collections import defaultdict
 
@@ -190,17 +192,43 @@ class SubstationGuiMockup(QMainWindow):
 
     def __init__(self):
         super().__init__()
+        self.layout_path = None
+        self.pdf_path = None
+        self._loading = True
+        self._saved_snapshot = None
         self.last_netlist: dict | None = None
         self.last_result: dict | None = None
         self.setWindowTitle("AI-Assisted Substation Design Tool")
-        self.setMinimumSize(1400, 800)
+        self.setMinimumSize(1000, 700)
         self._apply_stylesheet()
         self._build_ui()
         self._setup_undo_redo()
+        self._setup_file_shortcuts()
+        self._loading = False
+        self._saved_snapshot = self._layout_data()
+        self.project_box.editingFinished.connect(self._mark_modified)
+        for control in (self.grid_show_cb, self.grid_snap_cb, self.pdf_show_cb):
+            control.toggled.connect(self._mark_modified)
+        self.grid_opacity_slider.valueChanged.connect(self._mark_modified)
+        self._on_selection_changed()
 
     def _apply_stylesheet(self):
         self.setStyleSheet("""
     QMainWindow { background-color: #f4f6f8; }
+
+    QMenuBar, QMenu {
+        background-color: #ffffff;
+        color: #1f2933;
+        font-family: "Segoe UI";
+        font-size: 11pt;
+    }
+    QMenuBar::item { background: transparent; padding: 6px 12px; }
+    QMenuBar::item:selected, QMenu::item:selected {
+        background-color: #006A4E;
+        color: #ffffff;
+    }
+    QMenu::item { padding: 7px 24px; }
+    QMenu::item:disabled { color: #64748b; }
 
     QLabel, QGroupBox { color: #1f2933; }
 
@@ -306,12 +334,205 @@ class SubstationGuiMockup(QMainWindow):
         self.undo_stack.indexChanged.connect(self._on_undo_index_changed)
 
     def _on_undo_index_changed(self, _index: int):
+        self._mark_modified()
         if not hasattr(self, "footer_status_label"):
             return
         text = self.undo_stack.undoText() if self.undo_stack.canUndo() else ""
         self.footer_status_label.setText(
             f"Ready — last action: {text}" if text else "Ready"
         )
+
+    def _setup_file_shortcuts(self):
+        for title, shortcut, callback in (
+            ("New Layout", "Ctrl+N", self.new_layout),
+            ("Open Layout…", "Ctrl+O", self.open_layout),
+            ("Save Layout", "Ctrl+S", lambda: self.save_layout()),
+            ("Save Layout As…", "Ctrl+Shift+S", lambda: self.save_layout(save_as=True)),
+        ):
+            action = QAction(title, self)
+            action.setShortcut(QKeySequence(shortcut))
+            action.triggered.connect(callback)
+            self.addAction(action)
+
+    def _layout_data(self):
+        rect = self.workspace_scene.sceneRect()
+        return {
+            "version": 1, "project": self.project_box.text().strip() or "Untitled Project",
+            "scene_rect": [rect.x(), rect.y(), rect.width(), rect.height()],
+            "pdf": self.pdf_path,
+            "library": {key: meta["definition"] for key, meta in EQUIPMENT_DEFS.items()},
+            "settings": {"grid_visible": self.grid_show_cb.isChecked(),
+                         "grid_opacity": self.grid_opacity_slider.value(),
+                         "snap": self.grid_snap_cb.isChecked(),
+                         "pdf_visible": self.pdf_show_cb.isChecked()},
+            **scene_data(self.workspace_scene),
+        }
+
+    def _invalidate_results(self):
+        if self.last_result is not None:
+            self.output_box.append("\nResults are outdated. Run Evaluation again before exporting.")
+        self.last_result = self.last_netlist = None
+        self.save_results_btn.setEnabled(False)
+
+    def _mark_modified(self, *_args):
+        if self._loading:
+            return
+        data = self._layout_data()
+        self.setWindowTitle(f"{data['project']}{' *' if data != self._saved_snapshot else ''} — Substation Design Tool")
+        if self.last_result is not None and data != self._evaluated_snapshot:
+            self._invalidate_results()
+
+    def _confirm_discard(self):
+        if self._layout_data() == self._saved_snapshot:
+            return True
+        answer = QMessageBox.question(
+            self, "Unsaved Layout", "Save changes to this layout?",
+            QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Save,
+        )
+        if answer == QMessageBox.StandardButton.Save:
+            return self.save_layout()
+        return answer == QMessageBox.StandardButton.Discard
+
+    def save_layout(self, path=None, save_as=False):
+        path = path or (None if save_as else self.layout_path)
+        if not path:
+            path, _ = QFileDialog.getSaveFileName(self, "Save Layout", "layout.json", "Layout Files (*.json)")
+        if not path:
+            return False
+        if not str(path).lower().endswith(".json"):
+            path = str(path) + ".json"
+        try:
+            data = self._layout_data()
+            # Validate the same representation that Open Layout will accept.
+            checked = build_scene(data)
+            checked.clear()
+            write_layout(path, data)
+        except Exception as error:
+            QMessageBox.critical(self, "Save Failed", f"Could not save the layout:\n{error}")
+            return False
+        self.layout_path = str(Path(path).resolve())
+        self._saved_snapshot = data
+        self._mark_modified()
+        self.footer_status_label.setText(f"Layout saved: {self.layout_path}")
+        return True
+
+    def new_layout(self):
+        if not self._confirm_discard():
+            return
+        data = {"version": 1, "project": "Untitled Project", "pdf": None,
+                "scene_rect": [0, 0, DEFAULT_WORKSPACE_WIDTH, DEFAULT_WORKSPACE_HEIGHT],
+                "components": [], "connections": [], "library": {},
+                "settings": {"grid_visible": True, "grid_opacity": round(DEFAULT_GRID_OPACITY * 100),
+                             "snap": True, "pdf_visible": True}}
+        self._install_layout(data, build_scene(data), None, None)
+
+    def open_layout(self, path=None):
+        if not path:
+            path, _ = QFileDialog.getOpenFileName(self, "Open Layout", "", "Layout Files (*.json)")
+        if not path:
+            return False
+        # Build the entire replacement before discarding any current work.
+        try:
+            data = json.loads(Path(path).read_text(encoding="utf-8"))
+            scene = build_scene(data)
+            pdf = data.get("pdf")
+            pixmap = None
+            if pdf:
+                pdf = str((Path(path).resolve().parent / pdf).resolve())
+                try:
+                    pixmap = self._read_pdf_pixmap(pdf)
+                except Exception:
+                    replacement, _ = QFileDialog.getOpenFileName(
+                        self, "Locate Missing or Unreadable Background PDF (Cancel to open without it)", "", "PDF Files (*.pdf)"
+                    )
+                    if replacement:
+                        pdf = str(Path(replacement).resolve())
+                        pixmap = self._read_pdf_pixmap(pdf)
+            if not self._confirm_discard():
+                return False
+            self._install_layout(data, scene, str(Path(path).resolve()), pixmap)
+            self.pdf_path = pdf
+            self._mark_modified()
+            self.footer_status_label.setText(
+                "Layout opened; background PDF unavailable" if pdf and pixmap is None else f"Layout opened: {path}"
+            )
+            return True
+        except Exception as error:
+            QMessageBox.critical(self, "Open Failed", f"Could not open the layout:\n{error}")
+            return False
+
+    @staticmethod
+    def _read_pdf_pixmap(path):
+        with pymupdf.open(path) as document:
+            pix = document.load_page(0).get_pixmap(matrix=pymupdf.Matrix(2, 2), alpha=False)
+            image = QPixmap()
+            if not image.loadFromData(pix.tobytes("png")):
+                raise ValueError("Could not decode PDF background.")
+            return image
+
+    def _install_layout(self, data, staged_scene, path, pixmap):
+        self._loading = True
+        view = self.workspace_view
+        view._cancel_pending()
+        view._clear_drop_preview()
+        view._clear_snap_ports()
+        view._move_origins = {}
+        view._resize_item = None
+        view._rotate_item = None
+        view._bus_resize_item = None
+        self.undo_stack.clear()
+        old_scene = self.workspace_scene
+        old_scene.selectionChanged.disconnect(self._on_selection_changed)
+        staged_scene.setParent(self)
+        self.workspace_scene = staged_scene
+        view.setScene(staged_scene)
+        view._background_item = None
+        view._grid_item = None
+        view._init_grid()
+        staged_scene.selectionChanged.connect(self._on_selection_changed)
+        old_scene.deleteLater()
+        self._workspace_original = pixmap
+        if pixmap is not None:
+            view.set_background_pixmap(pixmap, scene_width=data["scene_rect"][2], scene_height=data["scene_rect"][3])
+            staged_scene.setSceneRect(QRectF(*data["scene_rect"]))
+            view._sync_grid_to_scene()
+        self.pdf_path = data.get("pdf")
+        self.layout_path = path
+        self.project_box.setText(data["project"])
+        EQUIPMENT_DEFS.clear()
+        self.equipment_list.clear()
+        for key, definition in data["library"].items():
+            EQUIPMENT_DEFS[key] = {"label": definition["name"], "definition": definition,
+                "factory": functools.partial(make_user_equipment, definition["symbol"], definition["name"], definition["properties"])}
+            entry = QListWidgetItem(definition["name"])
+            entry.setData(Qt.ItemDataRole.UserRole, key)
+            self.equipment_list.addItem(entry)
+        settings = data["settings"]
+        self.grid_show_cb.setChecked(settings["grid_visible"])
+        self.grid_snap_cb.setChecked(settings["snap"])
+        self.pdf_show_cb.setChecked(settings["pdf_visible"])
+        self.pdf_show_cb.setEnabled(pixmap is not None)
+        self.grid_opacity_slider.setValue(settings["grid_opacity"])
+        view.set_grid_visible(settings["grid_visible"])
+        view.set_snap_to_grid(settings["snap"])
+        view.set_pdf_visible(settings["pdf_visible"])
+        view.set_grid_opacity(settings["grid_opacity"])
+        reserve_ids(staged_scene)
+        self.last_result = self.last_netlist = None
+        self.output_box.clear()
+        self.save_results_btn.setEnabled(False)
+        self._on_selection_changed()
+        self._saved_snapshot = self._layout_data()
+        self._loading = False
+        self._mark_modified()
+        view.fitInView(staged_scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
+
+    def closeEvent(self, event):
+        if self._confirm_discard():
+            event.accept()
+        else:
+            event.ignore()
 
     # --- Layout assembly ----------------------------------------------------
 
@@ -359,6 +580,7 @@ class SubstationGuiMockup(QMainWindow):
             self.workspace_view.set_grid_opacity(value)
 
         self.grid_opacity_slider.valueChanged.connect(_on_opacity_changed)
+        self.grid_opacity_slider.setValue(round(DEFAULT_GRID_OPACITY * 100))
 
         self.controls_layout.addWidget(self.grid_show_cb)
         self.controls_layout.addWidget(self.pdf_show_cb)
@@ -385,7 +607,7 @@ class SubstationGuiMockup(QMainWindow):
     def _build_header(self):
         frame = QFrame()
         frame.setObjectName("toolbarFrame")
-        layout = QHBoxLayout(frame)
+        layout = QVBoxLayout(frame)
         layout.setContentsMargins(20, 14, 20, 14)
         layout.setSpacing(12)
 
@@ -399,13 +621,20 @@ class SubstationGuiMockup(QMainWindow):
 
         title = QLabel("AI-Assisted Substation Protection & Control Design")
         title.setFont(QFont("Arial", 12, QFont.Weight.Bold))
+        title.setWordWrap(True)
 
-        project_box = QComboBox()
-        project_box.addItems(["Demo Project - One Line A", "Breaker-and-a-Half Yard", "Ring Bus Example"])
-        project_box.setMinimumWidth(320)
+        project_box = QLineEdit("Untitled Project")
+        project_box.setMinimumWidth(160)
         self.project_box = project_box
 
         save_btn = QPushButton("Save Layout")
+        save_btn.clicked.connect(lambda: self.save_layout())
+        self.save_as_btn = QPushButton("Save Layout As")
+        self.save_as_btn.clicked.connect(lambda: self.save_layout(save_as=True))
+        self.open_layout_btn = QPushButton("Open Layout")
+        self.open_layout_btn.clicked.connect(lambda: self.open_layout())
+        self.new_layout_btn = QPushButton("New Layout")
+        self.new_layout_btn.clicked.connect(self.new_layout)
         self.load_btn = QPushButton("Import PDF")
         self.load_btn.clicked.connect(self.on_import_pdf_clicked)
         self.check_btn = QPushButton("Validate")
@@ -417,16 +646,23 @@ class SubstationGuiMockup(QMainWindow):
         self.save_results_btn.clicked.connect(self._on_save_results_clicked)
         self.save_results_btn.setEnabled(False)
 
-        layout.addWidget(logo)
-        layout.addWidget(title)
-        layout.addStretch()
-        layout.addWidget(QLabel("Project:"))
-        layout.addWidget(project_box)
-        layout.addWidget(self.load_btn)
-        layout.addWidget(save_btn)
-        layout.addWidget(self.check_btn)
-        layout.addWidget(self.run_btn)
-        layout.addWidget(self.save_results_btn)
+        identity_row = QHBoxLayout()
+        identity_row.addWidget(logo)
+        identity_row.addWidget(title, 1)
+        identity_row.addWidget(QLabel("Project:"))
+        identity_row.addWidget(project_box)
+        layout.addLayout(identity_row)
+
+        actions_grid = QGridLayout()
+        actions_grid.setHorizontalSpacing(12)
+        actions_grid.setVerticalSpacing(10)
+        buttons = (self.new_layout_btn, self.open_layout_btn, save_btn, self.save_as_btn,
+                   self.load_btn, self.check_btn, self.run_btn, self.save_results_btn)
+        for index, button in enumerate(buttons):
+            actions_grid.addWidget(button, index // 4, index % 4)
+        for column in range(4):
+            actions_grid.setColumnStretch(column, 1)
+        layout.addLayout(actions_grid)
         return frame
 
     def _build_content(self):
@@ -537,50 +773,61 @@ class SubstationGuiMockup(QMainWindow):
         properties_layout.addWidget(self.prop_type, 0, 1)
         properties_layout.addWidget(QLabel("ID:"), 1, 0)
         self.prop_name = QLineEdit("—")
-        self.prop_name.textChanged.connect(self._on_property_id_changed)
+        self.prop_name.editingFinished.connect(lambda: self._on_property_id_changed(self.prop_name.text()))
         properties_layout.addWidget(self.prop_name, 1, 1)
 
         self.prop_status_label = QLabel("Status:")
         properties_layout.addWidget(self.prop_status_label, 2, 0)
         self.prop_status = QComboBox()
         self.prop_status.addItems(["Closed", "Open", "Maintenance"])
+        self.prop_status.currentTextChanged.connect(self._on_property_status_changed)
         properties_layout.addWidget(self.prop_status, 2, 1)
 
         self.prop_trip_coil_1_label = QLabel("Trip Coil 1 (A):")
         properties_layout.addWidget(self.prop_trip_coil_1_label, 3, 0)
         self.prop_trip_coil_1 = QLineEdit("—")
-        self.prop_trip_coil_1.setReadOnly(True)
+        self.prop_trip_coil_1.editingFinished.connect(
+            lambda: self._on_numeric_property_changed("trip_coil_1_a", self.prop_trip_coil_1.text())
+        )
         properties_layout.addWidget(self.prop_trip_coil_1, 3, 1)
 
         self.prop_trip_coil_2_label = QLabel("Trip Coil 2 (A):")
         properties_layout.addWidget(self.prop_trip_coil_2_label, 4, 0)
         self.prop_trip_coil_2 = QLineEdit("—")
-        self.prop_trip_coil_2.setReadOnly(True)
+        self.prop_trip_coil_2.editingFinished.connect(
+            lambda: self._on_numeric_property_changed("trip_coil_2_a", self.prop_trip_coil_2.text())
+        )
         properties_layout.addWidget(self.prop_trip_coil_2, 4, 1)
 
         self.prop_close_coil_label = QLabel("Close Coil (A):")
         properties_layout.addWidget(self.prop_close_coil_label, 5, 0)
         self.prop_close_coil = QLineEdit("—")
-        self.prop_close_coil.setReadOnly(True)
+        self.prop_close_coil.editingFinished.connect(
+            lambda: self._on_numeric_property_changed("close_coil_a", self.prop_close_coil.text())
+        )
         properties_layout.addWidget(self.prop_close_coil, 5, 1)
 
         self.prop_motor_inrush_label = QLabel("Motor Inrush Current (A):")
         properties_layout.addWidget(self.prop_motor_inrush_label, 6, 0)
         self.prop_motor_inrush = QLineEdit("—")
-        self.prop_motor_inrush.setReadOnly(True)
+        self.prop_motor_inrush.editingFinished.connect(
+            lambda: self._on_numeric_property_changed("motor_inrush_a", self.prop_motor_inrush.text())
+        )
         properties_layout.addWidget(self.prop_motor_inrush, 6, 1)
 
         self.prop_motor_run_label = QLabel("Motor Run Current (A):")
         properties_layout.addWidget(self.prop_motor_run_label, 7, 0)
         self.prop_motor_run = QLineEdit("—")
-        self.prop_motor_run.setReadOnly(True)
+        self.prop_motor_run.editingFinished.connect(
+            lambda: self._on_numeric_property_changed("motor_run_a", self.prop_motor_run.text())
+        )
         properties_layout.addWidget(self.prop_motor_run, 7, 1)
 
         self.prop_voltage_label = QLabel("Voltage (kV):")
         properties_layout.addWidget(self.prop_voltage_label, 8, 0)
         self.prop_voltage = QLineEdit("—")
         self.prop_voltage.setPlaceholderText("kV")
-        self.prop_voltage.textChanged.connect(self._on_property_voltage_changed)
+        self.prop_voltage.editingFinished.connect(lambda: self._on_property_voltage_changed(self.prop_voltage.text()))
         properties_layout.addWidget(self.prop_voltage, 8, 1)
 
         self._non_bus_property_widgets = [
@@ -650,17 +897,40 @@ class SubstationGuiMockup(QMainWindow):
             QMessageBox.warning(self, "Validate", message)
 
     def _on_run_evaluation_clicked(self):
-        """
-        Run momentary evaluation on the fake test netlist (test_netlist.py)
-        """
-        system_name = "Test Bay"
-        if hasattr(self, "project_box"):
-            system_name = self.project_box.currentText() or system_name
+        """Evaluate the currents entered on the actual drawing."""
+        system_name = self.project_box.text().strip() or "Untitled Project"
 
         started = time.perf_counter()
         try:
-            netlist, result = run_fake_evaluation(system_name=system_name)
+            netlist = netlist_from_scene(self.workspace_scene, system_name=system_name)
+            for component in netlist["components"]:
+                validate_properties(component["properties"])
+                component["label"] = next(
+                    item.visible_id() for item in self.workspace_scene.items()
+                    if isinstance(item, OneLineSymbolItem) and item.instance_id == component["id"]
+                )
+            scenario = scenario_from_netlist(netlist)
+            if not scenario.loads:
+                self.last_result = self.last_netlist = None
+                self.save_results_btn.setEnabled(False)
+                self.output_box.setPlainText(
+                    "No current loads to evaluate. Place components and enter their coil or motor currents."
+                )
+                self.footer_status_label.setText("No current loads to evaluate")
+                return
+            result = scenario.calculate()
+            if not math.isfinite(result["peak_current_A"]):
+                raise ValueError("The total current is too large. Check the entered loads.")
+            result["calculation_steps"] = [
+                "Assume all entered coil and motor currents operate simultaneously.",
+                "Peak current = sum of all entered loads = "
+                + " + ".join(f"{load.total_amps():g}" for load in scenario.loads)
+                + f" = {result['peak_current_A']:g} A.",
+                "Connectivity and switch status do not select loads; this is not a network simulation or an amp-hour battery sizing calculation.",
+            ]
         except Exception as e:
+            self.last_result = self.last_netlist = None
+            self.save_results_btn.setEnabled(False)
             if hasattr(self, "output_box"):
                 self.output_box.setPlainText(f"Evaluation failed:\n{e}")
             if hasattr(self, "footer_status_label"):
@@ -669,6 +939,7 @@ class SubstationGuiMockup(QMainWindow):
         
         self.last_netlist = netlist
         self.last_result = result
+        self._evaluated_snapshot = self._layout_data()
         self.save_results_btn.setEnabled(True)
 
         elapsed_ms = (time.perf_counter() - started) * 1000.0
@@ -676,7 +947,8 @@ class SubstationGuiMockup(QMainWindow):
             self.response_time_label.setText(f"Response time: {elapsed_ms:.0f} ms")
 
         lines: list[str] = []
-        lines.append("(Using fake test netlist from test_netlist.py)")
+        lines.append("Momentary peak current — all entered loads operating simultaneously")
+        lines.append("Connections and switch status do not select loads. Battery capacity (Ah) is not calculated.")
         lines.append(f"System: {result.get('scenario_name', system_name)}")
         lines.append(f"Voltage: {result.get('voltage_V', 125):g} V")
         lines.append(f"Components: {len(netlist.get('components', []))}")
@@ -710,6 +982,8 @@ class SubstationGuiMockup(QMainWindow):
             )
 
     def _on_save_results_clicked(self):
+        if self.last_result is not None and self._layout_data() != self._evaluated_snapshot:
+            self._invalidate_results()
         if self.last_result is None or self.last_netlist is None:
             QMessageBox.information(
                 self, "Save Calculation Results", "Run an evaluation first."
@@ -831,20 +1105,28 @@ class SubstationGuiMockup(QMainWindow):
         </html>
         """
 
-        printer = QPrinter()
-        printer.setOutputFormat(QPrinter.OutputFormat.PdfFormat)
-        printer.setOutputFileName(file_path)
-
         document = QTextDocument()
         document.setHtml(html)
 
+        temporary = None
         try:
+            with tempfile.NamedTemporaryFile(dir=Path(file_path).parent, suffix=".pdf", delete=False) as stream:
+                temporary = stream.name
+            printer = QPrinter()
+            printer.setOutputFormat(QPrinter.OutputFormat.PdfFormat)
+            printer.setOutputFileName(temporary)
             document.print_(printer)
+            if printer.printerState() == QPrinter.PrinterState.Error or Path(temporary).stat().st_size == 0:
+                raise OSError("The PDF file was not created or is empty.")
+            os.replace(temporary, file_path)
         except Exception as error:
             QMessageBox.critical(
-            self, "Save Failed", f"Could not create the PDF:\n{error}"
-         )
-        return
+                self, "Save Failed", f"Could not create the PDF:\n{error}"
+            )
+            return
+        finally:
+            if temporary and Path(temporary).exists():
+                Path(temporary).unlink()
 
         self.footer_status_label.setText(
             f"Results saved: {file_path}"
@@ -879,6 +1161,8 @@ class SubstationGuiMockup(QMainWindow):
             "motor_run_a": data.get("MotorRunCurrent", 0),
             "symbol_type": symbol_key,
         }
+        if not properties["rating_kv"]:
+            properties.pop("rating_kv")
 
         slug = "".join(ch if ch.isalnum() else "_" for ch in name.strip().lower())
         equip_id = f"custom_{slug}" if slug else f"custom_{len(EQUIPMENT_DEFS)}"
@@ -890,6 +1174,7 @@ class SubstationGuiMockup(QMainWindow):
 
         EQUIPMENT_DEFS[equip_id] = {
             "label": name,
+            "definition": {"symbol": symbol_key, "name": name, "properties": properties},
             "factory": functools.partial(
                 make_user_equipment,
                 symbol_key,
@@ -901,6 +1186,7 @@ class SubstationGuiMockup(QMainWindow):
         item = QListWidgetItem(name)
         item.setData(Qt.ItemDataRole.UserRole, equip_id)
         self.equipment_list.addItem(item)
+        self._mark_modified()
 
         glyph = next(
             (label for key, label in SYMBOL_TYPE_CHOICES if key == symbol_key),
@@ -954,6 +1240,7 @@ class SubstationGuiMockup(QMainWindow):
             return
 
         self._workspace_original = pm
+        self.pdf_path = str(Path(pdf_path).resolve())
         if hasattr(self, "workspace_view"):
             self.workspace_view.set_background_pixmap(
                 pm,
@@ -971,16 +1258,18 @@ class SubstationGuiMockup(QMainWindow):
                 f"Imported: {pdf_path} "
                 f"({sheet_width:g} × {sheet_height:g} in)"
             )
+        self._mark_modified()
 
     def _on_selection_changed(self):
         """Update the properties panel when the user selects a symbol or wire."""
         if not hasattr(self, "workspace_scene"):
             return
         items = self.workspace_scene.selectedItems()
-        if not items:
+        if len(items) != 1:
             self.prop_type.setText("—")
             self.prop_name.setReadOnly(True)
             self.prop_name.setText("—")
+            self.prop_status.setEnabled(False)
             self._set_bus_property_mode(False)
             self._clear_custom_component_properties()
             return
@@ -995,6 +1284,7 @@ class SubstationGuiMockup(QMainWindow):
             self.prop_type.setText(
                 BUILTIN_SYMBOLS.get(item.equip_type, {}).get("label", "Bus")
             )
+            self.prop_status.setEnabled(False)
             self._set_bus_property_mode(True)
             props = getattr(item, "properties", None)
             rating = props.get("rating_kv") if isinstance(props, dict) else None
@@ -1003,15 +1293,13 @@ class SubstationGuiMockup(QMainWindow):
             self.prop_voltage.blockSignals(False)
         elif isinstance(item, OneLineSymbolItem):
             self.prop_type.setText(item.label)
+            self.prop_status.setEnabled(True)
             self._set_bus_property_mode(False)
-            props = getattr(item, "properties", None)
-            if isinstance(props, dict) and props:
-                self._set_custom_component_properties(props)
-            else:
-                self._clear_custom_component_properties()
+            self._set_custom_component_properties(self._symbol_properties(item))
         elif isinstance(item, ConnectionItem):
             self.prop_type.setText("Connection")
             self.prop_name.setReadOnly(True)
+            self.prop_status.setEnabled(False)
             self.prop_name.setText(
                 f"{item.from_item.visible_id()}:{item.from_port} → "
                 f"{item.to_item.visible_id()}:{item.to_port}"
@@ -1021,6 +1309,7 @@ class SubstationGuiMockup(QMainWindow):
         else:
             self.prop_type.setText(type(item).__name__)
             self.prop_name.setReadOnly(True)
+            self.prop_status.setEnabled(False)
             self._set_bus_property_mode(False)
             self._clear_custom_component_properties()
 
@@ -1033,15 +1322,59 @@ class SubstationGuiMockup(QMainWindow):
             return
         new_id = text.strip()
         if not new_id or new_id == "—":
+            self._on_selection_changed()
             return
         symbol = selected[0]
         if new_id == symbol.visible_id():
             return
-        symbol.prepareGeometryChange()
-        symbol.display_id = new_id
-        symbol._label_rect_cache = None
-        symbol.refresh_label_placement()
-        symbol.update()
+        self._edit_property(symbol, "display_id", new_id)
+
+    def _edit_property(self, symbol, key, value):
+        old = symbol.display_id if key == "display_id" else getattr(symbol, "properties", {}).get(key)
+        if old != value:
+            self.undo_stack.push(EditPropertyCommand(symbol, key, value, self._on_selection_changed))
+        else:
+            self._on_selection_changed()
+
+    def _symbol_properties(self, symbol: OneLineSymbolItem) -> dict:
+        props = getattr(symbol, "properties", None)
+        if not isinstance(props, dict):
+            props = {}
+            symbol.properties = props
+        return props
+
+    def _selected_editable_symbol(self) -> OneLineSymbolItem | None:
+        if not hasattr(self, "workspace_scene"):
+            return None
+        selected = self.workspace_scene.selectedItems()
+        if len(selected) != 1 or not isinstance(selected[0], OneLineSymbolItem):
+            return None
+        if isinstance(selected[0], BusItem):
+            return None
+        return selected[0]
+
+    def _on_property_status_changed(self, text: str):
+        """Store the status chosen for the selected component."""
+        symbol = self._selected_editable_symbol()
+        if symbol is None or text in ("", "—"):
+            return
+        self._edit_property(symbol, "status", text)
+
+    def _on_numeric_property_changed(self, key: str, text: str):
+        """Store a typed amp value on the selected component."""
+        symbol = self._selected_editable_symbol()
+        if symbol is None:
+            return
+        raw = text.strip()
+        try:
+            value = float(raw) if raw else 0.0
+            if not math.isfinite(value) or value < 0:
+                raise ValueError
+        except ValueError:
+            self.footer_status_label.setText("Current must be a finite number greater than or equal to zero")
+            self._on_selection_changed()
+            return
+        self._edit_property(symbol, key, value)
 
     def _on_property_voltage_changed(self, text: str):
         """Store a typed bus voltage and refresh the rating drawn on the bar."""
@@ -1052,23 +1385,18 @@ class SubstationGuiMockup(QMainWindow):
             return
         bus = selected[0]
         raw = text.strip().lower().removesuffix("kv").strip()
-        if raw in ("", "—", "-"):
+        if not raw:
             rating = None
         else:
             try:
                 rating = float(raw)
+                if not math.isfinite(rating) or rating <= 0:
+                    raise ValueError
             except ValueError:
+                self.footer_status_label.setText("Bus voltage must be a finite positive number, or blank")
+                self._on_selection_changed()
                 return
-        if not isinstance(getattr(bus, "properties", None), dict):
-            bus.properties = {}
-        if rating is None:
-            bus.properties.pop("rating_kv", None)
-        else:
-            bus.properties["rating_kv"] = rating
-        bus.prepareGeometryChange()
-        bus._label_rect_cache = None
-        bus.refresh_label_placement()
-        bus.update()
+        self._edit_property(bus, "rating_kv", rating)
 
     def _set_bus_property_mode(self, is_bus: bool):
         """A bus shows voltage only. Other selections keep the coil fields."""
@@ -1082,20 +1410,51 @@ class SubstationGuiMockup(QMainWindow):
             self.prop_voltage.blockSignals(False)
 
     def _set_custom_component_properties(self, properties: dict):
-        """Fill the Trip Coil / Motor Current rows from a CustomComponentItem."""
-        self.prop_trip_coil_1.setText(f"{properties.get('trip_coil_1_a', 0):g}")
-        self.prop_trip_coil_2.setText(f"{properties.get('trip_coil_2_a', 0):g}")
-        self.prop_close_coil.setText(f"{properties.get('close_coil_a', 0):g}")
-        self.prop_motor_inrush.setText(f"{properties.get('motor_inrush_a', 0):g}")
-        self.prop_motor_run.setText(f"{properties.get('motor_run_a', 0):g}")
+        """Fill status and the current rows from the selected component."""
+        self._enable_component_property_fields()
+        status = str(properties.get("status", "Closed"))
+        fields = (
+            (self.prop_trip_coil_1, properties.get("trip_coil_1_a", 0)),
+            (self.prop_trip_coil_2, properties.get("trip_coil_2_a", 0)),
+            (self.prop_close_coil, properties.get("close_coil_a", 0)),
+            (self.prop_motor_inrush, properties.get("motor_inrush_a", 0)),
+            (self.prop_motor_run, properties.get("motor_run_a", 0)),
+        )
+        self.prop_status.blockSignals(True)
+        index = self.prop_status.findText(status)
+        self.prop_status.setCurrentIndex(index if index >= 0 else 0)
+        self.prop_status.blockSignals(False)
+        for field, value in fields:
+            field.blockSignals(True)
+            field.setText(f"{value:g}" if isinstance(value, (int, float)) else str(value))
+            field.blockSignals(False)
 
     def _clear_custom_component_properties(self):
-        """Reset the Trip Coil / Motor Current rows for non-custom selections."""
-        self.prop_trip_coil_1.setText("—")
-        self.prop_trip_coil_2.setText("—")
-        self.prop_close_coil.setText("—")
-        self.prop_motor_inrush.setText("—")
-        self.prop_motor_run.setText("—")
+        """Reset the Trip Coil / Motor Current rows for non-component selections."""
+        self.prop_status.blockSignals(True)
+        self.prop_status.setCurrentIndex(0)
+        self.prop_status.blockSignals(False)
+        for field in (
+            self.prop_trip_coil_1,
+            self.prop_trip_coil_2,
+            self.prop_close_coil,
+            self.prop_motor_inrush,
+            self.prop_motor_run,
+        ):
+            field.blockSignals(True)
+            field.setReadOnly(True)
+            field.setText("—")
+            field.blockSignals(False)
+
+    def _enable_component_property_fields(self):
+        for field in (
+            self.prop_trip_coil_1,
+            self.prop_trip_coil_2,
+            self.prop_close_coil,
+            self.prop_motor_inrush,
+            self.prop_motor_run,
+        ):
+            field.setReadOnly(False)
 
 
 # ---------------------------------------------------------------------------
