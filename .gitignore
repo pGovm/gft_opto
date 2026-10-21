@@ -2,7 +2,6 @@
 .venv/
 
 # Python cache folder
-src
 src/gft_opto/*/__pycache__/*
 tests/__pycache__
 
