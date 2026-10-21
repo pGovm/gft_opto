@@ -25,7 +25,7 @@ from gft_opto.gui.symbols import (
     BusItem, CircuitBreakerItem, ConnectionItem, EQUIPMENT_DEFS, OneLineSymbolItem,
     make_user_equipment, CurrentTransformerItem, GroundItem,
 )
-from gft_opto.logic.protection_zones import topology_signature
+from gft_opto.logic.protection_study import topology_signature
 from gft_opto.gui.zone_dialog import ZoneDialog
 
 
@@ -262,7 +262,10 @@ class GuiWorkflows(unittest.TestCase):
         w._on_run_evaluation_clicked()
         self.assertEqual(w.last_result["peak_current_A"], 36)
         self.assertGreater(len(w._zone_overlays), 0)
-        self.assertEqual(w.zone_view.count(), 2)
+        # Configured events and the new display-only topology catalog coexist.
+        self.assertEqual(w.zone_view.count(), 2 + len(w._zone_report["zones"])
+                         + len(w._zone_report["topology_regions"]))
+        self.assertEqual(w.zone_view.itemData(1), w.protection_zones[0]["id"])
         # View-only highlights must not become saved electrical components.
         self.assertEqual(len(scene_data(w.workspace_scene)["components"]), 4)
         path = Path(self.temp.name) / "zones.json"
