@@ -10,7 +10,10 @@ from PySide6.QtWidgets import (
     QSpinBox, QTableWidget, QVBoxLayout, QWidget, QHeaderView,
 )
 
-from gft_opto.logic.protection_zones import LOADS, STAGES, kind, propose_zones, validate_zones, topology_signature
+from gft_opto.logic.protection_study import (
+    LOADS, STAGES, kind, propose_zones, validate_zones, topology_signature,
+    configuration_signature, analyze_topology, evaluate_zones,
+)
 
 
 class ZoneDialog(QDialog):
@@ -20,10 +23,14 @@ class ZoneDialog(QDialog):
         self.setWindowTitle("Protection Zones and Momentary Loads")
         self.resize(1050, 750)
         self.netlist = netlist
+        validate_zones(zones)
         self.zones = copy.deepcopy(zones)
+        self.detected_regions = analyze_topology(netlist)
         signature = topology_signature(netlist)
         for zone in self.zones:
-            if zone.get("topology_signature") != signature:
+            if (zone.get("topology_signature") != signature or
+                    (zone.get("configuration_signature") and
+                     zone["configuration_signature"] != configuration_signature(zone))):
                 zone["confirmed"] = False
         self.active = -1
         self.loading = False
@@ -33,7 +40,8 @@ class ZoneDialog(QDialog):
             "Detected zones are proposals. Confirm CTs used by each protection scheme and its actual trip actions.\n"
             "Rows with the same stage operate simultaneously; different stages are evaluated separately.\n"
             "Units: 1 if current is for the whole breaker; 3 only if the entered current is per pole and three poles operate.\n"
-            "Set the actual DC supply for each coil. Unchecked CTs are not zone boundaries."
+            "Set the actual DC supply for each coil. Unchecked CTs are not zone boundaries.\n"
+            "Detected regions include wire-only and overlapping candidates; selecting one does not assign or confirm operating loads."
         )
         guidance.setWordWrap(True)
         outer.addWidget(guidance)
@@ -50,10 +58,18 @@ class ZoneDialog(QDialog):
         right = QVBoxLayout()
         body.addLayout(right, 4)
         form = QFormLayout()
+        self.region_combo = QComboBox()
+        self.region_combo.addItem("Custom seed and selected CTs", None)
+        for region in self.detected_regions:
+            relation = "enclosed" if region["enclosed_by"] else "outermost"
+            self.region_combo.addItem(f"{region['name']} ({relation})", region["id"])
+        self.region_combo.setToolTip("Select exact equipment and conductor membership. Existing load rows are retained for review.")
+        form.addRow("Detected region", self.region_combo)
         self.name = QLineEdit()
         self.zone_kind = QComboBox()
         self.zone_kind.addItems(["Bus", "Transformer", "Line", "Manual"])
         self.seed = QComboBox()
+        self.seed.addItem("No equipment seed (wire-only region)", "")
         for ident, component in self.components.items():
             if kind(component) not in ("ct", "pt", "ground", "junction"):
                 self.seed.addItem(f"{component.get('label', ident)} [{ident}]", ident)
@@ -92,8 +108,9 @@ class ZoneDialog(QDialog):
         outer.addWidget(buttons)
         self.name.textEdited.connect(self.unconfirm)
         self.zone_kind.currentIndexChanged.connect(self.unconfirm)
-        self.seed.currentIndexChanged.connect(self.unconfirm)
-        self.cts.itemChanged.connect(self.unconfirm)
+        self.seed.currentIndexChanged.connect(self._custom_boundary_changed)
+        self.cts.itemChanged.connect(self._custom_boundary_changed)
+        self.region_combo.currentIndexChanged.connect(self._use_detected_region)
         self.zone_list.currentRowChanged.connect(self.select_zone)
         self.refresh_list()
 
@@ -148,6 +165,42 @@ class ZoneDialog(QDialog):
         if not self.loading:
             self.confirmed.setChecked(False)
 
+    def _custom_boundary_changed(self, *_):
+        if self.loading:
+            return
+        if 0 <= self.active < len(self.zones):
+            self.zones[self.active].pop("topology_region", None)
+        self.region_combo.blockSignals(True)
+        self.region_combo.setCurrentIndex(0)
+        self.region_combo.blockSignals(False)
+        self.unconfirm()
+
+    def _use_detected_region(self, *_):
+        if self.loading or not 0 <= self.active < len(self.zones):
+            return
+        ident = self.region_combo.currentData()
+        region = next((r for r in self.detected_regions if r["id"] == ident), None)
+        if region is None:
+            self.zones[self.active].pop("topology_region", None)
+            self.unconfirm()
+            return
+        self.loading = True
+        try:
+            self.zones[self.active]["topology_region"] = copy.deepcopy(region["signature"])
+            eligible = [i for i in region["core"] if i in self.components
+                        and kind(self.components[i]) not in ("ct", "pt", "ground", "junction")]
+            eligible.sort(key=lambda i: (kind(self.components[i]) != "bus", i))
+            seed = eligible[0] if eligible else ""
+            self.seed.setCurrentIndex(self.seed.findData(seed))
+            for i in range(self.cts.count()):
+                entry = self.cts.item(i)
+                entry.setCheckState(Qt.CheckState.Checked if entry.data(Qt.ItemDataRole.UserRole)
+                                    in region["boundaries"] else Qt.CheckState.Unchecked)
+        finally:
+            self.loading = False
+        self.unconfirm()
+        self.capture()
+
     def capture(self):
         if not 0 <= self.active < len(self.zones):
             return
@@ -189,7 +242,20 @@ class ZoneDialog(QDialog):
         zone = self.zones[index]
         self.name.setText(zone["name"])
         self.zone_kind.setCurrentText(zone["kind"])
+        match = next((r for r in self.detected_regions
+                      if r["signature"] == zone.get("topology_region")), None)
+        self.region_combo.setCurrentIndex(self.region_combo.findData(match["id"]) if match else 0)
+        if zone["seed"] and self.seed.findData(zone["seed"]) < 0:
+            self.seed.addItem(f"Missing: {zone['seed']}", zone["seed"])
         self.seed.setCurrentIndex(self.seed.findData(zone["seed"]))
+        existing = {self.cts.item(i).data(Qt.ItemDataRole.UserRole) for i in range(self.cts.count())}
+        for ident in zone["boundary_cts"]:
+            if ident not in existing:
+                entry = QListWidgetItem(f"Missing CT: {ident}")
+                entry.setData(Qt.ItemDataRole.UserRole, ident)
+                entry.setFlags(entry.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                entry.setCheckState(Qt.CheckState.Unchecked)
+                self.cts.addItem(entry)
         for i in range(self.cts.count()):
             entry = self.cts.item(i)
             entry.setCheckState(Qt.CheckState.Checked if entry.data(Qt.ItemDataRole.UserRole) in zone["boundary_cts"] else Qt.CheckState.Unchecked)
@@ -256,12 +322,21 @@ class ZoneDialog(QDialog):
 
     def accept(self):
         self.capture()
+        candidate = copy.deepcopy(self.zones)
         try:
-            validate_zones(self.zones)
-        except ValueError as error:
+            validate_zones(candidate)
+            for zone in candidate:
+                if zone["confirmed"]:
+                    zone["topology_signature"] = topology_signature(self.netlist)
+                    zone["configuration_signature"] = configuration_signature(zone)
+            report = evaluate_zones(self.netlist, candidate)
+            confirmed_ids = {z["id"] for z in candidate if z["confirmed"]}
+            errors = [f"{row['name']}: {message}" for row in report["zones"]
+                      if row["id"] in confirmed_ids for message in row["warnings"]]
+            if errors:
+                raise ValueError("\n".join(errors) + "\nUncheck confirmation to save these settings as a draft.")
+        except (ValueError, TypeError) as error:
             QMessageBox.warning(self, "Incomplete Zone Settings", str(error))
             return
-        for zone in self.zones:
-            if zone["confirmed"]:
-                zone["topology_signature"] = topology_signature(self.netlist)
+        self.zones = candidate
         super().accept()

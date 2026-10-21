@@ -47,6 +47,7 @@ from gft_opto.gui.symbols import (
     EQUIPMENT_DEFS,
     BusItem,
     ConnectionItem,
+    CurrentTransformerItem,
     CustomComponentItem,
     OneLineSymbolItem,
     make_user_equipment,
@@ -55,7 +56,8 @@ from gft_opto.gui.workspace import WorkspaceView
 from gft_opto.gui.commands import EditPropertyCommand
 from gft_opto.gui.layout_io import scene_data, build_scene, reserve_ids, write_layout
 from gft_opto.logic.momentary_calc2 import netlist_from_scene
-from gft_opto.logic.protection_zones import propose_zones, evaluate_zones
+from gft_opto.logic.protection_zones import connection_key, identify_zones
+from gft_opto.logic.protection_study import propose_zones, evaluate_zones, topology_records
 from gft_opto.gui.zone_dialog import ZoneDialog
 from pathlib import Path
 from collections import defaultdict
@@ -935,13 +937,23 @@ class SubstationGuiMockup(QMainWindow):
             component["label"] = labels[component["id"]]
         return netlist
 
+    def _scene_topology(self):
+        """Detect real scene components and conductors; never save live Zone objects."""
+        items = [item for item in self.workspace_scene.items()
+                 if isinstance(item, OneLineSymbolItem)]
+        primary = identify_zones(items, (CurrentTransformerItem,))
+        return topology_records(primary)
+
     def _configure_protection_zones(self):
-        netlist = self._protection_netlist()
-        dialog = ZoneDialog(netlist, self.protection_zones or propose_zones(netlist), self)
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            self.protection_zones = dialog.zones
-            self._mark_modified()
-            self._on_run_evaluation_clicked()
+        try:
+            netlist = self._protection_netlist()
+            dialog = ZoneDialog(netlist, self.protection_zones or propose_zones(netlist), self)
+            if dialog.exec() == QDialog.DialogCode.Accepted:
+                self.protection_zones = dialog.zones
+                self._mark_modified()
+                self._on_run_evaluation_clicked()
+        except (ValueError, TypeError) as error:
+            QMessageBox.warning(self, "Protection Zone Settings", str(error))
 
     def _expand_zone_analysis(self):
         dialog = QDialog(self)
@@ -968,18 +980,24 @@ class SubstationGuiMockup(QMainWindow):
         if self._zone_report is None:
             return
         selected = self.zone_view.currentData()
+        topology_mode = isinstance(selected, (tuple, list)) and selected[0] == "topology"
+        selected_id = selected[1] if topology_mode else selected
+        rows = self._zone_report["topology_regions"] if topology_mode else self._zone_report["zones"]
         symbols = {item.instance_id: item for item in self.workspace_scene.items()
                    if isinstance(item, OneLineSymbolItem)}
+        wires = [item for item in self.workspace_scene.items() if isinstance(item, ConnectionItem)]
         colors = ("#0072b2", "#d55e00", "#009e73", "#cc79a7", "#e69f00", "#56b4e9")
-        for index, zone in enumerate(self._zone_report["zones"]):
-            if selected and zone["id"] != selected:
+        for index, zone in enumerate(rows):
+            if selected_id and zone["id"] != selected_id:
                 continue
             color = QColor(colors[index % len(colors)])
             pen = QPen(color, 3)
-            if not zone["complete"]:
+            if topology_mode:
+                pen.setStyle(Qt.PenStyle.DotLine)
+            elif not zone["complete"]:
                 pen.setStyle(Qt.PenStyle.DashLine)
-            member_ids = set(zone["members"])
-            for ident in member_ids:
+            tooltip = zone["name"] + (" (topology only; no automatic current)" if topology_mode else "")
+            for ident in zone["members"]:
                 if ident not in symbols:
                     continue
                 margin = 8 + (index % 3) * 4
@@ -988,20 +1006,28 @@ class SubstationGuiMockup(QMainWindow):
                 fill = QColor(color)
                 fill.setAlpha(25)
                 overlay.setBrush(QBrush(fill))
-                self._add_zone_overlay(overlay, zone["name"])
-            for wire in self.workspace_scene.items():
-                if isinstance(wire, ConnectionItem) and wire.from_item.instance_id in member_ids and wire.to_item.instance_id in member_ids:
-                    overlay = QGraphicsPathItem(wire.path())
-                    wire_pen = QPen(color, 7)
-                    wire_pen.setCosmetic(True)
-                    overlay.setPen(wire_pen)
-                    overlay.setOpacity(0.4)
-                    self._add_zone_overlay(overlay, zone["name"])
+                self._add_zone_overlay(overlay, tooltip, zone["id"])
+            # Membership is terminal-aware. Testing only both endpoint IDs would
+            # incorrectly highlight a parallel conductor on the other CT sides.
+            exact_keys = {tuple(tuple(endpoint) for endpoint in edge) for edge in zone["connections"]}
+            for wire in wires:
+                key = connection_key(wire)
+                if key not in exact_keys:
+                    continue
+                overlay = QGraphicsPathItem(wire.sceneTransform().map(wire.path()))
+                wire_pen = QPen(color, 7)
+                wire_pen.setCosmetic(True)
+                overlay.setPen(wire_pen)
+                overlay.setOpacity(0.4)
+                overlay._zone_connection_key = key
+                self._add_zone_overlay(overlay, tooltip, zone["id"])
 
-    def _add_zone_overlay(self, overlay, name):
+    def _add_zone_overlay(self, overlay, name, zone_id=None):
         overlay.setZValue(10)
         overlay.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
         overlay.setToolTip(name)
+        overlay.setData(0, "protection-zone-overlay")
+        overlay.setData(1, zone_id)
         self.workspace_scene.addItem(overlay)
         self._zone_overlays.append(overlay)
 
@@ -1018,22 +1044,27 @@ class SubstationGuiMockup(QMainWindow):
             if not self.protection_zones:
                 self.protection_zones = propose_zones(netlist)
                 self._mark_modified()
-            if not self.protection_zones:
-                self.output_box.setPlainText("No bus or transformer zones could be proposed. Use Configure Protection Zones to add a line or manual zone.")
-                self.footer_status_label.setText("Configure protection zones before evaluating")
-                return
             report = evaluate_zones(netlist, self.protection_zones)
+            # The catalog uses original GUI objects, including CT-only conductors.
+            # Editable operating settings remain separate JSON dictionaries.
+            report["topology_regions"] = self._scene_topology()
             self._zone_report = report
             self.zone_view.blockSignals(True)
             self.zone_view.clear()
-            self.zone_view.addItem("All zones (dashed = incomplete)", None)
+            self.zone_view.addItem("All configured zones (dashed = incomplete)", None)
             for index, zone in enumerate(report["zones"]):
                 self.zone_view.addItem(f"{index + 1}. {zone['name']} — {'confirmed' if zone['complete'] else 'review required'}", zone["id"])
+            self.zone_view.addItem("All detected regions (topology only)", ("topology", None))
+            for region in report["topology_regions"]:
+                enclosure = " [enclosed]" if region["enclosed_by"] else " [outermost]"
+                self.zone_view.addItem(region["name"] + enclosure, ("topology", region["id"]))
+            if not report["zones"]:
+                self.zone_view.setCurrentIndex(1)
             self.zone_view.blockSignals(False)
             self._show_zone_highlights()
             lines = [f"Momentary DC protection-zone study: {netlist['system_name']}",
                 "COMPLETE" if report["complete"] else "INCOMPLETE — configure/review flagged zones; partial totals are not final.",
-                "Each zone is a separate fault event. Same-stage loads are simultaneous; other stages are separate.",
+                "Each configured zone is a separate fault event. Same-stage loads are simultaneous; other stages are separate.",
                 "DC supplies are reported separately. No battery amp-hour calculation.", ""]
             all_loads, warnings = [], list(report["warnings"])
             lines.extend(f"REVIEW: {warning}" for warning in warnings)
@@ -1046,13 +1077,20 @@ class SubstationGuiMockup(QMainWindow):
                 for scenario in zone["scenarios"]:
                     prefix = "" if zone["complete"] else "Provisional "
                     lines.append(f"  {prefix}{scenario['stage']}: {scenario['peak_current_A']:g} A across assigned supplies")
+                    for advice in scenario.get("advisories", []):
+                        lines.append(f"    NOTE: {advice}")
                     for supply, current in scenario["supplies"].items():
                         lines.append(f"    {supply}: {current:g} A")
                     for load in scenario["loads"]:
                         lines.append(f"    {load['name']}: {load['amps_per_unit']:g} A × {load['quantity']} = {load['total_amps']:g} A ({load['supply']})")
                     all_loads.extend(scenario["loads"])
                 lines.append("")
-            lines.append("Peak per supply among confirmed, complete zones:")
+            lines.append("Detected topology regions (not automatically added to the calculation):")
+            for region in report["topology_regions"]:
+                relation = "enclosed" if region["enclosed_by"] else "outermost"
+                lines.append(f"  {region['name']} ({relation}; {len(region['connections'])} conductors)")
+            lines.append("")
+            lines.append("Peak per supply among confirmed, complete configured zones:")
             for supply, peak in report["supply_peaks"].items():
                 lines.append(f"  {supply}: {peak['peak_current_A']:g} A — {peak['zone']} / {peak['stage']}")
             if not report["supply_peaks"]:
