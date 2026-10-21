@@ -9,3 +9,6 @@ tests/__pycache__
 # PyInstaller output
 build/
 dist/
+
+# Misc folders
+.zone-integration-backups/
