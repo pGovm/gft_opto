@@ -38,3 +38,14 @@ Repository = "https://github.com/pGovm/gft_opto.git"
 
 [project.scripts]
 gft-opto = "gft_opto.gui.substation_gui4:main"
+
+[dependency-groups]
+
+test = [
+    "pytest>=9.0.0",
+    "pytest-cov>=7.0.0"
+]
+
+package = [
+    "pyinstaller>=6.22.0"
+]
