@@ -1,3 +1,5 @@
+# Builds the main application window and connects editing, layout files, zone studies, and report export.
+
 """
 AI-Assisted Substation Design Tool — main window.
 
@@ -18,7 +20,7 @@ from html import escape
 import pymupdf
 from PySide6.QtCore import Qt, QByteArray, QMimeData, QRectF
 from PySide6.QtGui import (
-    QAction, QColor, QPen, QBrush,
+    QAction, QColor, QPen, QBrush, QPalette,
     QDrag, QFont, QImage, QKeySequence, QPixmap, QTextDocument, QUndoStack,
 )
 from PySide6.QtPrintSupport import QPrinter
@@ -26,7 +28,7 @@ from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFrame, QGraphicsScene,
     QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget,
     QListWidgetItem, QMainWindow, QMessageBox, QPushButton, QSlider, QTextEdit,
-    QVBoxLayout, QWidget, QGraphicsRectItem, QGraphicsPathItem,
+    QVBoxLayout, QWidget, QGraphicsRectItem, QGraphicsPathItem, QSpinBox, QScrollArea,
 )
 
 from gft_opto.gui.circuit_check import check_circuit
@@ -53,12 +55,14 @@ from gft_opto.gui.symbols import (
     make_user_equipment,
 )
 from gft_opto.gui.workspace import WorkspaceView
-from gft_opto.gui.commands import EditPropertyCommand
-from gft_opto.gui.layout_io import scene_data, build_scene, reserve_ids, write_layout
+from gft_opto.gui.commands import EditPropertyCommand, ReplaceZonesCommand
+from gft_opto.gui.layout_io import scene_data, build_scene, reserve_ids, write_layout, library_from_layout
 from gft_opto.logic.momentary_calc2 import netlist_from_scene
 from gft_opto.logic.protection_zones import connection_key, identify_zones
 from gft_opto.logic.protection_study import propose_zones, evaluate_zones, topology_records
 from gft_opto.gui.zone_dialog import ZoneDialog
+from gft_opto.gui.theme import SCROLLBAR_STYLE
+from gft_opto.logic.breaker_settings import breaker_settings, SETTING_KEYS
 from pathlib import Path
 from collections import defaultdict
 
@@ -300,10 +304,33 @@ class SubstationGuiMockup(QMainWindow):
         color: #e4e7eb;
     }
 
-    QLineEdit, QTextEdit, QComboBox, QListWidget {
+    QLineEdit, QTextEdit, QComboBox, QListWidget, QSpinBox {
         background: white; border: 1px solid #cbd2d9;
         border-radius: 8px; padding: 8px; color: #1f2933;
     }
+    QComboBox QAbstractItemView {
+        background-color: #ffffff; color: #1f2933;
+        selection-background-color: #006a4e; selection-color: #ffffff;
+        font-family: "Segoe UI"; font-size: 10pt; font-weight: normal;
+    }
+    QGroupBox#selectedProperties QWidget {
+        color: #1f2933; font-family: "Segoe UI";
+        font-size: 10pt; font-weight: normal;
+    }
+    QGroupBox#selectedProperties QLabel { background-color: transparent; }
+    QGroupBox#selectedProperties QLineEdit,
+    QGroupBox#selectedProperties QComboBox,
+    QGroupBox#selectedProperties QSpinBox {
+        background-color: #ffffff; color: #1f2933;
+        selection-background-color: #006a4e; selection-color: #ffffff;
+        padding: 6px; min-height: 20px;
+    }
+    QGroupBox#selectedProperties QComboBox:disabled {
+        background-color: #f4f6f8; color: #52606d;
+    }
+    QScrollArea#propertiesScroll { border: none; background-color: #f4f6f8; }
+    QGroupBox#quickActions { padding-top: 16px; }
+    QGroupBox#quickActions QPushButton { padding: 5px 12px; }
     QFrame#canvasFrame { background: white; border: 2px dashed #9fb3c8; border-radius: 14px; }
     QFrame#toolbarFrame { background: white; border: 1px solid #d9e2ec; border-radius: 12px; }
 
@@ -315,7 +342,7 @@ class SubstationGuiMockup(QMainWindow):
         background-color: transparent;
         font-size: 11pt;
     }
-""")
+""" + SCROLLBAR_STYLE)
 
     # --- Undo / redo wiring -------------------------------------------------
 
@@ -520,7 +547,8 @@ class SubstationGuiMockup(QMainWindow):
         self.project_box.setText(data["project"])
         EQUIPMENT_DEFS.clear()
         self.equipment_list.clear()
-        for key, definition in data["library"].items():
+        self.equipment_search.clear()
+        for key, definition in library_from_layout(data).items():
             EQUIPMENT_DEFS[key] = {"label": definition["name"], "definition": definition,
                 "factory": functools.partial(make_user_equipment, definition["symbol"], definition["name"], definition["properties"])}
             entry = QListWidgetItem(definition["name"])
@@ -711,6 +739,7 @@ class SubstationGuiMockup(QMainWindow):
         palette_layout = QVBoxLayout(palette_group)
 
         search = QLineEdit()
+        self.equipment_search = search
         search.setPlaceholderText("Search equipment...")
         palette_layout.addWidget(search)
 
@@ -731,12 +760,26 @@ class SubstationGuiMockup(QMainWindow):
 
         # Quick actions
         self.controls_group = QGroupBox("Quick Actions")
+        self.controls_group.setObjectName("quickActions")
         self.controls_layout = QVBoxLayout(self.controls_group)
+        self.controls_layout.setContentsMargins(10, 8, 10, 10)
+        self.controls_layout.setSpacing(4)
 
         self.undo_btn = QPushButton("Undo")
         self.redo_btn = QPushButton("Redo")
         self.controls_layout.addWidget(self.undo_btn)
         self.controls_layout.addWidget(self.redo_btn)
+
+        clipboard_row = QHBoxLayout()
+        self.copy_btn = QPushButton("Copy")
+        self.copy_btn.setToolTip("Copy selected components (Ctrl+C in workspace)")
+        self.copy_btn.clicked.connect(lambda: self.workspace_view.copy_selected())
+        self.paste_btn = QPushButton("Paste")
+        self.paste_btn.setToolTip("Paste components (Ctrl+V in workspace)")
+        self.paste_btn.clicked.connect(lambda: self.workspace_view.paste_components())
+        clipboard_row.addWidget(self.copy_btn)
+        clipboard_row.addWidget(self.paste_btn)
+        self.controls_layout.addLayout(clipboard_row)
 
         delete_btn = QPushButton("Delete Selected")
         delete_btn.clicked.connect(
@@ -750,8 +793,8 @@ class SubstationGuiMockup(QMainWindow):
         )
         self.controls_layout.addWidget(rotate_btn)
 
-        layout.addWidget(palette_group, 3)
-        layout.addWidget(self.controls_group, 1)
+        layout.addWidget(palette_group, 1)
+        layout.addWidget(self.controls_group, 0)
         return container
 
     def _build_center_panel(self):
@@ -769,7 +812,7 @@ class SubstationGuiMockup(QMainWindow):
             QRectF(0, 0, DEFAULT_WORKSPACE_WIDTH, DEFAULT_WORKSPACE_HEIGHT)
         )
         self.workspace_view = WorkspaceView(self.workspace_scene, self)
-        self.workspace_view.setStyleSheet("background: white; border: none;")
+        self.workspace_view.setStyleSheet("QGraphicsView { background: white; border: none; }")
 
         self._workspace_original = None
         canvas_layout.addWidget(self.workspace_view, 1)
@@ -785,6 +828,14 @@ class SubstationGuiMockup(QMainWindow):
 
         # Properties for the selected symbol or connection
         properties_group = QGroupBox("Selected Element Properties")
+        properties_group.setObjectName("selectedProperties")
+        palette = QPalette(properties_group.palette())
+        for role, color in ((QPalette.ColorRole.Window, "#ffffff"), (QPalette.ColorRole.Base, "#ffffff"),
+                            (QPalette.ColorRole.Text, "#1f2933"), (QPalette.ColorRole.WindowText, "#1f2933"),
+                            (QPalette.ColorRole.ButtonText, "#1f2933"), (QPalette.ColorRole.Button, "#ffffff"),
+                            (QPalette.ColorRole.Highlight, "#006a4e"), (QPalette.ColorRole.HighlightedText, "#ffffff")):
+            palette.setColor(role, QColor(color))
+        properties_group.setPalette(palette)
         properties_layout = QGridLayout(properties_group)
         properties_layout.setHorizontalSpacing(16)
         properties_layout.setVerticalSpacing(12)
@@ -852,6 +903,38 @@ class SubstationGuiMockup(QMainWindow):
         self.prop_voltage.editingFinished.connect(lambda: self._on_property_voltage_changed(self.prop_voltage.text()))
         properties_layout.addWidget(self.prop_voltage, 8, 1)
 
+        self.breaker_fields = {}
+        self._breaker_widgets = []
+        choices = {
+            "coil_current_basis": [("Whole breaker", "whole_breaker"), ("Per mechanism", "per_mechanism")],
+            "mechanism_arrangement": [("Shared mechanism", "shared"), ("Independent per pole", "independent")],
+        }
+        labels = {"coil_current_basis": "Coil current basis:", "mechanism_arrangement": "Mechanisms:",
+                  "pole_count": "Breaker poles:", "trip_coil_1_supply": "Trip Coil 1 supply:",
+                  "trip_coil_2_supply": "Trip Coil 2 supply:", "close_coil_supply": "Close Coil supply:",
+                  "motor_supply": "Motor supply:"}
+        for row, key in enumerate(SETTING_KEYS, 9):
+            label = QLabel(labels[key])
+            if key in choices:
+                field = QComboBox()
+                for text, value in choices[key]:
+                    field.addItem(text, value)
+                field.currentIndexChanged.connect(lambda _index, key=key: self._on_breaker_setting_changed(key))
+            elif key == "pole_count":
+                field = QSpinBox()
+                field.setRange(1, 3)
+                field.valueChanged.connect(lambda _value, key=key: self._on_breaker_setting_changed(key))
+            else:
+                field = QLineEdit()
+                field.editingFinished.connect(lambda key=key: self._on_breaker_setting_changed(key))
+            properties_layout.addWidget(label, row, 0)
+            properties_layout.addWidget(field, row, 1)
+            self.breaker_fields[key] = field
+            self._breaker_widgets.extend((label, field))
+        self.breaker_fields["coil_current_basis"].setToolTip(
+            "Applies to trip and close coils. Motor currents are always entered for the whole device."
+        )
+
         self._non_bus_property_widgets = [
             self.prop_status_label,
             self.prop_status,
@@ -885,7 +968,14 @@ class SubstationGuiMockup(QMainWindow):
         self.output_box.setReadOnly(True)
         analysis_layout.addWidget(self.output_box)
 
-        layout.addWidget(properties_group, 1)
+        properties_scroll = QScrollArea()
+        properties_scroll.setObjectName("propertiesScroll")
+        properties_scroll.viewport().setAutoFillBackground(True)
+        properties_scroll.viewport().setPalette(palette)
+        properties_scroll.setWidgetResizable(True)
+        properties_scroll.setWidget(properties_group)
+        properties_scroll.setMinimumHeight(180)
+        layout.addWidget(properties_scroll, 3)
         layout.addWidget(analysis_group, 4)
 
         if hasattr(self, "workspace_scene"):
@@ -948,12 +1038,28 @@ class SubstationGuiMockup(QMainWindow):
         try:
             netlist = self._protection_netlist()
             dialog = ZoneDialog(netlist, self.protection_zones or propose_zones(netlist), self)
-            if dialog.exec() == QDialog.DialogCode.Accepted:
-                self.protection_zones = dialog.zones
-                self._mark_modified()
-                self._on_run_evaluation_clicked()
         except (ValueError, TypeError) as error:
             QMessageBox.warning(self, "Protection Zone Settings", str(error))
+            return
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            changes = []
+            for item in self.workspace_scene.items():
+                if isinstance(item, OneLineSymbolItem) and item.equip_type == "breaker":
+                    props = dialog.components[item.instance_id]["properties"]
+                    changes.extend((item, key, props[key]) for key in SETTING_KEYS
+                                   if getattr(item, "properties", {}).get(key) != props[key])
+            if changes or self.protection_zones != dialog.zones:
+                self.undo_stack.beginMacro("Configure protection zones and breaker settings")
+                self.undo_stack.push(ReplaceZonesCommand(self.protection_zones, dialog.zones, self._apply_protection_zones))
+                for item, key, value in changes:
+                    self.undo_stack.push(EditPropertyCommand(item, key, value, self._on_selection_changed))
+                self.undo_stack.endMacro()
+            self._mark_modified()
+            self._on_run_evaluation_clicked()
+
+    def _apply_protection_zones(self, zones):
+        self.protection_zones = zones
+        self._on_selection_changed()
 
     def _expand_zone_analysis(self):
         dialog = QDialog(self)
@@ -1406,6 +1512,20 @@ class SubstationGuiMockup(QMainWindow):
         if not hasattr(self, "workspace_scene"):
             return
         items = self.workspace_scene.selectedItems()
+        breaker = items[0] if len(items) == 1 and isinstance(items[0], OneLineSymbolItem) and items[0].equip_type == "breaker" else None
+        for widget in self._breaker_widgets:
+            widget.setVisible(breaker is not None)
+        if breaker is not None:
+            settings = breaker_settings({"id": breaker.instance_id, "properties": self._symbol_properties(breaker)}, self.protection_zones)
+            for key, field in self.breaker_fields.items():
+                field.blockSignals(True)
+                if isinstance(field, QComboBox):
+                    field.setCurrentIndex(field.findData(settings[key]))
+                elif isinstance(field, QSpinBox):
+                    field.setValue(settings[key])
+                else:
+                    field.setText(settings[key])
+                field.blockSignals(False)
         if len(items) != 1:
             self.prop_type.setText("—")
             self.prop_name.setReadOnly(True)
@@ -1469,6 +1589,27 @@ class SubstationGuiMockup(QMainWindow):
         if new_id == symbol.visible_id():
             return
         self._edit_property(symbol, "display_id", new_id)
+
+    def _on_breaker_setting_changed(self, key):
+        symbol = self._selected_editable_symbol()
+        if symbol is None or symbol.equip_type != "breaker":
+            return
+        field = self.breaker_fields[key]
+        value = field.currentData() if isinstance(field, QComboBox) else field.value() if isinstance(field, QSpinBox) else field.text().strip()
+        if value is None or value == "":
+            self.footer_status_label.setText("Enter a DC supply name for this breaker load")
+            self._on_selection_changed()
+            return
+        settings = breaker_settings({"id": symbol.instance_id, "properties": self._symbol_properties(symbol)}, self.protection_zones)
+        settings[key] = value
+        # Materialize compatible legacy defaults together, making this equipment
+        # authoritative for every zone. One Undo restores the entire edit.
+        changes = [(name, val) for name, val in settings.items() if symbol.properties.get(name) != val]
+        if changes:
+            self.undo_stack.beginMacro(f"Edit {symbol.visible_id()} breaker settings")
+            for name, val in changes:
+                self.undo_stack.push(EditPropertyCommand(symbol, name, val, self._on_selection_changed))
+            self.undo_stack.endMacro()
 
     def _edit_property(self, symbol, key, value):
         old = symbol.display_id if key == "display_id" else getattr(symbol, "properties", {}).get(key)

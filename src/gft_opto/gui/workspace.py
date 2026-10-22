@@ -1,12 +1,16 @@
+# Handles the drawing workspace, including equipment placement, wiring, selection, zoom, and copy/paste.
+
 """Workspace grid and the canvas view that edits the one-line."""
 
 import math
+import json
+import re
 from typing import Callable
 
-from PySide6.QtCore import Qt, QPointF, QRectF
+from PySide6.QtCore import Qt, QPointF, QRectF, QMimeData
 from PySide6.QtGui import (
     QBrush, QColor, QPainter, QPainterPath, QPen, QPixmap,
-    QTransform, QUndoCommand, QUndoStack,
+    QTransform, QUndoCommand, QUndoStack, QKeySequence,
 )
 from PySide6.QtWidgets import (
     QApplication, QGraphicsItem, QGraphicsPathItem, QGraphicsPixmapItem,
@@ -23,6 +27,7 @@ from gft_opto.gui.commands import (
     ResizeEquipmentCommand,
     RotateEquipmentCommand,
     SplitWireCommand,
+    PasteComponentsCommand,
 )
 from gft_opto.gui.routing import (
     BUS_DROP_RADIUS,
@@ -58,7 +63,11 @@ from gft_opto.gui.symbols import (
     OneLineSymbolItem,
     make_user_equipment,
     release_instance_id,
+    next_instance_id,
 )
+from gft_opto.gui.layout_io import scene_data, build_scene, reserve_ids
+
+COMPONENT_CLIPBOARD_MIME = "application/x-gft-opto-components"
 
 # ---------------------------------------------------------------------------
 # Workspace canvas
@@ -272,7 +281,8 @@ class WorkspaceView(QGraphicsView):
         points = route_wire_on_grid(
             start,
             end,
-            snap_endpoints=self._snap_to_grid,
+            # start is a real port. A free end was already snapped above.
+            snap_endpoints=False,
             block_leave=block_leave,
             block_arrive=block_arrive,
         )
@@ -709,7 +719,89 @@ class WorkspaceView(QGraphicsView):
 
     # --- Keyboard & mouse input ---------------------------------------------
 
+    def copy_selected(self):
+        selected = {item for item in self.scene().selectedItems() if isinstance(item, OneLineSymbolItem)}
+        if not selected:
+            self._set_status("Select components to copy")
+            return False
+        included = list(selected) + [item for item in self.scene().items() if isinstance(item, ConnectionItem)
+            and item.from_item in selected and item.to_item in selected]
+        # Reuse the layout serializer so every electrical and visual property
+        # survives, including bus taps, rotation and breaker equipment settings.
+        class Selection:
+            def items(self):
+                return included
+        payload = scene_data(Selection())
+        mime = QMimeData()
+        mime.setData(COMPONENT_CLIPBOARD_MIME, json.dumps(payload, allow_nan=False).encode("utf-8"))
+        QApplication.clipboard().setMimeData(mime)
+        self._last_paste_payload = None
+        self._set_status(f"Copied {len(selected)} component(s)")
+        return True
+
+    def paste_components(self):
+        mime = QApplication.clipboard().mimeData()
+        if mime is None or not mime.hasFormat(COMPONENT_CLIPBOARD_MIME):
+            self._set_status("Copy diagram components before pasting")
+            return False
+        raw = bytes(mime.data(COMPONENT_CLIPBOARD_MIME))
+        try:
+            payload = json.loads(raw)
+            rect = self.scene().sceneRect()
+            staged = build_scene({"version": 1, "project": "Clipboard", "pdf": None,
+                "scene_rect": [rect.x(), rect.y(), rect.width(), rect.height()], "library": {},
+                "settings": {"grid_visible": True, "grid_opacity": 25, "snap": False, "pdf_visible": False},
+                "components": payload["components"], "connections": payload["connections"]})
+            symbols = [item for item in staged.items() if isinstance(item, OneLineSymbolItem)]
+            wires = [item for item in staged.items() if isinstance(item, ConnectionItem)]
+            if not symbols:
+                return False
+        except (ValueError, KeyError, TypeError, AttributeError) as error:
+            self._set_status(f"Could not paste components: {error}")
+            return False
+        count = getattr(self, "_paste_count", 0) + 1 if getattr(self, "_last_paste_payload", None) == raw else 1
+        reserve_ids(self.scene())
+        used_labels = {item.visible_id() for item in self.scene().items() if isinstance(item, OneLineSymbolItem)}
+        offset = QPointF(GRID_SPACING * 2 * count, GRID_SPACING * 2 * count)
+        for wire in wires:
+            wire.detach()
+            staged.removeItem(wire)
+        was_snap = OneLineSymbolItem.snap_to_grid_enabled
+        OneLineSymbolItem.snap_to_grid_enabled = False
+        try:
+            for item in symbols:
+                staged.removeItem(item)
+                item.instance_id = next_instance_id(item.equip_type)
+                while not item.display_id and item.instance_id in used_labels:
+                    item.instance_id = next_instance_id(item.equip_type)
+                if item.display_id:
+                    match = re.fullmatch(r"(.+) \((\d+)\)", item.display_id)
+                    base = match.group(1) if match else item.display_id
+                    suffix = max(2, int(match.group(2)) + 1) if match else 2
+                    label = f"{base} ({suffix})"
+                    while label in used_labels:
+                        suffix += 1
+                        label = f"{base} ({suffix})"
+                    item.display_id = label
+                used_labels.add(item.visible_id())
+                item.setPos(item.pos() + offset)
+        finally:
+            OneLineSymbolItem.snap_to_grid_enabled = was_snap
+        self._push(PasteComponentsCommand(self.scene(), symbols, wires, self._sync_grid_to_scene))
+        self._last_paste_payload, self._paste_count = raw, count
+        self.ensureVisible(symbols[0])
+        self._set_status(f"Pasted {len(symbols)} component(s) — review protection-zone assignments")
+        return True
+
     def keyPressEvent(self, event):
+        if event.matches(QKeySequence.StandardKey.Copy):
+            self.copy_selected()
+            event.accept()
+            return
+        if event.matches(QKeySequence.StandardKey.Paste):
+            self.paste_components()
+            event.accept()
+            return
         if event.key() == Qt.Key.Key_Escape and self._rotate_item is not None:
             self._cancel_rotate()
             event.accept()
@@ -1059,5 +1151,3 @@ class WorkspaceView(QGraphicsView):
         self._push(AddEquipmentCommand(self.scene(), symbol))
         self._set_status(f"Placed {symbol.visible_id()}")
         event.acceptProposedAction()
-
-

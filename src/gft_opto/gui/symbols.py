@@ -1,3 +1,5 @@
+# Defines equipment symbols, their terminals, bus taps, wire graphics, and equipment-library factories.
+
 """One-line equipment glyphs, junction dots, and the wires between them."""
 
 import math
@@ -16,6 +18,7 @@ from gft_opto.gui.routing import (
     PORT_DOT_RADIUS,
     PORT_HIT_RADIUS,
     RESIZE_HANDLE_HIT,
+    RESIZE_HANDLE_OUTSET,
     RESIZE_HANDLE_SIZE,
     ROTATE_HANDLE_HIT,
     ROTATE_HANDLE_OFFSET,
@@ -169,7 +172,13 @@ class OneLineSymbolItem(QGraphicsItem):
     # --- Resize / rotate handles --------------------------------------------
 
     def resize_handle_points(self) -> dict[str, QPointF]:
-        r = self._rect
+        """Corners set out from the body so they clear the terminal dots."""
+        r = self._rect.adjusted(
+            -RESIZE_HANDLE_OUTSET,
+            -RESIZE_HANDLE_OUTSET,
+            RESIZE_HANDLE_OUTSET,
+            RESIZE_HANDLE_OUTSET,
+        )
         t = self._local_transform()
         return {
             "tl": t.map(r.topLeft()),
@@ -214,6 +223,9 @@ class OneLineSymbolItem(QGraphicsItem):
         pad = 6.0
         if self.isSelected():
             pad = max(pad, RESIZE_HANDLE_SIZE / 2 + 2)
+            half = RESIZE_HANDLE_SIZE / 2 + 2
+            for pt in self.resize_handle_points().values():
+                rect = rect.united(QRectF(pt.x() - half, pt.y() - half, 2 * half, 2 * half))
             handle = self.rotation_handle_pos()
             hr = ROTATE_HANDLE_RADIUS + 2
             handle_rect = QRectF(handle.x() - hr, handle.y() - hr, 2 * hr, 2 * hr)
@@ -907,7 +919,9 @@ class ConnectionItem(QGraphicsPathItem):
             route_wire_on_grid(
                 p1,
                 p2,
-                snap_endpoints=OneLineSymbolItem.snap_to_grid_enabled,
+                # Keep the ends on the terminals. Grid-snapping them leaves a
+                # gap when a port is not itself on a grid intersection.
+                snap_endpoints=False,
                 block_leave=port_into_direction(self.from_item, self.from_port),
                 block_arrive=port_into_direction(self.to_item, self.to_port),
             )
@@ -1006,5 +1020,3 @@ def make_user_equipment(
     item.display_name = name
     item.properties = props
     return item
-
-

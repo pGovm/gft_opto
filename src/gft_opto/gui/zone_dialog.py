@@ -1,3 +1,5 @@
+# Lets users review protection-zone boundaries and configure the loads and operating stages for each zone.
+
 """Editable CT boundaries and explicit per-stage coil/motor assignments."""
 import copy
 import uuid
@@ -14,6 +16,8 @@ from gft_opto.logic.protection_study import (
     LOADS, STAGES, kind, propose_zones, validate_zones, topology_signature,
     configuration_signature, analyze_topology, evaluate_zones,
 )
+from gft_opto.logic.breaker_settings import breaker_settings, resolve_breaker_action, SUPPLY_KEYS
+from gft_opto.gui.theme import SCROLLBAR_STYLE
 
 
 class ZoneDialog(QDialog):
@@ -35,15 +39,35 @@ class ZoneDialog(QDialog):
         self.active = -1
         self.loading = False
         self.components = {c["id"]: c for c in netlist["components"]}
+        conflicts = set()
+        for ident, component in self.components.items():
+            if kind(component) == "breaker":
+                for supply_key in set(SUPPLY_KEYS.values()):
+                    old_sources = {a["supply"] for z in zones for a in z["actions"]
+                        if a["component"] == ident and SUPPLY_KEYS[a["load"]] == supply_key and a.get("supply")}
+                    if supply_key not in component.get("properties", {}) and len(old_sources) > 1:
+                        conflicts.add(ident)
+        for zone in self.zones:
+            if any(a["component"] in conflicts for a in zone["actions"]):
+                zone["confirmed"] = False
+        self.legacy_single_pole = {ident for ident, component in self.components.items()
+            if kind(component) == "breaker" and "coil_current_basis" not in component.get("properties", {})
+            and any(a["component"] == ident and a.get("units") == 3 for z in zones for a in z["actions"])}
+        for component in self.components.values():
+            if kind(component) == "breaker":
+                component.setdefault("properties", {}).update(breaker_settings(component, self.zones))
         outer = QVBoxLayout(self)
         guidance = QLabel(
             "Detected zones are proposals. Confirm CTs used by each protection scheme and its actual trip actions.\n"
             "Rows with the same stage operate simultaneously; different stages are evaluated separately.\n"
-            "Units: 1 if current is for the whole breaker; 3 only if the entered current is per pole and three poles operate.\n"
-            "Set the actual DC supply for each coil. Unchecked CTs are not zone boundaries.\n"
+            "Set current basis, mechanisms, pole count and coil DC supplies in the selected breaker's properties.\n"
+            "Choose one-pole or all-pole operation here; supply and multiplier are calculated from the breaker.\n"
             "Detected regions include wire-only and overlapping candidates; selecting one does not assign or confirm operating loads."
         )
         guidance.setWordWrap(True)
+        if conflicts:
+            guidance.setText(guidance.text() + "\nLegacy supply conflicts: " + ", ".join(sorted(conflicts))
+                + ". Review these breaker's supply settings before confirming.")
         outer.addWidget(guidance)
         body = QHBoxLayout()
         outer.addLayout(body, 1)
@@ -89,8 +113,8 @@ class ZoneDialog(QDialog):
                 self.cts.addItem(entry)
         right.addWidget(self.cts)
         right.addWidget(QLabel("Operating loads — use a separate stage for reclose, motor operation, or breaker failure:"))
-        self.actions = QTableWidget(0, 5)
-        self.actions.setHorizontalHeaderLabels(["Equipment", "Load", "Stage", "DC supply", "Units"])
+        self.actions = QTableWidget(0, 6)
+        self.actions.setHorizontalHeaderLabels(["Equipment", "Load", "Stage", "DC supply", "Operation", "Multiplier"])
         self.actions.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.actions.verticalHeader().setDefaultSectionSize(44)
         right.addWidget(self.actions, 1)
@@ -100,7 +124,7 @@ class ZoneDialog(QDialog):
             button.clicked.connect(callback)
             row.addWidget(button)
         right.addLayout(row)
-        self.confirmed = QCheckBox("I have verified this zone's CT boundaries, actions, supply assignments, and units")
+        self.confirmed = QCheckBox("I have verified this zone's CT boundaries and operating actions")
         right.addWidget(self.confirmed)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self.accept)
@@ -159,7 +183,7 @@ class ZoneDialog(QDialog):
                 border: none; border-radius: 8px; padding: 8px 16px;
             }
             QPushButton:disabled { background-color: #d9e2ec; color: #52606d; }
-        """)
+        """ + SCROLLBAR_STYLE)
 
     def unconfirm(self, *_):
         if not self.loading:
@@ -206,11 +230,14 @@ class ZoneDialog(QDialog):
             return
         actions = []
         for row in range(self.actions.rowCount()):
-            actions.append({"component": self.actions.cellWidget(row, 0).currentData() or "",
+            action = {"component": self.actions.cellWidget(row, 0).currentData() or "",
                 "load": self.actions.cellWidget(row, 1).currentData(),
                 "stage": self.actions.cellWidget(row, 2).currentText().strip(),
-                "supply": self.actions.cellWidget(row, 3).text().strip(),
-                "units": self.actions.cellWidget(row, 4).value()})
+                "operation": self.actions.cellWidget(row, 4).currentData()}
+            component = self.components.get(action["component"])
+            if component is None or kind(component) != "breaker":
+                action["supply"] = self.actions.cellWidget(row, 3).text().strip()
+            actions.append(action)
         self.zones[self.active].update(name=self.name.text().strip(), kind=self.zone_kind.currentText(),
             seed=self.seed.currentData() or "", confirmed=self.confirmed.isChecked(), actions=actions,
             boundary_cts=[self.cts.item(i).data(Qt.ItemDataRole.UserRole) for i in range(self.cts.count())
@@ -268,7 +295,7 @@ class ZoneDialog(QDialog):
     def add_action(self, action=None):
         if self.active < 0:
             return
-        action = action or {"component": "", "load": "trip_coil_1_a", "stage": "Primary trip", "supply": "DC 1", "units": 1}
+        action = action or {"component": "", "load": "trip_coil_1_a", "stage": "Primary trip", "operation": "all_poles"}
         row = self.actions.rowCount()
         self.actions.insertRow(row)
         equipment, load, stage = QComboBox(), QComboBox(), QComboBox()
@@ -285,17 +312,64 @@ class ZoneDialog(QDialog):
         stage.setEditable(True)
         stage.addItems(STAGES)
         stage.setCurrentText(action["stage"])
-        supply = QLineEdit(action["supply"])
-        units = QSpinBox()
-        units.setRange(1, 100)
-        units.setValue(action["units"])
-        for col, widget in enumerate((equipment, load, stage, supply, units)):
+        supply = QLineEdit(action.get("supply", "DC 1"))
+        operation = QComboBox()
+        for title, value in (("All poles", "all_poles"), ("One pole", "one_pole"), ("Whole device", "device")):
+            operation.addItem(title, value)
+        selected = action.get("operation")
+        component = self.components.get(action["component"])
+        if selected is None:
+            selected = "device" if action["load"].startswith("motor_") else "one_pole" if action.get("units") == 1 and action["component"] in self.legacy_single_pole else "all_poles"
+            if action.get("units", 1) not in (1, 3) or (action.get("units", 1) != 1 and (action["load"].startswith("motor_") or component is None or kind(component) != "breaker")):
+                selected = "legacy"
+        if selected == "legacy":
+            operation.addItem("Legacy units — review", "legacy")
+        operation.setCurrentIndex(operation.findData(selected))
+        multiplier = QLineEdit()
+        multiplier.setReadOnly(True)
+        for col, widget in enumerate((equipment, load, stage, supply, operation, multiplier)):
             self.actions.setCellWidget(row, col, widget)
-        for combo in (equipment, load, stage):
-            combo.currentTextChanged.connect(self.unconfirm)
+        def update_row(*_):
+            self._update_action_preview(equipment, load, operation, supply, multiplier)
+            self.unconfirm()
+        for combo in (equipment, load, operation):
+            combo.currentIndexChanged.connect(update_row)
+        stage.currentTextChanged.connect(self.unconfirm)
         supply.textEdited.connect(self.unconfirm)
-        units.valueChanged.connect(self.unconfirm)
+        self._update_action_preview(equipment, load, operation, supply, multiplier)
         self.unconfirm()
+
+    def _update_action_preview(self, equipment, load, operation, supply, multiplier):
+        component = self.components.get(equipment.currentData())
+        is_breaker = component is not None and kind(component) == "breaker"
+        supply.setReadOnly(is_breaker)
+        motor = load.currentData().startswith("motor_")
+        operation.blockSignals(True)
+        if (motor or not is_breaker) and operation.currentData() != "legacy":
+            operation.setCurrentIndex(operation.findData("device"))
+        elif operation.currentData() == "device":
+            operation.setCurrentIndex(operation.findData("all_poles"))
+        operation.setEnabled((is_breaker and not motor) or operation.currentData() == "legacy")
+        for index in (0, 1):
+            operation.model().item(index).setEnabled(is_breaker and not motor)
+        operation.model().item(2).setEnabled(motor or not is_breaker)
+        operation.blockSignals(False)
+        try:
+            if is_breaker:
+                supply.setText(breaker_settings(component, self.zones)[SUPPLY_KEYS[load.currentData()]])
+                source, units = resolve_breaker_action(component,
+                    {"load": load.currentData(), "operation": operation.currentData()}, self.zones)
+                supply.setText(source)
+                supply.setToolTip("Set this supply in the selected breaker's properties")
+            else:
+                if operation.currentData() == "legacy":
+                    raise ValueError("Review the legacy multiplier and select Whole device.")
+                units = 1
+            multiplier.setText(f"×{units}")
+            multiplier.setToolTip("Calculated from the equipment current basis and operating action")
+        except ValueError as error:
+            multiplier.setText("Review")
+            multiplier.setToolTip(str(error))
 
     def remove_action(self):
         row = self.actions.currentRow()

@@ -1,3 +1,5 @@
+# Validates configured protection scenarios and calculates their momentary DC loads and per-supply peaks using detected regions.
+
 """Editable protection studies on top of the CT-terminal topology detector.
 
 The topology API in protection_zones.py remains unchanged. This module owns
@@ -12,9 +14,11 @@ from dataclasses import dataclass, field
 import hashlib
 import json
 import math
+import copy
 from typing import Any
 
 from gft_opto.logic.momentary_calc2 import Load, Scenario, NETLIST_PROPERTY_LOAD_MAP
+from gft_opto.logic.breaker_settings import resolve_breaker_action, SETTING_KEYS
 from gft_opto.logic.protection_zones import (
     Zone, connection_key, identify_zones, generate_composite_zones,
     find_enclosed_zones, zone_signature,
@@ -210,10 +214,17 @@ def validate_zones(zones: list[dict]) -> None:
                 raise ValueError(f"{ident}: unknown load property.")
             # Draft rows may be blank, but cannot produce a complete result.
             _text(action.get("stage"), "Action stage", empty=True)
-            _text(action.get("supply"), "DC supply", empty=True)
-            units = action.get("units")
-            if isinstance(units, bool) or not isinstance(units, int) or not 1 <= units <= 100:
-                raise ValueError(f"{ident}: units must be an integer from 1 to 100.")
+            if "operation" in action:
+                if action["operation"] not in ("all_poles", "one_pole", "device", "legacy"):
+                    raise ValueError(f"{ident}: unknown operating action.")
+                if "supply" in action:
+                    _text(action["supply"], "DC supply", empty=True)
+            else:
+                _text(action.get("supply"), "DC supply", empty=True)
+            if "operation" not in action or "units" in action:
+                units = action.get("units")
+                if isinstance(units, bool) or not isinstance(units, int) or not 1 <= units <= 100:
+                    raise ValueError(f"{ident}: units must be an integer from 1 to 100.")
         for key in ("topology_signature", "configuration_signature"):
             if key in zone and not isinstance(zone[key], str):
                 raise ValueError(f"{ident}: {key} must be a string.")
@@ -410,6 +421,9 @@ def _evaluate_actions(zone: dict, graph: _Graph, voltage: float) -> tuple[list[d
         by_supply: dict[str, Scenario] = {}
         metadata = []
         for action in actions:
+            if "_resolution_error" in action:
+                warnings.append(f"{action['component']}: {action['_resolution_error']}")
+                continue
             ident, key, units = action["component"], action["load"], action["units"]
             supply = action["supply"].strip()
             if not supply:
@@ -476,6 +490,23 @@ def evaluate_zones(netlist: dict, zones: list[dict]) -> dict:
     """
     validate_zones(zones)
     graph = _Graph(netlist)
+    original_zones = {zone["id"]: zone for zone in zones}
+    resolved = copy.deepcopy(zones)
+    for zone in resolved:
+        for action in zone["actions"]:
+            component = graph.records.get(action["component"])
+            if component is not None and kind(component) == "breaker" and (
+                    "operation" in action or any(key in component.get("properties", {}) for key in SETTING_KEYS)):
+                try:
+                    action["supply"], action["units"] = resolve_breaker_action(component, action, zones)
+                except ValueError as error:
+                    action["_resolution_error"] = str(error)
+            elif "operation" in action:
+                action.setdefault("supply", "")
+                action["units"] = 1
+                if action["operation"] not in ("device", "all_poles"):
+                    action["_resolution_error"] = "Review this device's operating action."
+    zones = resolved
     voltage = netlist.get("voltage_V", 125.0)
     try:
         valid_voltage = (not isinstance(voltage, bool) and isinstance(voltage, (int, float))
@@ -491,7 +522,7 @@ def evaluate_zones(netlist: dict, zones: list[dict]) -> dict:
     assignments = defaultdict(lambda: defaultdict(set))
     for zone in zones:
         for action in zone["actions"]:
-            if action["component"] and action["supply"].strip():
+            if "_resolution_error" not in action and action["component"] and action["supply"].strip():
                 assignments[_physical_key(action)][action["supply"].strip()].add(zone["id"])
     conflicts = defaultdict(list)
     for physical, supplies in assignments.items():
@@ -506,7 +537,8 @@ def evaluate_zones(netlist: dict, zones: list[dict]) -> dict:
             warnings.append("Confirm this zone's CT boundaries, operating loads, stages, DC supplies and units.")
         elif zone.get("topology_signature") != current_signature:
             warnings.append("Reconfirm this zone: connectivity or switching state changed, or its approval predates this detector.")
-        if zone.get("configuration_signature") and zone["configuration_signature"] != configuration_signature(zone):
+        original = original_zones[zone["id"]]
+        if zone.get("configuration_signature") and zone["configuration_signature"] != configuration_signature(original):
             warnings.append("Reconfirm this zone: its saved operating assignments or CT settings changed.")
         scenarios, action_warnings = _evaluate_actions(zone, graph, voltage)
         warnings.extend(action_warnings)

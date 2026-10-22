@@ -1,3 +1,5 @@
+# Checks that the real GUI correctly connects zone configuration, detected regions, highlighting, saved layouts, and evaluation.
+
 """Real Qt workflow regressions for the new topology/study boundary.
 
 No fake Qt modules or skip-on-import fallbacks: missing GUI dependencies must
@@ -17,7 +19,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QFontDatabase
 from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 
-from gft_opto.gui.layout_io import build_scene, scene_data
+from gft_opto.gui.layout_io import build_scene, scene_data, library_from_layout
 from gft_opto.gui.substation_gui4 import SubstationGuiMockup
 from gft_opto.gui.symbols import (
     BusItem, CircuitBreakerItem, CurrentTransformerItem, GroundItem,
@@ -189,6 +191,7 @@ class GuiZoneIntegration(unittest.TestCase):
         self.approve(zone)
         self.window._on_run_evaluation_clicked()
         expected = copy.deepcopy(self.window._layout_data())
+        expected["library"] = library_from_layout(expected)
         path = Path(self.temp.name) / "zone-roundtrip.json"
         with patch.object(QMessageBox, "critical") as critical:
             self.assertTrue(self.window.save_layout(path))

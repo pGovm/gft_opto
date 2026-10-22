@@ -1,3 +1,5 @@
+# Checks the drawn diagram for unconnected terminals and certain wiring shorts.
+
 """Open-end and short-circuit check for a drawn one-line."""
 
 from collections import defaultdict
@@ -151,4 +153,3 @@ def check_circuit(scene: QGraphicsScene) -> dict:
         "open_ends": open_ends,
         "shorts": shorts,
     }
-

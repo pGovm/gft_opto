@@ -1,3 +1,5 @@
+# Checks the topology detector with connected equipment and CT terminals, including overlapping and composite regions.
+
 """ZONE-OBJECT-TEST-SUITE-V2: protection topology tests (no Qt).
 
 Install this file as tests/test_protection_zones.py, replacing the old suite.

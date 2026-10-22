@@ -1,4 +1,8 @@
+# Defines reversible editing actions used by Undo and Redo.
+
 """Undo and redo commands for the one-line canvas."""
+
+import copy
 
 from PySide6.QtCore import QPointF
 from PySide6.QtGui import QUndoCommand
@@ -16,6 +20,18 @@ from gft_opto.gui.symbols import (
 # ---------------------------------------------------------------------------
 # Undo / redo commands
 # ---------------------------------------------------------------------------
+
+class ReplaceZonesCommand(QUndoCommand):
+    def __init__(self, old, new, apply):
+        super().__init__("Configure protection zones")
+        self.old, self.new, self.apply = copy.deepcopy(old), copy.deepcopy(new), apply
+
+    def redo(self):
+        self.apply(copy.deepcopy(self.new))
+
+    def undo(self):
+        self.apply(copy.deepcopy(self.old))
+
 
 class EditPropertyCommand(QUndoCommand):
     """Commit a complete property edit and refresh the selected-item panel."""
@@ -46,6 +62,43 @@ class EditPropertyCommand(QUndoCommand):
 
     def undo(self):
         self._apply(self.old)
+
+class PasteComponentsCommand(QUndoCommand):
+    """Paste a connected group as a single reversible edit."""
+
+    def __init__(self, scene, symbols, connections, sync_grid):
+        super().__init__(f"Paste {len(symbols)} component(s)")
+        self.scene, self.symbols, self.connections = scene, symbols, connections
+        self.old_rect = scene.sceneRect()
+        self.sync_grid = sync_grid
+
+    def redo(self):
+        self.scene.clearSelection()
+        for item in self.symbols:
+            self.scene.addItem(item)
+        for wire in self.connections:
+            self.scene.addItem(wire)
+            wire.attach()
+            wire.update_path()
+        for item in self.symbols:
+            item.setSelected(True)
+        rect = self.old_rect
+        for item in self.symbols:
+            rect = rect.united(item.sceneBoundingRect().adjusted(-25, -25, 25, 25))
+        self.scene.setSceneRect(rect)
+        self.sync_grid()
+        refresh_symbol_labels(self.scene)
+
+    def undo(self):
+        for wire in self.connections:
+            wire.detach()
+            self.scene.removeItem(wire)
+        for item in self.symbols:
+            self.scene.removeItem(item)
+        self.scene.setSceneRect(self.old_rect)
+        self.sync_grid()
+        refresh_symbol_labels(self.scene)
+
 
 class AddEquipmentCommand(QUndoCommand):
     def __init__(self, scene: QGraphicsScene, item: OneLineSymbolItem):
@@ -405,5 +458,3 @@ class DeleteSelectionCommand(QUndoCommand):
             conn.attach()
             conn.update_path()
         refresh_symbol_labels(self.scene)
-
-

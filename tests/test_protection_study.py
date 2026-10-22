@@ -1,3 +1,5 @@
+# Checks momentary-load study calculations against small diagrams with known expected currents.
+
 """Deterministic zone and simultaneous-load examples, without Qt."""
 import copy
 import unittest

@@ -1,3 +1,5 @@
+# Checks that topology detection, configuration validation, and current calculations work together without Qt.
+
 """Regression checks for the real detector/study/calculator integration (no Qt)."""
 import copy
 import json

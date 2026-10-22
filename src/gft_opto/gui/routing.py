@@ -1,3 +1,5 @@
+# Provides shared drawing settings and calculates right-angle wire routes between terminals.
+
 """Shared canvas constants and orthogonal wire routing."""
 
 import sys
@@ -36,6 +38,7 @@ DEFAULT_GRID_OPACITY = 0.25
 # Symbol resize / rotate handles
 RESIZE_HANDLE_SIZE = 8.0
 RESIZE_HANDLE_HIT = 12.0
+RESIZE_HANDLE_OUTSET = 10.0  # pull corners off the terminal dots
 MIN_SYMBOL_SCALE = 0.5
 MAX_SYMBOL_SCALE = 3.0
 SYMBOL_SCALE_STEP = 0.25     # snap resize to this increment
@@ -282,5 +285,3 @@ def point_to_segment_distance(p: QPointF, a: QPointF, b: QPointF) -> tuple[float
     closest = QPointF(a.x() + t * ab.x(), a.y() + t * ab.y())
     delta = p - closest
     return ((delta.x() ** 2 + delta.y() ** 2) ** 0.5, closest)
-
-

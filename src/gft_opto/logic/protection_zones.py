@@ -1,3 +1,5 @@
+# Detects CT-terminal-bounded topology regions, composite regions, and containment; it does not calculate operating loads.
+
 """CT-cut topology regions for the breaker-based momentary calculation.
 
 The GUI interface is unchanged: items have instance_id and connections();

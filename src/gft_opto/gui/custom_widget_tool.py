@@ -1,3 +1,5 @@
+# Provides the Create Component dialog for defining equipment symbols and electrical properties.
+
 """
 Create-Component dialog and a small standalone demo widget.
 

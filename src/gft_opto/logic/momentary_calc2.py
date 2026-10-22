@@ -1,3 +1,5 @@
+# Defines DC loads and scenarios, totals their momentary currents, and supports netlist conversion and CSV/JSON results.
+
 # ============================================================
 # Momentary DC Battery Load Calculator
 # Substation worst-case scenario analysis (up to 12 scenarios)

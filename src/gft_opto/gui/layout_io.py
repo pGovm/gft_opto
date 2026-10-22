@@ -1,9 +1,12 @@
+# Validates, saves, and rebuilds editable JSON layouts and derives equipment-library entries from drawings.
+
 """Versioned, atomic layout persistence, independent of the main window."""
 
 import json
 import math
 import os
 import tempfile
+import copy
 from pathlib import Path
 
 from PySide6.QtCore import QPointF, QRectF
@@ -14,6 +17,35 @@ from gft_opto.gui.symbols import (
     _instance_counters, make_user_equipment,
 )
 from gft_opto.logic.protection_study import validate_zones
+
+
+def library_from_layout(data):
+    """Retain saved templates and expose every drawn equipment definition."""
+    library = copy.deepcopy(data.get("library", {}))
+
+    def signature(definition):
+        return json.dumps(definition, sort_keys=True, allow_nan=False)
+
+    seen = {signature(definition) for definition in library.values()}
+    for component in data.get("components", []):
+        symbol = component["symbol"]
+        # Junctions are wire-editing helpers, not equipment templates.
+        if symbol == "junction":
+            continue
+        definition = {"symbol": symbol if symbol in BUILTIN_SYMBOLS else "custom",
+            "name": component.get("display_id") or component["name"],
+            "properties": copy.deepcopy(component["properties"])}
+        key_signature = signature(definition)
+        if key_signature in seen:
+            continue
+        base = f"layout_{component['id']}"
+        key, suffix = base, 2
+        while key in library:
+            key = f"{base}_{suffix}"
+            suffix += 1
+        library[key] = definition
+        seen.add(key_signature)
+    return library
 
 
 def scene_data(scene):
@@ -45,6 +77,15 @@ def _number(value):
 def validate_properties(props):
     if not isinstance(props, dict):
         raise ValueError("Component properties must be an object.")
+    for key, choices in (("coil_current_basis", ("whole_breaker", "per_mechanism")),
+                         ("mechanism_arrangement", ("shared", "independent"))):
+        if key in props and props[key] not in choices:
+            raise ValueError(f"Invalid breaker setting: {key}")
+    if "pole_count" in props and (isinstance(props["pole_count"], bool) or not isinstance(props["pole_count"], int) or not 1 <= props["pole_count"] <= 3):
+        raise ValueError("Breaker pole count must be between 1 and 3.")
+    for key in ("trip_coil_1_supply", "trip_coil_2_supply", "close_coil_supply", "motor_supply"):
+        if key in props and (not isinstance(props[key], str) or not props[key].strip()):
+            raise ValueError(f"A DC supply is required for {key}.")
     for key in ("trip_coil_1_a", "trip_coil_2_a", "close_coil_a", "motor_inrush_a", "motor_run_a", "rating_kv"):
         if key in props:
             value = _number(props[key])

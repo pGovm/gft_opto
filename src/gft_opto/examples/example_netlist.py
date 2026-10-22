@@ -1,3 +1,5 @@
+# Builds a small artificial diagram to demonstrate the basic momentary-load calculator without launching the GUI.
+
 """Fake netlist scene for testing momentary evaluation without the GUI sandbox."""
 
 from gft_opto.logic.momentary_calc2 import netlist_from_scene, evaluate_scene
