@@ -2,6 +2,7 @@
 .venv/
 
 # Python cache folder
+src/gft_opto/__pycache__
 src/gft_opto/*/__pycache__/*
 tests/__pycache__
 
@@ -11,3 +12,4 @@ dist/
 
 # Misc folders
 .zone-integration-backups/
+zone-verification-*
