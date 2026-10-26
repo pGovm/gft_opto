@@ -52,6 +52,8 @@ def scene_data(scene):
     components, wires = [], []
     for item in scene.items():
         if isinstance(item, OneLineSymbolItem):
+            symbol = "junction" if isinstance(item, JunctionItem) else item.equip_type
+            validate_properties(getattr(item, "properties", {}), symbol=symbol)
             components.append({
                 "id": item.instance_id, "symbol": "junction" if isinstance(item, JunctionItem)
                 else getattr(item, "properties", {}).get("symbol_type", item.equip_type),
@@ -74,9 +76,18 @@ def _number(value):
     return value
 
 
-def validate_properties(props):
+def validate_properties(props, *, symbol=None):
     if not isinstance(props, dict):
         raise ValueError("Component properties must be an object.")
+    # Do not reload a breaker glyph as a CT because conflicting metadata wins
+    # over its real symbol type in the netlist study adapter.
+    if symbol is not None and "symbol_type" in props:
+        declared = props["symbol_type"]
+        allowed = {symbol}
+        if symbol == "custom" or symbol.startswith("custom_"):
+            allowed.add("custom")
+        if not isinstance(declared, str) or declared not in allowed:
+            raise ValueError(f"Symbol {symbol!r} conflicts with properties.symbol_type {declared!r}.")
     for key, choices in (("coil_current_basis", ("whole_breaker", "per_mechanism")),
                          ("mechanism_arrangement", ("shared", "independent"))):
         if key in props and props[key] not in choices:
@@ -119,7 +130,7 @@ def build_scene(data):
             raise ValueError("Invalid library entry.")
         if entry["symbol"] not in (*BUILTIN_SYMBOLS, "custom"):
             raise ValueError("Unknown library symbol.")
-        validate_properties(entry["properties"])
+        validate_properties(entry["properties"], symbol=entry["symbol"])
     scene = QGraphicsScene()
     scene.setSceneRect(QRectF(*rect))
     items = {}
@@ -137,7 +148,7 @@ def build_scene(data):
             if not isinstance(record["name"], str) or not isinstance(record["display_id"], str):
                 raise ValueError("Invalid component name or displayed ID.")
             props = record["properties"]
-            validate_properties(props)
+            validate_properties(props, symbol=key)
             item = JunctionItem() if key == "junction" else make_user_equipment(key, record["name"], props)
             scene.addItem(item)
             item.instance_id = ident

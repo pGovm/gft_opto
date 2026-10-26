@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
 
 from gft_opto.logic.protection_study import (
     LOADS, STAGES, kind, propose_zones, validate_zones, topology_signature,
-    configuration_signature, analyze_topology, evaluate_zones,
+    configuration_signature, analyze_topology, evaluate_zones, add_missing_proposals,
 )
 from gft_opto.logic.breaker_settings import breaker_settings, resolve_breaker_action, SUPPLY_KEYS
 from gft_opto.gui.theme import SCROLLBAR_STYLE
@@ -26,15 +26,15 @@ class ZoneDialog(QDialog):
         self._apply_readable_theme()
         self.setWindowTitle("Protection Zones and Momentary Loads")
         self.resize(1050, 750)
-        self.netlist = netlist
+        self.netlist = copy.deepcopy(netlist)
+        netlist = self.netlist
         validate_zones(zones)
         self.zones = copy.deepcopy(zones)
         self.detected_regions = analyze_topology(netlist)
         signature = topology_signature(netlist)
         for zone in self.zones:
             if (zone.get("topology_signature") != signature or
-                    (zone.get("configuration_signature") and
-                     zone["configuration_signature"] != configuration_signature(zone))):
+                    zone.get("configuration_signature") != configuration_signature(zone)):
                 zone["confirmed"] = False
         self.active = -1
         self.loading = False
@@ -52,10 +52,17 @@ class ZoneDialog(QDialog):
                 zone["confirmed"] = False
         self.legacy_single_pole = {ident for ident, component in self.components.items()
             if kind(component) == "breaker" and "coil_current_basis" not in component.get("properties", {})
-            and any(a["component"] == ident and a.get("units") == 3 for z in zones for a in z["actions"])}
+            and any(a["component"] == ident and a.get("units") == 3
+                    and a["load"] in ("trip_coil_1_a", "trip_coil_2_a", "close_coil_a")
+                    for z in zones for a in z["actions"])}
         for component in self.components.values():
             if kind(component) == "breaker":
-                component.setdefault("properties", {}).update(breaker_settings(component, self.zones))
+                # An unresolved legacy supply is a draft problem, not a new
+                # equipment property. Keep it absent until the user selects it.
+                component.setdefault("properties", {}).update({
+                    key: value for key, value in breaker_settings(component, self.zones).items()
+                    if value != ""
+                })
         outer = QVBoxLayout(self)
         guidance = QLabel(
             "Detected zones are proposals. Confirm CTs used by each protection scheme and its actual trip actions.\n"
@@ -230,13 +237,22 @@ class ZoneDialog(QDialog):
             return
         actions = []
         for row in range(self.actions.rowCount()):
-            action = {"component": self.actions.cellWidget(row, 0).currentData() or "",
-                "load": self.actions.cellWidget(row, 1).currentData(),
-                "stage": self.actions.cellWidget(row, 2).currentText().strip(),
-                "operation": self.actions.cellWidget(row, 4).currentData()}
+            equipment = self.actions.cellWidget(row, 0)
+            action = copy.deepcopy(getattr(equipment, "_saved_action", {}))
+            action.update(component=equipment.currentData() or "",
+                load=self.actions.cellWidget(row, 1).currentData(),
+                stage=self.actions.cellWidget(row, 2).currentText().strip(),
+                operation=self.actions.cellWidget(row, 4).currentData())
+            # Quantities are derived for modern rows. Unresolved legacy drafts
+            # retain their original quantity so review never loses information.
+            if action["operation"] != "legacy":
+                action.pop("units", None)
             component = self.components.get(action["component"])
             if component is None or kind(component) != "breaker":
                 action["supply"] = self.actions.cellWidget(row, 3).text().strip()
+            elif action["operation"] != "legacy" and breaker_settings(
+                    component, self.zones)[SUPPLY_KEYS[action["load"]]]:
+                action.pop("supply", None)
             actions.append(action)
         self.zones[self.active].update(name=self.name.text().strip(), kind=self.zone_kind.currentText(),
             seed=self.seed.currentData() or "", confirmed=self.confirmed.isChecked(), actions=actions,
@@ -299,6 +315,7 @@ class ZoneDialog(QDialog):
         row = self.actions.rowCount()
         self.actions.insertRow(row)
         equipment, load, stage = QComboBox(), QComboBox(), QComboBox()
+        equipment._saved_action = copy.deepcopy(action)
         equipment.addItem("Select equipment", "")
         for ident, component in self.components.items():
             if kind(component) not in ("ct", "pt", "ground", "junction", "bus"):
@@ -378,9 +395,13 @@ class ZoneDialog(QDialog):
             self.unconfirm()
 
     def detect(self):
-        self.capture()
-        seeds = {z["seed"] for z in self.zones}
-        self.zones.extend(z for z in propose_zones(self.netlist) if z["seed"] not in seeds)
+        try:
+            self.capture()
+            zones = add_missing_proposals(self.netlist, self.zones)
+        except (ValueError, TypeError) as error:
+            QMessageBox.warning(self, "Incomplete Zone Settings", str(error))
+            return
+        self.zones = zones
         self.refresh_list()
 
     def add_zone(self):

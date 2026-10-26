@@ -479,9 +479,10 @@ class SubstationGuiMockup(QMainWindow):
             data = json.loads(Path(path).read_text(encoding="utf-8"))
             scene = build_scene(data)
             pdf = data.get("pdf")
+            normalized_pdf = str((Path(path).resolve().parent / pdf).resolve()) if pdf else pdf
+            pdf = normalized_pdf
             pixmap = None
             if pdf:
-                pdf = str((Path(path).resolve().parent / pdf).resolve())
                 try:
                     pixmap = self._read_pdf_pixmap(pdf)
                 except Exception:
@@ -493,7 +494,9 @@ class SubstationGuiMockup(QMainWindow):
                         pixmap = self._read_pdf_pixmap(pdf)
             if not self._confirm_discard():
                 return False
-            self._install_layout(data, scene, str(Path(path).resolve()), pixmap)
+            # Normalize the original reference before taking the saved snapshot.
+            # Selecting a different replacement PDF remains an unsaved edit.
+            self._install_layout(dict(data, pdf=normalized_pdf), scene, str(Path(path).resolve()), pixmap)
             self.pdf_path = pdf
             self._mark_modified()
             self.footer_status_label.setText(
@@ -1047,7 +1050,7 @@ class SubstationGuiMockup(QMainWindow):
                 if isinstance(item, OneLineSymbolItem) and item.equip_type == "breaker":
                     props = dialog.components[item.instance_id]["properties"]
                     changes.extend((item, key, props[key]) for key in SETTING_KEYS
-                                   if getattr(item, "properties", {}).get(key) != props[key])
+                                   if key in props and getattr(item, "properties", {}).get(key) != props[key])
             if changes or self.protection_zones != dialog.zones:
                 self.undo_stack.beginMacro("Configure protection zones and breaker settings")
                 self.undo_stack.push(ReplaceZonesCommand(self.protection_zones, dialog.zones, self._apply_protection_zones))
@@ -1604,7 +1607,8 @@ class SubstationGuiMockup(QMainWindow):
         settings[key] = value
         # Materialize compatible legacy defaults together, making this equipment
         # authoritative for every zone. One Undo restores the entire edit.
-        changes = [(name, val) for name, val in settings.items() if symbol.properties.get(name) != val]
+        changes = [(name, val) for name, val in settings.items()
+                   if val != "" and symbol.properties.get(name) != val]
         if changes:
             self.undo_stack.beginMacro(f"Edit {symbol.visible_id()} breaker settings")
             for name, val in changes:
