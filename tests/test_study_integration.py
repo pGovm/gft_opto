@@ -190,6 +190,7 @@ class StudyIntegration(unittest.TestCase):
 
     def test_different_dc_supplies_are_not_reported_as_one_supply_peak(self):
         self.zone["actions"][1]["supply"] = "DC 2"
+        approve(self.net, self.zone)
         report = study.evaluate_zones(self.net, [self.zone])
         self.assertTrue(report["complete"])
         self.assertEqual(report["supply_peaks"]["DC 1"]["peak_current_A"], 10)
@@ -200,6 +201,7 @@ class StudyIntegration(unittest.TestCase):
         self.zone["actions"].append(copy.deepcopy(action))
         action["stage"] = "Backup trip"
         self.zone["actions"].append(action)
+        approve(self.net, self.zone)
         report = study.evaluate_zones(self.net, [self.zone])
         totals = {r["stage"]: r["peak_current_A"] for r in report["zones"][0]["scenarios"]}
         self.assertEqual(totals, {"Primary trip": 30, "Backup trip": 10})
@@ -207,6 +209,7 @@ class StudyIntegration(unittest.TestCase):
 
     def test_same_stage_with_outer_whitespace_is_one_stage(self):
         self.zone["actions"][1]["stage"] = " Primary trip "
+        approve(self.net, self.zone)
         report = study.evaluate_zones(self.net, [self.zone])
         self.assertTrue(report["complete"])
         self.assertEqual(len(report["zones"][0]["scenarios"]), 1)
@@ -230,6 +233,7 @@ class StudyIntegration(unittest.TestCase):
             {"component": "cb1", "load": "motor_inrush_a", "stage": "Motor inrush", "supply": "DC 1", "units": 1},
             {"component": "cb1", "load": "motor_run_a", "stage": "Motor run", "supply": "DC 1", "units": 1},
         ]
+        approve(self.net, self.zone)
         report = study.evaluate_zones(self.net, [self.zone])
         self.assertTrue(report["complete"])
         self.assertEqual(report["supply_peaks"]["DC 1"]["peak_current_A"], 15)

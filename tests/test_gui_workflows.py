@@ -29,7 +29,7 @@ from gft_opto.gui.symbols import (
     BusItem, CircuitBreakerItem, ConnectionItem, EQUIPMENT_DEFS, OneLineSymbolItem,
     make_user_equipment, CurrentTransformerItem, GroundItem,
 )
-from gft_opto.logic.protection_study import topology_signature
+from gft_opto.logic.protection_study import topology_signature, configuration_signature
 from gft_opto.gui.zone_dialog import ZoneDialog
 from gft_opto.gui.workspace import COMPONENT_CLIPBOARD_MIME
 
@@ -79,6 +79,14 @@ class GuiWorkflows(unittest.TestCase):
             "seed": bus.instance_id, "boundary_cts": [ct.instance_id], "confirmed": True,
             "topology_signature": topology_signature(w._protection_netlist()),
             "actions": [{"component": breaker.instance_id, "load": "trip_coil_1_a", "stage": "Primary trip", "supply": "DC 1", "units": 1}]}]
+        self.approve_current_zones()
+
+    def approve_current_zones(self):
+        """Simulate deliberate user review after fixture assignment/hardware edits."""
+        for zone in self.window.protection_zones:
+            zone["confirmed"] = True
+            zone["topology_signature"] = topology_signature(self.window._protection_netlist())
+            zone["configuration_signature"] = configuration_signature(zone)
 
     def test_live_evaluation_and_stale_results(self):
         w = self.window
@@ -260,6 +268,7 @@ class GuiWorkflows(unittest.TestCase):
         self.assign_test_zone(breaker)
         w.breaker_fields["coil_current_basis"].setCurrentIndex(1)
         w.breaker_fields["mechanism_arrangement"].setCurrentIndex(1)
+        self.approve_current_zones()
         dialog = ZoneDialog(w._protection_netlist(), w.protection_zones, w)
         self.assertTrue(dialog.confirmed.isChecked())
         dialog.actions.cellWidget(0, 4).setCurrentIndex(1)
@@ -330,6 +339,9 @@ class GuiWorkflows(unittest.TestCase):
         field.setText("Battery A")
         field.editingFinished.emit()
         w._on_run_evaluation_clicked()
+        self.assertFalse(w.last_result["protection_analysis"]["complete"])
+        self.approve_current_zones()
+        w._on_run_evaluation_clicked()
         self.assertEqual(w.last_result["protection_analysis"]["supply_peaks"]["Battery A"]["peak_current_A"], 30)
         w.undo_stack.undo()
         self.assertEqual(breaker.properties["trip_coil_1_supply"], "DC 1")
@@ -355,6 +367,7 @@ class GuiWorkflows(unittest.TestCase):
         before = w._layout_data()
         dialog = ZoneDialog(w._protection_netlist(), w.protection_zones, w)
         self.assertEqual(dialog.actions.cellWidget(0, 3).text(), "Legacy DC 2")
+        dialog.confirmed.setChecked(True)
         dialog.accept()
         with patch("gft_opto.gui.substation_gui4.ZoneDialog", return_value=dialog), patch.object(dialog, "exec", return_value=dialog.DialogCode.Accepted):
             w._configure_protection_zones()

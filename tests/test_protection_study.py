@@ -5,7 +5,7 @@ import copy
 import unittest
 
 from gft_opto.logic.protection_study import (
-    evaluate_zones, propose_zones, topology_signature, validate_zones, zone_members,
+    evaluate_zones, propose_zones, topology_signature, validate_zones, zone_members, configuration_signature,
 )
 
 
@@ -22,11 +22,16 @@ def example():
             wire("ct2", "right", "cb2", "left"), wire("cb2", "right", "g2", "node")]}
 
 
-def confirmed(netlist):
-    zone = propose_zones(netlist)[0]
+def approve(netlist, zone):
+    """Model explicit user review after intentional setup changes."""
     zone["confirmed"] = True
     zone["topology_signature"] = topology_signature(netlist)
+    zone["configuration_signature"] = configuration_signature(zone)
     return zone
+
+
+def confirmed(netlist):
+    return approve(netlist, propose_zones(netlist)[0])
 
 
 class ProtectionZones(unittest.TestCase):
@@ -56,6 +61,7 @@ class ProtectionZones(unittest.TestCase):
             {"component": "cb1", "load": "close_coil_a", "stage": "Reclose", "supply": "DC 1", "units": 3},
             {"component": "cb1", "load": "motor_inrush_a", "stage": "Motor inrush", "supply": "DC 1", "units": 1},
             {"component": "cb1", "load": "motor_run_a", "stage": "Motor run", "supply": "DC 1", "units": 1}])
+        approve(netlist, zone)
         report = evaluate_zones(netlist, [zone])
         self.assertTrue(report["complete"])
         self.assertEqual(report["supply_peaks"]["DC 1"]["peak_current_A"], 36)
@@ -65,6 +71,7 @@ class ProtectionZones(unittest.TestCase):
         netlist = example()
         zone = confirmed(netlist)
         zone["actions"].append(copy.deepcopy(zone["actions"][0]))
+        approve(netlist, zone)
         self.assertEqual(evaluate_zones(netlist, [zone])["supply_peaks"]["DC 1"]["peak_current_A"], 30)
         zone["actions"][-1]["supply"] = "DC 2"
         self.assertFalse(evaluate_zones(netlist, [zone])["complete"])
@@ -75,6 +82,7 @@ class ProtectionZones(unittest.TestCase):
         second = copy.deepcopy(first)
         second.update(id="other", name="Other zone")
         second["actions"] = second["actions"][:1]
+        approve(netlist, second)
         report = evaluate_zones(netlist, [first, second])
         self.assertTrue(report["complete"])
         self.assertEqual(report["supply_peaks"]["DC 1"]["peak_current_A"], 30)
@@ -161,6 +169,7 @@ class ProtectionZones(unittest.TestCase):
         zone = confirmed(netlist)
         zone["actions"] = [zone["actions"][0],
             {"component": "cb2", "load": "trip_coil_1_a", "stage": "Breaker failure", "supply": "DC 1", "units": 1}]
+        approve(netlist, zone)
         report = evaluate_zones(netlist, [zone])
         self.assertTrue(report["complete"])
         self.assertEqual(report["supply_peaks"]["DC 1"]["peak_current_A"], 20)

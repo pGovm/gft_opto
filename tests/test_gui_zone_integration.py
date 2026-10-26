@@ -28,7 +28,7 @@ from gft_opto.gui.symbols import (
 from gft_opto.gui.zone_dialog import ZoneDialog
 from gft_opto.logic.protection_zones import connection_key
 from gft_opto.logic.protection_study import (
-    analyze_topology, topology_signature, configuration_signature,
+    analyze_topology, topology_signature, configuration_signature, propose_zones,
 )
 
 
@@ -221,7 +221,7 @@ class GuiZoneIntegration(unittest.TestCase):
         with patch.object(QMessageBox, "warning") as warning:
             dialog.accept()
         warning.assert_not_called()
-        self.assertTrue(dialog.zones[0]["topology_signature"].startswith("ct-study-v1:"))
+        self.assertTrue(dialog.zones[0]["topology_signature"].startswith("ct-study-v2:"))
         self.assertIn("configuration_signature", dialog.zones[0])
 
     def test_editing_boundary_clears_snapshot_and_confirmation(self):
@@ -329,6 +329,161 @@ class GuiZoneIntegration(unittest.TestCase):
             self.assertFalse(self.window.open_layout(str(path)))
         error.assert_called_once()
         self.assertIs(self.window.workspace_scene, old_scene)
+
+
+    def test_missing_configuration_approval_is_unconfirmed_in_the_dialog(self):
+        *_, zone = self.example()
+        del zone["configuration_signature"]
+        dialog = self.dialog()
+        self.assertFalse(dialog.confirmed.isChecked())
+        self.window._on_run_evaluation_clicked()
+        report = self.window.last_result["protection_analysis"]
+        self.assertFalse(report["complete"])
+        self.assertEqual(report["supply_peaks"], {})
+
+
+    def test_action_extension_metadata_survives_dialog_capture_and_save(self):
+        *_, zone = self.example()
+        zone["actions"][0]["review_notes"] = {"reference": "field-check", "keep": [1, 2]}
+        self.approve(zone)
+        dialog = self.dialog()
+        dialog.actions.cellWidget(0, 2).setCurrentText("Reclose")
+        self.assertFalse(dialog.confirmed.isChecked())
+        dialog.accept()  # Save a draft with the edited quantity, not a false approval.
+        self.assertEqual(dialog.result(), QDialog.DialogCode.Accepted)
+        self.assertEqual(dialog.zones[0]["actions"][0]["review_notes"], zone["actions"][0]["review_notes"])
+        self.assertEqual(dialog.zones[0]["actions"][0]["stage"], "Reclose")
+        self.assertEqual(zone["actions"][0]["units"], 1)
+
+
+    def test_detect_missing_after_seed_edit_keeps_event_ids_unique(self):
+        bus, ct, breaker, ground, wires, _ = self.example()
+        proposals = propose_zones(self.window._protection_netlist())
+        old_id = proposals[0]["id"]
+        proposals[0]["seed"] = breaker.instance_id
+        dialog = self.dialog(proposals)
+        dialog.detect()
+        self.assertEqual(len(dialog.zones), 2)
+        self.assertEqual(len({z["id"] for z in dialog.zones}), 2)
+        self.assertEqual(dialog.zones[0]["id"], old_id)
+        self.assertEqual({z["seed"] for z in dialog.zones}, {bus.instance_id, breaker.instance_id})
+        dialog.accept()
+        self.assertEqual(dialog.result(), QDialog.DialogCode.Accepted)
+
+
+    def test_scene_adapter_preserves_ambiguous_colon_strings_as_two_wires(self):
+        a, b, z = self.add(BusItem(), 180), self.add(BusItem(), 450), self.add(BusItem(), 780)
+        a.instance_id, b.instance_id, z.instance_id = "a", "a:b", "z"
+        ap, _ = a.add_tap(0, "b:c")
+        bp, _ = b.add_tap(0, "c")
+        self.wire(a, ap, z, "left")
+        self.wire(b, bp, z, "left")
+        self.assertEqual(len(self.window._protection_netlist()["connections"]), 2)
+
+
+    def test_scene_adapter_ignores_an_off_scene_connection_endpoint(self):
+        a, b = self.add(BusItem(), 180), self.add(BusItem(), 450)
+        self.wire(a, "right", b, "left")
+        self.window.workspace_scene.removeItem(b)
+        net = self.window._protection_netlist()
+        self.assertEqual(net["connections"], [])
+        self.assertEqual([c["id"] for c in net["components"]], [a.instance_id])
+        self.assertEqual(analyze_topology(net), self.window._scene_topology())
+        # Restore before teardown: the saved-layout validator rightly refuses a
+        # stale on-scene wire; this test is about the netlist scope only.
+        self.window.workspace_scene.addItem(b)
+
+
+    def test_layout_rejects_conflicting_symbol_type_metadata(self):
+        _, _, breaker, *_ = self.example()
+        before = self.window._layout_data()
+        data = copy.deepcopy(before)
+        record = next(c for c in data["components"] if c["id"] == breaker.instance_id)
+        record["properties"]["symbol_type"] = "ct"
+        with self.assertRaisesRegex(ValueError, "conflicts"):
+            build_scene(data)
+        self.assertEqual(self.window._layout_data(), before)
+
+
+    def test_library_rejects_conflicting_symbol_type_metadata(self):
+        self.example()
+        data = self.window._layout_data()
+        data["library"]["conflicting"] = {"symbol": "breaker", "name": "Mismatch",
+            "properties": {"symbol_type": "ct"}}
+        with self.assertRaisesRegex(ValueError, "conflicts"):
+            build_scene(data)
+
+
+    def test_relative_background_pdf_does_not_mark_just_opened_layout_dirty(self):
+        import pymupdf
+        pdf = Path(self.temp.name) / "background.pdf"
+        with pymupdf.open() as document:
+            document.new_page(width=72, height=72)
+            document.save(pdf)
+        data = self.window._layout_data()
+        data["pdf"] = "background.pdf"
+        path = Path(self.temp.name) / "layout.json"
+        path.write_text(json.dumps(data), encoding="utf-8")
+        self.assertTrue(self.window.open_layout(str(path)))
+        self.assertEqual(self.window.pdf_path, str(pdf.resolve()))
+        self.assertEqual(self.window._layout_data(), self.window._saved_snapshot)
+        self.assertNotIn(" *", self.window.windowTitle())
+
+
+    def test_dialog_reject_does_not_materialize_settings_in_caller_netlist(self):
+        self.example()
+        netlist = self.window._protection_netlist()
+        before = copy.deepcopy(netlist)
+        dialog = ZoneDialog(netlist, self.window.protection_zones, self.window)
+        self.dialogs.append(dialog)
+        dialog.reject()
+        self.assertEqual(netlist, before)
+
+    def test_effective_breaker_settings_change_requires_new_dialog_review(self):
+        _, _, breaker, _, _, zone = self.example()
+        breaker.properties.update(coil_current_basis="per_mechanism",
+            mechanism_arrangement="independent", pole_count=3, trip_coil_1_supply="A")
+        self.approve(zone)
+        breaker.properties["pole_count"] = 2
+        dialog = self.dialog()
+        self.assertFalse(dialog.confirmed.isChecked())
+        self.window._on_run_evaluation_clicked()
+        self.assertEqual(self.window.last_result["protection_analysis"]["supply_peaks"], {})
+
+    def test_conflicting_legacy_supplies_remain_unresolved_in_draft(self):
+        _, _, breaker, _, _, zone = self.example()
+        zone["actions"].append(copy.deepcopy(zone["actions"][0]))
+        zone["actions"][0]["supply"] = "A"
+        zone["actions"][1]["supply"] = "B"
+        self.approve(zone)
+        dialog = self.dialog()
+        self.assertFalse(dialog.confirmed.isChecked())
+        self.assertNotIn("trip_coil_1_supply", dialog.components[breaker.instance_id]["properties"])
+        dialog.capture()
+        self.assertEqual({a["supply"] for a in dialog.zones[0]["actions"]}, {"A", "B"})
+        dialog.accept()  # A draft may be saved without inventing a supply.
+        self.assertEqual(dialog.result(), QDialog.DialogCode.Accepted)
+        with patch("gft_opto.gui.substation_gui4.ZoneDialog", return_value=dialog), \
+             patch.object(dialog, "exec", return_value=QDialog.DialogCode.Accepted):
+            self.window._configure_protection_zones()
+        self.assertNotIn("trip_coil_1_supply", breaker.properties)
+        self.assertEqual(self.window.last_result["protection_analysis"]["supply_peaks"], {})
+        path = Path(self.temp.name) / "draft-supplies.json"
+        self.assertTrue(self.window.save_layout(path))
+
+    def test_draft_legacy_quantity_is_retained_until_operation_review(self):
+        _, _, _, _, _, zone = self.example()
+        zone["actions"][0]["units"] = 2
+        zone["actions"][0]["notes"] = "Verify legacy quantity"
+        self.approve(zone)
+        dialog = self.dialog()
+        self.assertEqual(dialog.actions.cellWidget(0, 4).currentData(), "legacy")
+        dialog.confirmed.setChecked(False)
+        dialog.capture()
+        self.assertEqual(dialog.zones[0]["actions"][0]["units"], 2)
+        self.assertEqual(dialog.zones[0]["actions"][0]["notes"], "Verify legacy quantity")
+        dialog.accept()
+        self.assertEqual(dialog.result(), QDialog.DialogCode.Accepted)
 
 
 if __name__ == "__main__":

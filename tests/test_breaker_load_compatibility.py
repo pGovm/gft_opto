@@ -5,7 +5,7 @@ import copy
 import unittest
 
 from gft_opto.logic.protection_study import (
-    evaluate_zones, propose_zones, topology_signature, validate_zones, zone_members,
+    evaluate_zones, propose_zones, topology_signature, validate_zones, zone_members, configuration_signature,
 )
 
 
@@ -22,6 +22,15 @@ def example():
             wire("ct2", "right", "cb2", "left"), wire("cb2", "right", "g2", "node")]}
 
 
+def approve(netlist, zone):
+    """Model explicit user review after intentional setup changes."""
+    zone["confirmed"] = True
+    zone["topology_signature"] = topology_signature(netlist)
+    zone["configuration_signature"] = configuration_signature(zone)
+    return zone
+
+
+
 def confirmed(netlist):
     zone = propose_zones(netlist)[0]
     # Keep these legacy fixtures as backwards-compatibility coverage.
@@ -30,6 +39,7 @@ def confirmed(netlist):
         action.update(supply="DC 1", units=1)
     zone["confirmed"] = True
     zone["topology_signature"] = topology_signature(netlist)
+    zone["configuration_signature"] = configuration_signature(zone)
     return zone
 
 
@@ -60,6 +70,7 @@ class ProtectionZones(unittest.TestCase):
             {"component": "cb1", "load": "close_coil_a", "stage": "Reclose", "supply": "DC 1", "units": 3},
             {"component": "cb1", "load": "motor_inrush_a", "stage": "Motor inrush", "supply": "DC 1", "units": 1},
             {"component": "cb1", "load": "motor_run_a", "stage": "Motor run", "supply": "DC 1", "units": 1}])
+        approve(netlist, zone)
         report = evaluate_zones(netlist, [zone])
         self.assertTrue(report["complete"])
         self.assertEqual(report["supply_peaks"]["DC 1"]["peak_current_A"], 36)
@@ -69,6 +80,7 @@ class ProtectionZones(unittest.TestCase):
         netlist = example()
         zone = confirmed(netlist)
         zone["actions"].append(copy.deepcopy(zone["actions"][0]))
+        approve(netlist, zone)
         self.assertEqual(evaluate_zones(netlist, [zone])["supply_peaks"]["DC 1"]["peak_current_A"], 30)
         zone["actions"][-1]["supply"] = "DC 2"
         self.assertFalse(evaluate_zones(netlist, [zone])["complete"])
@@ -79,6 +91,7 @@ class ProtectionZones(unittest.TestCase):
         second = copy.deepcopy(first)
         second.update(id="other", name="Other zone")
         second["actions"] = second["actions"][:1]
+        approve(netlist, second)
         report = evaluate_zones(netlist, [first, second])
         self.assertTrue(report["complete"])
         self.assertEqual(report["supply_peaks"]["DC 1"]["peak_current_A"], 30)
@@ -165,6 +178,7 @@ class ProtectionZones(unittest.TestCase):
         zone = confirmed(netlist)
         zone["actions"] = [zone["actions"][0],
             {"component": "cb2", "load": "trip_coil_1_a", "stage": "Breaker failure", "supply": "DC 1", "units": 1}]
+        approve(netlist, zone)
         report = evaluate_zones(netlist, [zone])
         self.assertTrue(report["complete"])
         self.assertEqual(report["supply_peaks"]["DC 1"]["peak_current_A"], 20)
@@ -176,17 +190,22 @@ class ProtectionZones(unittest.TestCase):
         breaker["properties"].update(coil_current_basis="per_mechanism", mechanism_arrangement="independent",
                                      pole_count=3, trip_coil_1_supply="Battery A", motor_supply="Motor DC")
         zone["actions"] = [{"component": "cb1", "load": "trip_coil_1_a", "stage": "Primary trip", "operation": "all_poles"}]
+        approve(netlist, zone)
         report = evaluate_zones(netlist, [zone])
         self.assertTrue(report["complete"])
         self.assertEqual(report["supply_peaks"]["Battery A"]["peak_current_A"], 30)
         zone["actions"][0]["operation"] = "one_pole"
+        approve(netlist, zone)
         self.assertEqual(evaluate_zones(netlist, [zone])["supply_peaks"]["Battery A"]["peak_current_A"], 10)
         breaker["properties"]["coil_current_basis"] = "whole_breaker"
+        approve(netlist, zone)
         self.assertFalse(evaluate_zones(netlist, [zone])["complete"])
         zone["actions"][0]["operation"] = "all_poles"
+        approve(netlist, zone)
         self.assertEqual(evaluate_zones(netlist, [zone])["supply_peaks"]["Battery A"]["peak_current_A"], 10)
         breaker["properties"]["coil_current_basis"] = "per_mechanism"
         breaker["properties"]["mechanism_arrangement"] = "shared"
+        approve(netlist, zone)
         self.assertEqual(evaluate_zones(netlist, [zone])["supply_peaks"]["Battery A"]["peak_current_A"], 10)
 
     def test_breaker_motor_is_not_multiplied_by_poles(self):
@@ -195,6 +214,7 @@ class ProtectionZones(unittest.TestCase):
         netlist["components"][3]["properties"].update(coil_current_basis="per_mechanism",
             mechanism_arrangement="independent", pole_count=3, motor_supply="Motor DC")
         zone["actions"] = [{"component": "cb1", "load": "motor_inrush_a", "stage": "Motor", "operation": "device"}]
+        approve(netlist, zone)
         self.assertEqual(evaluate_zones(netlist, [zone])["supply_peaks"]["Motor DC"]["peak_current_A"], 15)
 
 
