@@ -18,7 +18,7 @@ import copy
 from typing import Any
 
 from gft_opto.logic.momentary_calc2 import Load, Scenario, NETLIST_PROPERTY_LOAD_MAP
-from gft_opto.logic.breaker_settings import resolve_breaker_action, SETTING_KEYS
+from gft_opto.logic.breaker_settings import resolve_breaker_action, breaker_settings, SETTING_KEYS
 from gft_opto.logic.protection_zones import (
     Zone, connection_key, identify_zones, generate_composite_zones,
     find_enclosed_zones, zone_signature,
@@ -127,18 +127,23 @@ class _Graph:
 def topology_signature(netlist: dict) -> str:
     """Review signature, intentionally distinct from detector region identity.
 
-    Includes connectivity, symbol types and switching state. It excludes drawing
+    Includes connectivity, symbol types, switching state and breaker settings.
+    It excludes drawing
     geometry, labels and current values: currents are re-read and validated for
     every evaluation. The prefix invalidates approvals made by the retired API.
     """
     graph = _Graph(netlist)
     payload = {
-        "version": 1,
+        "version": 2,
         "components": sorted((i, kind(c), str(c.get("properties", {}).get("status", "Closed")))
                              for i, c in graph.records.items()),
         "connections": sorted({connection_key(w) for w in graph.wires}, key=lambda x: json.dumps(x)),
+        # Supply and mechanism settings affect approved quantities/assignments,
+        # unlike entered current magnitudes. Region identities remain unchanged.
+        "breaker_settings": sorted((i, breaker_settings(c))
+                                   for i, c in graph.records.items() if kind(c) == "breaker"),
     }
-    return "ct-study-v1:" + _digest(payload)
+    return "ct-study-v2:" + _digest(payload)
 
 
 def configuration_signature(zone: dict) -> str:
@@ -396,6 +401,32 @@ def propose_zones(netlist: dict) -> list[dict]:
     return result
 
 
+def add_missing_proposals(netlist: dict, zones: list[dict]) -> list[dict]:
+    """Return existing settings plus missing seeds, without reusing an event ID.
+
+    Selecting another region can change an existing event's seed without changing
+    its ID. A newly proposed event for the old seed must get a distinct ID.
+    Existing settings, confirmations and extra metadata are deep-copied intact.
+    """
+    validate_zones(zones)
+    result = copy.deepcopy(zones)
+    seeds = {z["seed"] for z in result}
+    used_ids = {z["id"] for z in result}
+    for proposed in propose_zones(netlist):
+        if proposed["seed"] in seeds:
+            continue
+        base = proposed["id"]
+        suffix = 2
+        while proposed["id"] in used_ids:
+            proposed["id"] = f"{base}-{suffix}"
+            suffix += 1
+        used_ids.add(proposed["id"])
+        seeds.add(proposed["seed"])
+        result.append(proposed)
+    return result
+
+
+
 def _physical_key(action: dict) -> tuple[str, str]:
     load = "motor" if action["load"] in {"motor_run_a", "motor_inrush_a"} else action["load"]
     return action["component"], load
@@ -536,10 +567,11 @@ def evaluate_zones(netlist: dict, zones: list[dict]) -> dict:
         if not zone["confirmed"]:
             warnings.append("Confirm this zone's CT boundaries, operating loads, stages, DC supplies and units.")
         elif zone.get("topology_signature") != current_signature:
-            warnings.append("Reconfirm this zone: connectivity or switching state changed, or its approval predates this detector.")
+            warnings.append("Reconfirm this zone: connectivity, switching state or breaker settings changed, or its approval predates this detector.")
         original = original_zones[zone["id"]]
-        if zone.get("configuration_signature") and zone["configuration_signature"] != configuration_signature(original):
-            warnings.append("Reconfirm this zone: its saved operating assignments or CT settings changed.")
+        if zone["confirmed"] and zone.get("configuration_signature") != configuration_signature(original):
+            warnings.append("Reconfirm this zone: its saved operating assignments or CT settings changed, "
+                            "or its configuration approval signature is missing.")
         scenarios, action_warnings = _evaluate_actions(zone, graph, voltage)
         warnings.extend(action_warnings)
         warnings.extend(conflicts[zone["id"]])

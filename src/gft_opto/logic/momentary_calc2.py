@@ -270,7 +270,13 @@ def netlist_from_scene(scene, system_name: str = "Netlist Study", voltage_V: flo
     connections = []
     seen_connections = set()
 
-    for item in scene.items():
+    # Snapshot once and use object identity for membership in this exact scene.
+    # An off-scene endpoint can share an ID with an in-scene object after reload.
+    items = list(scene.items())
+    symbol_objects = {id(item) for item in items
+                      if hasattr(item, "instance_id") and hasattr(item, "equip_type")}
+
+    for item in items:
         
         if hasattr(item, "instance_id") and hasattr(item, "equip_type"):
             components.append({
@@ -285,16 +291,18 @@ def netlist_from_scene(scene, system_name: str = "Netlist Study", voltage_V: flo
         
         if all(hasattr(item, attr) for attr in ("from_item", "from_port", "to_item", "to_port")):
             from_item, to_item = item.from_item, item.to_item
-            if from_item is None or to_item is None:
+            if (from_item is None or to_item is None or
+                    id(from_item) not in symbol_objects or id(to_item) not in symbol_objects):
                 continue
             from_id = getattr(from_item, "instance_id", None)
             to_id = getattr(to_item, "instance_id", None)
             if from_id is None or to_id is None:
                 continue
-            key = tuple(sorted((
-                f"{from_id}:{item.from_port}",
-                f"{to_id}:{item.to_port}",
-            )))
+            # Keep ID and terminal as separate values. Concatenating with ':'
+            # can collapse distinct wires when either string contains ':'.
+            endpoints = ((from_id, item.from_port), (to_id, item.to_port))
+            key = tuple(sorted(endpoints, key=lambda endpoint: (
+                str(endpoint[0]), "" if endpoint[1] is None else str(endpoint[1]))))
             if key in seen_connections:
                 continue
             seen_connections.add(key)

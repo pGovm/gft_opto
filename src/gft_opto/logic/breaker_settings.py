@@ -19,7 +19,8 @@ def breaker_settings(component, zones=()):
                 "mechanism_arrangement": "independent" if per_pole else "shared", "pole_count": 3}
     for supply_key in set(SUPPLY_KEYS.values()):
         supplies = {a["supply"] for a in actions if SUPPLY_KEYS[a["load"]] == supply_key and a.get("supply")}
-        settings[supply_key] = next(iter(supplies)) if len(supplies) == 1 else "DC 1"
+        # A conflict is unresolved, not evidence for a third supply named DC 1.
+        settings[supply_key] = next(iter(supplies)) if len(supplies) == 1 else "" if supplies else "DC 1"
     settings.update({key: props[key] for key in SETTING_KEYS if key in props})
     return settings
 
@@ -31,6 +32,11 @@ def resolve_breaker_action(component, action, zones):
         raise ValueError("Review the breaker's current basis and mechanism arrangement.")
     if isinstance(poles, bool) or not isinstance(poles, int) or not 1 <= poles <= 3:
         raise ValueError("Breaker pole count must be between 1 and 3.")
+    if "operation" not in action:
+        legacy_units = action.get("units", 1)
+        allowed = (1,) if action["load"].startswith("motor_") else (1, 3)
+        if isinstance(legacy_units, bool) or legacy_units not in allowed:
+            raise ValueError("Replace the legacy units with an operating action in Configure Protection Zones.")
     operation = action.get("operation", "all_poles")
     if operation not in ("all_poles", "one_pole", "device"):
         raise ValueError("Replace the legacy units with an operating action in Configure Protection Zones.")
