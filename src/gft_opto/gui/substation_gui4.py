@@ -512,6 +512,126 @@ class SubstationGuiMockup(QMainWindow):
         except Exception as error:
             QMessageBox.critical(self, "Open Failed", f"Could not open the layout:\n{error}")
             return False
+        
+# import JSON netlist file function 
+    def import_netlist_json(self, path=None):
+        if not path:
+            path, _ = QFileDialog.getOpenFileName(
+                self, "Import Netlist JSON", "", "Netlist JSON Files (*.json)"
+            )
+        if not path:
+            return False
+
+        try:
+            netlist = load_netlist_json(path)
+            layout_data = self._layout_data_from_netlist(netlist)
+            staged_scene = build_scene(layout_data)
+        except (
+            OSError, UnicodeError, json.JSONDecodeError, KeyError, TypeError, ValueError
+        ) as error:
+            QMessageBox.critical(
+                self, "Netlist Import Failed", f"Could not import the netlist:\n{error}"
+            )
+            return False
+
+        answer = QMessageBox.question(
+            self,
+            "Replace Current Drawing",
+            "Importing this netlist replaces the current drawing and removes its "
+            "background PDF, protection zones, and saved layout settings. Continue?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes or not self._confirm_discard():
+            staged_scene.clear()
+            return False
+
+        self._install_layout(layout_data, staged_scene, None, None)
+        self._saved_snapshot = None
+        self._mark_modified()
+        self.footer_status_label.setText(
+            f"Netlist imported: {layout_data['project']}"
+        )
+        return True
+
+    def _layout_data_from_netlist(self, netlist):
+        project_name = netlist.get("project_name", "Untitled Project")
+        components = []
+        for index, component in enumerate(netlist["components"], start=1):
+            component_type = component["type"]
+            properties = component["properties"]
+            if component_type in BUILTIN_SYMBOLS or component_type == "junction":
+                symbol = component_type
+            else:
+                declared_symbol = properties.get("symbol_type")
+                if declared_symbol in (*BUILTIN_SYMBOLS, "custom"):
+                    symbol = declared_symbol
+                elif component_type.startswith("custom_"):
+                    symbol = "custom"
+                else:
+                    raise ValueError(
+                        f"Component {component['id']!r} has unsupported type "
+                        f"{component_type!r}."
+                    )
+
+            ports = component.get("port_positions") or {}
+            if set(ports) != set(component["ports"]):
+                raise ValueError(
+                    f"Component {component['id']!r} must include a position "
+                    "for every port to be imported."
+                )
+            name = component.get("name") or component_type
+            display_id = component.get("display_id") or component["id"]
+            if not isinstance(name, str) or not isinstance(display_id, str):
+                raise ValueError(
+                    f"Component {index} must have a valid name and display ID."
+                )
+
+            components.append({
+                "id": component["id"],
+                "symbol": symbol,
+                "name": name,
+                "display_id": display_id,
+                "properties": properties,
+                "position": [
+                    component["position"]["x"],
+                    component["position"]["y"],
+                ],
+                "scale": component["scale_factor"],
+                "rotation": component["rotation_deg"],
+                "ports": {
+                    port: [point["x"], point["y"]]
+                    for port, point in ports.items()
+                },
+            })
+
+        connections = [
+            [
+                connection["from"]["component"],
+                connection["from"]["port"],
+                connection["to"]["component"],
+                connection["to"]["port"],
+            ]
+            for connection in netlist["connections"]
+        ]
+        return {
+            "version": 1,
+            "project": project_name,
+            "pdf": None,
+            "scene_rect": [
+                0, 0, DEFAULT_WORKSPACE_WIDTH, DEFAULT_WORKSPACE_HEIGHT
+            ],
+            "components": components,
+            "connections": connections,
+            "zones": [],
+            "library": {},
+            "settings": {
+                "grid_visible": True,
+                "grid_opacity": round(DEFAULT_GRID_OPACITY * 100),
+                "snap": True,
+                "pdf_visible": True,
+            },
+        }
 
     @staticmethod
     def _read_pdf_pixmap(path):
@@ -697,6 +817,11 @@ class SubstationGuiMockup(QMainWindow):
         self.save_as_btn.clicked.connect(lambda: self.save_layout(save_as=True))
         self.open_layout_btn = QPushButton("Open Layout")
         self.open_layout_btn.clicked.connect(lambda: self.open_layout())
+        self.import_netlist_btn = QPushButton("Import Netlist JSON")
+        self.import_netlist_btn.setToolTip(
+            "Replace the current drawing with a validated netlist JSON file"
+        )
+        self.import_netlist_btn.clicked.connect(self.import_netlist_json)
         self.new_layout_btn = QPushButton("New Layout")
         self.new_layout_btn.clicked.connect(self.new_layout)
         self.load_btn = QPushButton("Import PDF")
@@ -727,8 +852,11 @@ class SubstationGuiMockup(QMainWindow):
         actions_grid = QGridLayout()
         actions_grid.setHorizontalSpacing(12)
         actions_grid.setVerticalSpacing(10)
-        buttons = (self.new_layout_btn, self.open_layout_btn, save_btn, self.save_as_btn,
-                   self.load_btn, self.check_btn, self.run_btn, self.save_results_btn)
+        buttons = (
+            self.new_layout_btn, self.open_layout_btn, save_btn, self.save_as_btn,
+            self.load_btn, self.check_btn, self.run_btn, self.save_results_btn,
+            self.import_netlist_btn,
+        )
         for index, button in enumerate(buttons):
             actions_grid.addWidget(button, index // 4, index % 4)
         for column in range(4):

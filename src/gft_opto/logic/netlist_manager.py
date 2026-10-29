@@ -126,13 +126,16 @@ def load_netlist_json(file_path):
             f"Unsupported netlist schema version: "
             f"{netlist.get('schema_version', 'missing')}."
         )
+    project_name = netlist.get("project_name", "Untitled Project")
+    if not isinstance(project_name, str) or not project_name.strip():
+        raise ValueError("The netlist project_name must be a non-empty string.")
 
     components = netlist.get("components")
     connections = netlist.get("connections")
     if not isinstance(components, list) or not isinstance(connections, list):
         raise ValueError("The netlist must contain components and connections lists.")
 
-    component_ids = set()
+    component_ports = {}
     for index, component in enumerate(components):
         location = f"Component {index + 1}"
         if not isinstance(component, dict):
@@ -142,9 +145,8 @@ def load_netlist_json(file_path):
         component_type = component.get("type")
         if not isinstance(component_id, str) or not component_id:
             raise ValueError(f"{location} has no valid id.")
-        if component_id in component_ids:
+        if component_id in component_ports:
             raise ValueError(f"Duplicate component id: {component_id}.")
-        component_ids.add(component_id)
         if not isinstance(component_type, str) or not component_type:
             raise ValueError(f"{location} has no valid type.")
 
@@ -159,6 +161,7 @@ def load_netlist_json(file_path):
             or len(ports) != len(set(ports))
         ):
             raise ValueError(f"{location} ports must be a list of unique names.")
+        component_ports[component_id] = set(ports)
         if not isinstance(position, dict):
             raise ValueError(f"{location} has no valid position.")
         for axis in ("x", "y"):
@@ -209,11 +212,16 @@ def load_netlist_json(file_path):
                 raise ValueError(f"{location} has no valid {endpoint_name} endpoint.")
             component_id = endpoint.get("component")
             port = endpoint.get("port")
-            if not isinstance(component_id, str) or component_id not in component_ids:
+            if not isinstance(component_id, str) or component_id not in component_ports:
                 raise ValueError(
                     f"{location} references unknown component {component_id!r}."
                 )
             if not isinstance(port, str) or not port:
                 raise ValueError(f"{location} has an invalid {endpoint_name} port.")
+            if port not in component_ports[component_id]: # checks 
+                raise ValueError(
+                    f"{location} references unknown port {port!r} on "
+                    f"component {component_id!r}."
+                )
 
     return netlist

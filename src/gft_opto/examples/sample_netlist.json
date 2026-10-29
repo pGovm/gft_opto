@@ -1,0 +1,158 @@
+{ 
+  "schema_version": 1,
+  "project_name": "Sample Substation Bay",
+  "components": [
+    {
+      "id": "bus:bus_1",
+      "display_id": "BUS-1",
+      "type": "bus",
+      "name": "69 kV Bus",
+      "properties": {
+        "rating_kv": 69,
+        "symbol_type": "bus"
+      },
+      "position": {
+        "x": 180,
+        "y": 260
+      },
+      "rotation_deg": 0,
+      "scale_factor": 1,
+      "ports": [
+        "left",
+        "right"
+      ],
+      "port_positions": {
+        "left": {
+          "x": -80,
+          "y": 0
+        },
+        "right": {
+          "x": 80,
+          "y": 0
+        }
+      }
+    },
+    {
+      "id": "breaker:breaker_1",
+      "display_id": "52-1",
+      "type": "breaker",
+      "name": "Circuit Breaker",
+      "properties": {
+        "symbol_type": "breaker",
+        "trip_coil_1_a": 12,
+        "trip_coil_2_a": 12,
+        "close_coil_a": 10,
+        "motor_inrush_a": 8,
+        "motor_run_a": 2
+      },
+      "position": {
+        "x": 380,
+        "y": 260
+      },
+      "rotation_deg": 0,
+      "scale_factor": 1,
+      "ports": [
+        "left",
+        "right"
+      ],
+      "port_positions": {
+        "left": {
+          "x": -32,
+          "y": 0
+        },
+        "right": {
+          "x": 32,
+          "y": 0
+        }
+      }
+    },
+    {
+      "id": "ct:ct_1",
+      "display_id": "CT-1",
+      "type": "ct",
+      "name": "Current Transformer",
+      "properties": {
+        "symbol_type": "ct"
+      },
+      "position": {
+        "x": 560,
+        "y": 260
+      },
+      "rotation_deg": 0,
+      "scale_factor": 1,
+      "ports": [
+        "left",
+        "right"
+      ],
+      "port_positions": {
+        "left": {
+          "x": -28,
+          "y": 0
+        },
+        "right": {
+          "x": 28,
+          "y": 0
+        }
+      }
+    },
+    {
+      "id": "ground:ground_1",
+      "display_id": "GND-1",
+      "type": "ground",
+      "name": "Ground",
+      "properties": {
+        "symbol_type": "ground"
+      },
+      "position": {
+        "x": 740,
+        "y": 260
+      },
+      "rotation_deg": 0,
+      "scale_factor": 1,
+      "ports": [
+        "node"
+      ],
+      "port_positions": {
+        "node": {
+          "x": 0,
+          "y": -16
+        }
+      }
+    }
+  ],
+  "connections": [
+    {
+      "id": "connection_1",
+      "from": {
+        "component": "bus:bus_1",
+        "port": "right"
+      },
+      "to": {
+        "component": "breaker:breaker_1",
+        "port": "left"
+      }
+    },
+    {
+      "id": "connection_2",
+      "from": {
+        "component": "breaker:breaker_1",
+        "port": "right"
+      },
+      "to": {
+        "component": "ct:ct_1",
+        "port": "left"
+      }
+    },
+    {
+      "id": "connection_3",
+      "from": {
+        "component": "ct:ct_1",
+        "port": "right"
+      },
+      "to": {
+        "component": "ground:ground_1",
+        "port": "node"
+      }
+    }
+  ]
+}
