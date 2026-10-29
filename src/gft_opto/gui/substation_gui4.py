@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFrame, QGraphicsScene,
     QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget,
     QListWidgetItem, QMainWindow, QMessageBox, QPushButton, QSlider, QTextEdit,
-    QVBoxLayout, QWidget, QGraphicsRectItem, QGraphicsPathItem, QSpinBox, QScrollArea,
+    QVBoxLayout, QWidget, QGraphicsRectItem, QGraphicsPathItem, QSpinBox, QScrollArea, QMenu
 )
 
 from gft_opto.gui.circuit_check import check_circuit
@@ -667,7 +667,6 @@ class SubstationGuiMockup(QMainWindow):
         frame = QFrame()
         frame.setObjectName("toolbarFrame")
         layout = QVBoxLayout(frame)
-        layout = QVBoxLayout(frame)
         layout.setContentsMargins(20, 14, 20, 14)
         layout.setSpacing(10)
 
@@ -714,7 +713,7 @@ class SubstationGuiMockup(QMainWindow):
         save_results_menu.addAction(save_calculation_action)
         save_results_menu.addAction(save_netlist_action)
         self.save_results_btn.setMenu(save_results_menu)
-        save_calculation_action.triggered.connect(self._on_save_calculation_pdf)
+        save_calculation_action.triggered.connect(self._on_save_results_clicked)
         save_netlist_action.triggered.connect(self._on_save_netlist_pdf)
         self.save_results_btn.setEnabled(False)
 
@@ -1049,6 +1048,12 @@ class SubstationGuiMockup(QMainWindow):
             component["label"] = labels[component["id"]]
         return netlist
 
+    def _build_current_netlist(self):
+        return build_netlist(
+            self.workspace_scene,
+            project_name=self.project_box.text().strip() or "Untitled Project",
+        )
+
     def _scene_topology(self):
         """Detect real scene components and conductors; never save live Zone objects."""
         items = [item for item in self.workspace_scene.items()
@@ -1354,10 +1359,49 @@ class SubstationGuiMockup(QMainWindow):
         """
 
         self._save_html_as_pdf(
-            "Save Calculation PDF",
-            "calculation_results.pdf",
-            html,
+            "Save Calculation PDF", "calculation_results.pdf", html, "Results saved"
         )
+
+    def _save_html_as_pdf(
+        self, title: str, default_filename: str, html: str, success_message: str
+    ):
+        file_path, _ = QFileDialog.getSaveFileName(
+            self, title, default_filename, "PDF Files (*.pdf)"
+        )
+        if not file_path:
+            return
+
+        if not Path(file_path).suffix:
+            file_path += ".pdf"
+
+        document = QTextDocument()
+        document.setHtml(html)
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                dir=Path(file_path).parent, suffix=".pdf", delete=False
+            ) as stream:
+                temporary = stream.name
+            printer = QPrinter()
+            printer.setOutputFormat(QPrinter.OutputFormat.PdfFormat)
+            printer.setOutputFileName(temporary)
+            document.print_(printer)
+            if (
+                printer.printerState() == QPrinter.PrinterState.Error
+                or Path(temporary).stat().st_size == 0
+            ):
+                raise OSError("The PDF file was not created or is empty.")
+            os.replace(temporary, file_path)
+        except OSError as error:
+            QMessageBox.critical(
+                self, "Save Failed", f"Could not create the PDF:\n{error}"
+            )
+            return
+        finally:
+            if temporary and Path(temporary).exists():
+                Path(temporary).unlink()
+
+        self.footer_status_label.setText(f"{success_message}: {file_path}")
 
     def _on_save_netlist_pdf(self):
         netlist = self._build_current_netlist()
@@ -1442,31 +1486,8 @@ class SubstationGuiMockup(QMainWindow):
         </html>
         """
 
-        document = QTextDocument()
-        document.setHtml(html)
-
-        temporary = None
-        try:
-            with tempfile.NamedTemporaryFile(dir=Path(file_path).parent, suffix=".pdf", delete=False) as stream:
-                temporary = stream.name
-            printer = QPrinter()
-            printer.setOutputFormat(QPrinter.OutputFormat.PdfFormat)
-            printer.setOutputFileName(temporary)
-            document.print_(printer)
-            if printer.printerState() == QPrinter.PrinterState.Error or Path(temporary).stat().st_size == 0:
-                raise OSError("The PDF file was not created or is empty.")
-            os.replace(temporary, file_path)
-        except Exception as error:
-            QMessageBox.critical(
-                self, "Save Failed", f"Could not create the PDF:\n{error}"
-            )
-            return
-        finally:
-            if temporary and Path(temporary).exists():
-                Path(temporary).unlink()
-
-        self.footer_status_label.setText(
-            f"PDF saved: {file_path}"
+        self._save_html_as_pdf(
+            "Save Netlist PDF", "netlist.pdf", html, "Netlist PDF saved"
         )
 
     def _on_create_component_clicked(self):

@@ -202,6 +202,19 @@ class GuiWorkflows(unittest.TestCase):
             w._on_save_results_clicked()
             error.assert_called_once()
 
+    def test_netlist_pdf_export(self):
+        w = self.window
+        self.add_breaker()
+        path = Path(self.temp.name) / "netlist.pdf"
+        with patch("gft_opto.gui.substation_gui4.QFileDialog.getSaveFileName", return_value=(str(path), "")):
+            w._on_save_netlist_pdf()
+        self.assertGreater(path.stat().st_size, 0)
+        with pymupdf.open(path) as document:
+            text = "".join(page.get_text() for page in document)
+        self.assertIn("Netlist:", text)
+        self.assertIn("Components", text)
+        self.assertIn("Netlist PDF saved:", w.footer_status_label.text())
+
     def test_multi_selection_and_initial_grid(self):
         w = self.window
         self.assertEqual(w.grid_opacity_slider.value(), 25)

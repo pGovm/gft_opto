@@ -2,14 +2,12 @@
 .venv/
 
 # Python cache folder
-src/gft_opto/__pycache__
-src/gft_opto/*/__pycache__/*
-tests/__pycache__
+src/gft_opto/__pycache__/*
 
 # PyInstaller output
 build/
 dist/
 
-# Misc folders
-.zone-integration-backups/
-zone-verification-*
+# Python cache folders and compiled files
+__pycache__/
+*.py[cod]
