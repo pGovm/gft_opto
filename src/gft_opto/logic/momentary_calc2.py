@@ -54,20 +54,39 @@ class Scenario:
                 warnings.append(f"'{load.name}' has zero or negative amps — please check.")
 
         load_details = []
+        calculation_steps = [
+            "Each load total = quantity × current per unit."
+        ]
         for load in self.loads:
+            total_amps = load.total_amps()
             load_details.append({
                 "name"         : load.name,
                 "amps_per_unit": load.current_A,
                 "quantity"     : load.quantity,
-                "total_amps"   : round(load.total_amps(), 4),
+                "total_amps"   : round(total_amps, 4),
                 "note"         : load.note,
             })
+            calculation_steps.append(
+                f"{load.name}: {load.quantity:g} × {load.current_A:g} A "
+                f"= {total_amps:g} A"
+            )
+
+        if load_details:
+            load_totals = " + ".join(
+                f"{load['total_amps']:g} A" for load in load_details
+            )
+            calculation_steps.append(
+                f"Peak current = {load_totals} = {peak_amps:g} A."
+            )
+        else:
+            calculation_steps.append("Peak current = 0 A (no loads).")
 
         return {
             "scenario_name" : self.name,
             "voltage_V"     : self.voltage,
             "loads"         : load_details,
             "peak_current_A": round(peak_amps, 4),
+            "calculation_steps": calculation_steps,
             "warnings"      : warnings,
             "timestamp"     : datetime.now().isoformat(),
         }

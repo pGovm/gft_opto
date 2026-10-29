@@ -12,7 +12,7 @@ import time
 from html import escape
 
 import pymupdf
-from PySide6.QtCore import Qt, QByteArray, QMimeData, QRectF
+from PySide6.QtCore import Qt, QByteArray, QMimeData, QPointF, QRectF
 from PySide6.QtGui import (
     QAction, QDrag, QFont, QImage, QKeySequence, QPixmap, QTextDocument,
     QUndoStack,
@@ -44,6 +44,7 @@ from gft_opto.gui.symbols import (
     BusItem,
     ConnectionItem,
     CustomComponentItem,
+    JunctionItem,
     OneLineSymbolItem,
     make_user_equipment,
 )
@@ -59,6 +60,7 @@ from collections import defaultdict
 from gft_opto.logic.netlist_manager import (
     build_netlist,
     export_netlist_json,
+    load_netlist_json,
 )
 
 # ---------------------------------------------------------------------------
@@ -390,9 +392,14 @@ class SubstationGuiMockup(QMainWindow):
     def _build_header(self):
         frame = QFrame()
         frame.setObjectName("toolbarFrame")
-        layout = QHBoxLayout(frame)
+        layout = QVBoxLayout(frame)
         layout.setContentsMargins(20, 14, 20, 14)
-        layout.setSpacing(12)
+        layout.setSpacing(10)
+
+        title_row = QHBoxLayout()
+        title_row.setSpacing(12)
+        actions_row = QHBoxLayout()
+        actions_row.setSpacing(12)
 
         logo = QLabel()
         logo_pix = load_gft_logo_pixmap()
@@ -433,18 +440,26 @@ class SubstationGuiMockup(QMainWindow):
         self.export_netlist_btn.clicked.connect(
             self._on_export_netlist_json
         )
+        self.import_netlist_btn = QPushButton("Import Netlist JSON")
+        self.import_netlist_btn.clicked.connect(self._on_import_netlist_json)
 
-        layout.addWidget(logo)
-        layout.addWidget(title)
-        layout.addStretch()
-        layout.addWidget(QLabel("Project:"))
-        layout.addWidget(project_box)
-        layout.addWidget(self.load_btn)
-        layout.addWidget(save_btn)
-        layout.addWidget(self.check_btn)
-        layout.addWidget(self.run_btn)
-        layout.addWidget(self.save_results_btn)
-        layout.addWidget(self.export_netlist_btn)
+        title_row.addWidget(logo)
+        title_row.addWidget(title)
+        title_row.addStretch()
+        title_row.addWidget(QLabel("Project:"))
+        title_row.addWidget(project_box)
+
+        actions_row.addStretch()
+        actions_row.addWidget(self.load_btn)
+        actions_row.addWidget(save_btn)
+        actions_row.addWidget(self.check_btn)
+        actions_row.addWidget(self.run_btn)
+        actions_row.addWidget(self.save_results_btn)
+        actions_row.addWidget(self.import_netlist_btn)
+        actions_row.addWidget(self.export_netlist_btn)
+
+        layout.addLayout(title_row)
+        layout.addLayout(actions_row)
         return frame
 
     def _build_content(self):
@@ -704,12 +719,23 @@ class SubstationGuiMockup(QMainWindow):
         lines.append("")
         loads = result.get("loads") or []
         if loads:
-            lines.append("Loads:")
+            lines.append("Load calculations (quantity × current per unit):")
             for ld in loads:
-                note = f"  ({ld['note']})" if ld.get("note") else ""
                 lines.append(
-                    f"  • {ld.get('name', '?')}: {ld.get('total_amps', 0):g} A{note}"
+                    f"  {ld.get('name', 'Load')}: "
+                    f"{ld.get('quantity', 1):g} × "
+                    f"{ld.get('amps_per_unit', 0):g} A = "
+                    f"{ld.get('total_amps', 0):g} A"
                 )
+                if ld.get("note"):
+                    lines.append(f"    {ld['note']}")
+            total_terms = " + ".join(
+                f"{ld.get('total_amps', 0):g} A" for ld in loads
+            )
+            lines.append(
+                f"Peak current = {total_terms} "
+                f"= {result.get('peak_current_A', 0):g} A"
+            )
         else:
             lines.append("Loads: (none)")
 
@@ -740,11 +766,13 @@ class SubstationGuiMockup(QMainWindow):
         load_rows = "".join(
             "<tr>"
             f"<td>{escape(str(load.get('name', 'Load')))}</td>"
+            f"<td>{escape(str(load.get('quantity', 1)))}</td>"
+            f"<td>{escape(str(load.get('amps_per_unit', 'N/A')))} A</td>"
             f"<td>{escape(str(load.get('total_amps', 'N/A')))} A</td>"
             f"<td>{escape(str(load.get('note', '')))}</td>"
             "</tr>"
             for load in loads
-        ) or "<tr><td colspan='3'>No loads returned.</td></tr>"
+        ) or "<tr><td colspan='5'>No loads returned.</td></tr>"
 
         steps = result.get("calculation_steps") or []
 
@@ -773,7 +801,10 @@ class SubstationGuiMockup(QMainWindow):
                 border: 1px solid #cbd2d9;
                 padding: 6px;
                 text-align: left;
+                vertical-align: top;
             }}
+            th {{ background: #e8f1ed; }}
+            tr {{ page-break-inside: avoid; }}
             pre {{ white-space: pre-wrap; }}
           </style>
         </head>
@@ -801,6 +832,8 @@ class SubstationGuiMockup(QMainWindow):
           <table>
             <tr>
                 <th>Load</th>
+                <th>Quantity</th>
+                <th>Current per unit</th>
                 <th>Total current</th>
                 <th>Note</th>
             </tr>
@@ -830,21 +863,82 @@ class SubstationGuiMockup(QMainWindow):
     def _on_save_netlist_pdf(self):
         netlist = self._build_current_netlist()
         self.last_netlist = netlist
-        netlist_json = escape(
-            json.dumps(netlist, indent=2, default=str)
+        component_rows = []
+        for component in netlist.get("components", []):
+            properties = component.get("properties") or {}
+            property_list = "".join(
+                "<li>"
+                f"<b>{escape(str(key))}:</b> "
+                f"{escape(str(value))}"
+                "</li>"
+                for key, value in properties.items()
+            ) or "<li>None</li>"
+            ports = ", ".join(str(port) for port in component.get("ports", []))
+            component_rows.append(
+                "<tr>"
+                f"<td>{escape(str(component.get('display_id', component.get('id', ''))))}</td>"
+                f"<td>{escape(str(component.get('name', '')))}</td>"
+                f"<td>{escape(str(component.get('type', '')))}</td>"
+                f"<td><ul>{property_list}</ul></td>"
+                f"<td>{escape(ports or 'None')}</td>"
+                "</tr>"
+            )
+        component_table = "".join(component_rows) or (
+            "<tr><td colspan='5'>No components in this netlist.</td></tr>"
+        )
+
+        connection_rows = []
+        for connection in netlist.get("connections", []):
+            source = connection.get("from", {})
+            target = connection.get("to", {})
+            source_label = (
+                f"{source.get('component', '')} ({source.get('port', '')})"
+            )
+            target_label = (
+                f"{target.get('component', '')} ({target.get('port', '')})"
+            )
+            connection_rows.append(
+                "<tr>"
+                f"<td>{escape(str(connection.get('id', '')))}</td>"
+                f"<td>{escape(str(source_label))}</td>"
+                f"<td>{escape(str(target_label))}</td>"
+                "</tr>"
+            )
+        connection_table = "".join(connection_rows) or (
+            "<tr><td colspan='3'>No connections in this netlist.</td></tr>"
         )
         html = f"""
         <html>
         <head>
           <style>
-            body {{ font-family: sans-serif; font-size: 10pt; }}
-            h1 {{ color: #006A4E; }}
-            pre {{ white-space: pre-wrap; }}
+            body {{ font-family: sans-serif; font-size: 9pt; color: #1f2933; }}
+            h1, h2 {{ color: #006A4E; }}
+            table {{ border-collapse: collapse; width: 100%; margin-bottom: 16px; }}
+            th, td {{ border: 1px solid #cbd2d9; padding: 6px; text-align: left; vertical-align: top; }}
+            th {{ background: #e8f1ed; }}
+            ul {{ margin: 0; padding-left: 16px; }}
+            tr {{ page-break-inside: avoid; }}
           </style>
         </head>
         <body>
-          <h1>Netlist</h1>
-          <pre>{netlist_json}</pre>
+          <h1>Netlist: {escape(str(netlist.get('project_name', 'Untitled Project')))}</h1>
+          <p>
+            <b>Schema version:</b> {escape(str(netlist.get('schema_version', 'N/A')))}
+            &nbsp; <b>Components:</b> {len(netlist.get('components', []))}
+            &nbsp; <b>Connections:</b> {len(netlist.get('connections', []))}
+          </p>
+          <h2>Components</h2>
+          <table>
+            <thead><tr>
+              <th>ID</th><th>Name</th><th>Type</th><th>Properties</th><th>Ports</th>
+            </tr></thead>
+            <tbody>{component_table}</tbody>
+          </table>
+          <h2>Connections</h2>
+          <table>
+            <thead><tr><th>ID</th><th>From</th><th>To</th></tr></thead>
+            <tbody>{connection_table}</tbody>
+          </table>
         </body>
         </html>
         """
@@ -891,6 +985,160 @@ class SubstationGuiMockup(QMainWindow):
                 "Netlist Export Failed",
                 f"Could not export the netlist:\n{error}",
             )
+
+    def _on_import_netlist_json(self):
+        """Replace the current diagram with a validated JSON netlist."""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Import Netlist JSON",
+            "",
+            "JSON Files (*.json)",
+        )
+        if not file_path:
+            return
+
+        wires = []
+        try:
+            netlist = load_netlist_json(file_path)
+            items_by_id = {}
+            for component in netlist["components"]:
+                item = self._symbol_from_netlist_component(component)
+                items_by_id[component["id"]] = item
+
+            for connection in netlist["connections"]:
+                source = connection["from"]
+                target = connection["to"]
+                source_item = items_by_id[source["component"]]
+                target_item = items_by_id[target["component"]]
+                if source["port"] not in source_item.ports():
+                    raise ValueError(
+                        f"Connection {connection.get('id', '')} uses unknown "
+                        f"port {source['port']!r} on {source['component']!r}."
+                    )
+                if target["port"] not in target_item.ports():
+                    raise ValueError(
+                        f"Connection {connection.get('id', '')} uses unknown "
+                        f"port {target['port']!r} on {target['component']!r}."
+                    )
+                wires.append(
+                    ConnectionItem(
+                        source_item,
+                        source["port"],
+                        target_item,
+                        target["port"],
+                    )
+                )
+        except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
+            for wire in wires:
+                wire.detach()
+            QMessageBox.critical(
+                self,
+                "Netlist Import Failed",
+                f"Could not import the netlist:\n{error}",
+            )
+            return
+
+        existing_symbols = [
+            item for item in self.workspace_scene.items()
+            if isinstance(item, OneLineSymbolItem)
+        ]
+        if existing_symbols:
+            answer = QMessageBox.question(
+                self,
+                "Replace Current Diagram?",
+                "Importing this netlist will replace the current diagram. "
+                "Continue?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                for wire in wires:
+                    wire.detach()
+                return
+
+        for item in self.workspace_scene.items():
+            if isinstance(item, ConnectionItem):
+                item.detach()
+                self.workspace_scene.removeItem(item)
+        for item in existing_symbols:
+            self.workspace_scene.removeItem(item)
+
+        if hasattr(self, "undo_stack"):
+            self.undo_stack.clear()
+        self.workspace_scene.clearSelection()
+        for item in items_by_id.values():
+            self.workspace_scene.addItem(item)
+        for wire in wires:
+            self.workspace_scene.addItem(wire)
+            wire.update_path()
+
+        self.last_netlist = netlist
+        self.last_result = None
+        self.save_results_btn.setEnabled(False)
+        self.output_box.clear()
+        self.footer_status_label.setText(
+            f"Netlist imported: {netlist.get('project_name', 'Untitled Project')}"
+        )
+
+    @staticmethod
+    def _symbol_from_netlist_component(component):
+        """Create and restore one symbol from an exported component record."""
+        equip_type = component["type"]
+        name = str(component.get("name") or equip_type)
+        properties = dict(component.get("properties") or {})
+
+        if equip_type == "junction":
+            item = JunctionItem()
+        elif equip_type in BUILTIN_SYMBOLS:
+            item = BUILTIN_SYMBOLS[equip_type]["factory"]()
+        else:
+            item = CustomComponentItem(name, properties)
+            item.equip_type = equip_type
+            item.equip_id = equip_type
+
+        item.label = name
+        item.display_name = name
+        item.properties = properties
+        item.display_id = str(component.get("display_id") or "")
+
+        if isinstance(item, BusItem):
+            imported_ports = component.get("ports", [])
+            tap_names = [
+                port for port in imported_ports
+                if port not in item.ports()
+            ]
+            port_positions = component.get("port_positions") or {}
+            for index, port in enumerate(tap_names, start=1):
+                position = port_positions.get(port)
+                if position is None:
+                    base_x = (
+                        -item.HALF_LENGTH
+                        + 2 * item.HALF_LENGTH * index / (len(tap_names) + 1)
+                    )
+                else:
+                    base_x = float(position["x"])
+                item.restore_tap(port, base_x)
+
+        actual_ports = set(item.ports())
+        expected_ports = set(component.get("ports", []))
+        if actual_ports != expected_ports:
+            missing_ports = sorted(expected_ports - actual_ports)
+            unexpected_ports = sorted(actual_ports - expected_ports)
+            raise ValueError(
+                f"Component {component['id']!r} has unsupported ports "
+                f"(missing: {missing_ports}; unexpected: {unexpected_ports})."
+            )
+
+        position = component["position"]
+        item.setPos(QPointF(float(position["x"]), float(position["y"])))
+        item.set_rotation_deg(float(component["rotation_deg"]))
+        item.set_scale_factor(float(component["scale_factor"]))
+        if abs(item.scale_factor - float(component["scale_factor"])) > 1e-6:
+            raise ValueError(
+                f"Component {component['id']!r} scale is outside the "
+                "supported range."
+            )
+        return item
 
     def _save_html_as_pdf(self, title: str, default_filename: str, html: str):
         file_path, _ = QFileDialog.getSaveFileName(

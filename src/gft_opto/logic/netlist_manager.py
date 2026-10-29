@@ -2,6 +2,7 @@
 """Build and export netlist data from the current one-line diagram."""
 
 import json
+import math
 from pathlib import Path
 
 from gft_opto.gui.symbols import ConnectionItem, OneLineSymbolItem
@@ -18,11 +19,10 @@ def _json_safe(value):
     if isinstance(value, (list, tuple)):
         return [_json_safe(item) for item in value]
 
-    # TODO: Replace this fallback if the project later stores
-    # special objects that need a more precise representation.
+
     return str(value)
 
-
+# Netlist save functionality
 def build_netlist(scene, project_name="Untitled Project"):
     """Build a netlist from the current QGraphicsScene."""
 
@@ -67,6 +67,10 @@ def build_netlist(scene, project_name="Untitled Project"):
             "rotation_deg": item.rotation_deg,
             "scale_factor": item.scale_factor,
             "ports": list(item.ports().keys()),
+            "port_positions": {
+                name: {"x": point.x(), "y": point.y()}
+                for name, point in item.base_port_positions().items()
+            },
         })
 
     netlist_connections = []
@@ -100,7 +104,7 @@ def build_netlist(scene, project_name="Untitled Project"):
         "connections": netlist_connections,
     }
 
-
+# exporting netlist file JSON
 def export_netlist_json(netlist, file_path):
     """Write netlist data to a JSON file."""
 
@@ -108,3 +112,108 @@ def export_netlist_json(netlist, file_path):
 
     with path.open("w", encoding="utf-8") as file:
         json.dump(netlist, file, indent=2, ensure_ascii=False)
+
+# import netlist function from JSON
+def load_netlist_json(file_path):
+    """Load and validate a netlist exported by this application."""
+    with Path(file_path).open("r", encoding="utf-8") as file:
+        netlist = json.load(file)
+
+    if not isinstance(netlist, dict):
+        raise ValueError("The netlist root must be a JSON object.")
+    if netlist.get("schema_version") != 1:
+        raise ValueError(
+            f"Unsupported netlist schema version: "
+            f"{netlist.get('schema_version', 'missing')}."
+        )
+
+    components = netlist.get("components")
+    connections = netlist.get("connections")
+    if not isinstance(components, list) or not isinstance(connections, list):
+        raise ValueError("The netlist must contain components and connections lists.")
+
+    component_ids = set()
+    for index, component in enumerate(components):
+        location = f"Component {index + 1}"
+        if not isinstance(component, dict):
+            raise ValueError(f"{location} must be an object.")
+
+        component_id = component.get("id")
+        component_type = component.get("type")
+        if not isinstance(component_id, str) or not component_id:
+            raise ValueError(f"{location} has no valid id.")
+        if component_id in component_ids:
+            raise ValueError(f"Duplicate component id: {component_id}.")
+        component_ids.add(component_id)
+        if not isinstance(component_type, str) or not component_type:
+            raise ValueError(f"{location} has no valid type.")
+
+        properties = component.get("properties", {})
+        ports = component.get("ports")
+        position = component.get("position")
+        if not isinstance(properties, dict):
+            raise ValueError(f"{location} properties must be an object.")
+        if (
+            not isinstance(ports, list)
+            or any(not isinstance(port, str) or not port for port in ports)
+            or len(ports) != len(set(ports))
+        ):
+            raise ValueError(f"{location} ports must be a list of unique names.")
+        if not isinstance(position, dict):
+            raise ValueError(f"{location} has no valid position.")
+        for axis in ("x", "y"):
+            value = position.get(axis)
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+            ):
+                raise ValueError(f"{location} position {axis} must be a finite number.")
+
+        for field in ("rotation_deg", "scale_factor"):
+            value = component.get(field)
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+            ):
+                raise ValueError(f"{location} {field} must be a finite number.")
+            if field == "scale_factor" and value <= 0:
+                raise ValueError(f"{location} scale_factor must be greater than zero.")
+
+        port_positions = component.get("port_positions", {})
+        if not isinstance(port_positions, dict):
+            raise ValueError(f"{location} port_positions must be an object.")
+        for port, point in port_positions.items():
+            if port not in ports or not isinstance(point, dict):
+                raise ValueError(f"{location} has invalid port position data.")
+            for axis in ("x", "y"):
+                value = point.get(axis)
+                if (
+                    isinstance(value, bool)
+                    or not isinstance(value, (int, float))
+                    or not math.isfinite(value)
+                ):
+                    raise ValueError(
+                        f"{location} port {port} position {axis} "
+                        "must be a finite number."
+                    )
+
+    for index, connection in enumerate(connections):
+        location = f"Connection {index + 1}"
+        if not isinstance(connection, dict):
+            raise ValueError(f"{location} must be an object.")
+        for endpoint_name in ("from", "to"):
+            endpoint = connection.get(endpoint_name)
+            if not isinstance(endpoint, dict):
+                raise ValueError(f"{location} has no valid {endpoint_name} endpoint.")
+            component_id = endpoint.get("component")
+            port = endpoint.get("port")
+            if not isinstance(component_id, str) or component_id not in component_ids:
+                raise ValueError(
+                    f"{location} references unknown component {component_id!r}."
+                )
+            if not isinstance(port, str) or not port:
+                raise ValueError(f"{location} has an invalid {endpoint_name} port.")
+
+    return netlist
