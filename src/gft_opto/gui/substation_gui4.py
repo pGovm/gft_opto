@@ -18,7 +18,7 @@ import copy
 from html import escape
 
 import pymupdf
-from PySide6.QtCore import Qt, QByteArray, QMimeData, QRectF
+from PySide6.QtCore import Qt, QByteArray, QMimeData, QPointF, QRectF
 from PySide6.QtGui import (
     QAction, QColor, QPen, QBrush, QPalette,
     QDrag, QFont, QImage, QKeySequence, QPixmap, QTextDocument, QUndoStack,
@@ -51,6 +51,7 @@ from gft_opto.gui.symbols import (
     ConnectionItem,
     CurrentTransformerItem,
     CustomComponentItem,
+    JunctionItem,
     OneLineSymbolItem,
     make_user_equipment,
 )
@@ -66,6 +67,11 @@ from gft_opto.logic.breaker_settings import breaker_settings, SETTING_KEYS
 from pathlib import Path
 from collections import defaultdict
 
+from gft_opto.logic.netlist_manager import (
+    build_netlist,
+    export_netlist_json,
+    load_netlist_json,
+)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -661,8 +667,14 @@ class SubstationGuiMockup(QMainWindow):
         frame = QFrame()
         frame.setObjectName("toolbarFrame")
         layout = QVBoxLayout(frame)
+        layout = QVBoxLayout(frame)
         layout.setContentsMargins(20, 14, 20, 14)
-        layout.setSpacing(12)
+        layout.setSpacing(10)
+
+        title_row = QHBoxLayout()
+        title_row.setSpacing(12)
+        actions_row = QHBoxLayout()
+        actions_row.setSpacing(12)
 
         logo = QLabel()
         logo_pix = load_gft_logo_pixmap()
@@ -695,8 +707,15 @@ class SubstationGuiMockup(QMainWindow):
         self.run_btn = QPushButton("Run Evaluation")
         self.run_btn.clicked.connect(self._on_run_evaluation_clicked)
 
-        self.save_results_btn = QPushButton("Save Calculation Results")
-        self.save_results_btn.clicked.connect(self._on_save_results_clicked)
+        self.save_results_btn = QPushButton("Save Results")
+        save_results_menu = QMenu(self.save_results_btn)
+        save_calculation_action = QAction("Save Calculation PDF", self)
+        save_netlist_action = QAction("Save Netlist PDF", self)
+        save_results_menu.addAction(save_calculation_action)
+        save_results_menu.addAction(save_netlist_action)
+        self.save_results_btn.setMenu(save_results_menu)
+        save_calculation_action.triggered.connect(self._on_save_calculation_pdf)
+        save_netlist_action.triggered.connect(self._on_save_netlist_pdf)
         self.save_results_btn.setEnabled(False)
 
         identity_row = QHBoxLayout()
@@ -1231,22 +1250,9 @@ class SubstationGuiMockup(QMainWindow):
             self._invalidate_results()
         if self.last_result is None or self.last_netlist is None:
             QMessageBox.information(
-                self, "Save Calculation Results", "Run an evaluation first."
+                self, "Save Calculation PDF", "Run an evaluation first."
             )
             return
-
-        file_path, _ = QFileDialog.getSaveFileName(
-            self,
-            "Save Calculation Results",
-            "calculation_results.pdf",
-            "PDF Files (*.pdf)",
-        )
-
-        if not file_path:
-            return
-
-        if not file_path.lower().endswith(".pdf"):
-            file_path += ".pdf"
 
         result = self.last_result
         peak = result.get("peak_current_A", "Not available")
@@ -1257,11 +1263,13 @@ class SubstationGuiMockup(QMainWindow):
         load_rows = "".join(
             "<tr>"
             f"<td>{escape(str(load.get('name', 'Load')))}</td>"
+            f"<td>{escape(str(load.get('quantity', 1)))}</td>"
+            f"<td>{escape(str(load.get('amps_per_unit', 'N/A')))} A</td>"
             f"<td>{escape(str(load.get('total_amps', 'N/A')))} A</td>"
             f"<td>{escape(str(load.get('note', '')))}</td>"
             "</tr>"
             for load in loads
-        ) or "<tr><td colspan='3'>No loads returned.</td></tr>"
+        ) or "<tr><td colspan='5'>No loads returned.</td></tr>"
 
         steps = result.get("calculation_steps") or []
 
@@ -1279,17 +1287,6 @@ class SubstationGuiMockup(QMainWindow):
 
         output_html = escape(self.output_box.toPlainText())
 
-        raw_data = escape(
-            json.dumps(
-                {
-                    "netlist": self.last_netlist,
-                    "result": result,
-                },
-                indent=2,
-                default=str,
-            )
-        )
-
         html = f"""
         <html>
         <head>
@@ -1301,7 +1298,10 @@ class SubstationGuiMockup(QMainWindow):
                 border: 1px solid #cbd2d9;
                 padding: 6px;
                 text-align: left;
+                vertical-align: top;
             }}
+            th {{ background: #e8f1ed; }}
+            tr {{ page-break-inside: avoid; }}
             pre {{ white-space: pre-wrap; }}
           </style>
         </head>
@@ -1331,6 +1331,8 @@ class SubstationGuiMockup(QMainWindow):
           <table>
             <tr>
                 <th>Load</th>
+                <th>Quantity</th>
+                <th>Current per unit</th>
                 <th>Total current</th>
                 <th>Note</th>
             </tr>
@@ -1347,10 +1349,95 @@ class SubstationGuiMockup(QMainWindow):
           <h2>Evaluation Output</h2>
 
           <pre>{output_html}</pre>
+        </body>
+        </html>
+        """
 
-          <h2>Netlist and Result Data</h2>
+        self._save_html_as_pdf(
+            "Save Calculation PDF",
+            "calculation_results.pdf",
+            html,
+        )
 
-          <pre>{raw_data}</pre>
+    def _on_save_netlist_pdf(self):
+        netlist = self._build_current_netlist()
+        self.last_netlist = netlist
+        component_rows = []
+        for component in netlist.get("components", []):
+            properties = component.get("properties") or {}
+            property_list = "".join(
+                "<li>"
+                f"<b>{escape(str(key))}:</b> "
+                f"{escape(str(value))}"
+                "</li>"
+                for key, value in properties.items()
+            ) or "<li>None</li>"
+            ports = ", ".join(str(port) for port in component.get("ports", []))
+            component_rows.append(
+                "<tr>"
+                f"<td>{escape(str(component.get('display_id', component.get('id', ''))))}</td>"
+                f"<td>{escape(str(component.get('name', '')))}</td>"
+                f"<td>{escape(str(component.get('type', '')))}</td>"
+                f"<td><ul>{property_list}</ul></td>"
+                f"<td>{escape(ports or 'None')}</td>"
+                "</tr>"
+            )
+        component_table = "".join(component_rows) or (
+            "<tr><td colspan='5'>No components in this netlist.</td></tr>"
+        )
+
+        connection_rows = []
+        for connection in netlist.get("connections", []):
+            source = connection.get("from", {})
+            target = connection.get("to", {})
+            source_label = (
+                f"{source.get('component', '')} ({source.get('port', '')})"
+            )
+            target_label = (
+                f"{target.get('component', '')} ({target.get('port', '')})"
+            )
+            connection_rows.append(
+                "<tr>"
+                f"<td>{escape(str(connection.get('id', '')))}</td>"
+                f"<td>{escape(str(source_label))}</td>"
+                f"<td>{escape(str(target_label))}</td>"
+                "</tr>"
+            )
+        connection_table = "".join(connection_rows) or (
+            "<tr><td colspan='3'>No connections in this netlist.</td></tr>"
+        )
+        html = f"""
+        <html>
+        <head>
+          <style>
+            body {{ font-family: sans-serif; font-size: 9pt; color: #1f2933; }}
+            h1, h2 {{ color: #006A4E; }}
+            table {{ border-collapse: collapse; width: 100%; margin-bottom: 16px; }}
+            th, td {{ border: 1px solid #cbd2d9; padding: 6px; text-align: left; vertical-align: top; }}
+            th {{ background: #e8f1ed; }}
+            ul {{ margin: 0; padding-left: 16px; }}
+            tr {{ page-break-inside: avoid; }}
+          </style>
+        </head>
+        <body>
+          <h1>Netlist: {escape(str(netlist.get('project_name', 'Untitled Project')))}</h1>
+          <p>
+            <b>Schema version:</b> {escape(str(netlist.get('schema_version', 'N/A')))}
+            &nbsp; <b>Components:</b> {len(netlist.get('components', []))}
+            &nbsp; <b>Connections:</b> {len(netlist.get('connections', []))}
+          </p>
+          <h2>Components</h2>
+          <table>
+            <thead><tr>
+              <th>ID</th><th>Name</th><th>Type</th><th>Properties</th><th>Ports</th>
+            </tr></thead>
+            <tbody>{component_table}</tbody>
+          </table>
+          <h2>Connections</h2>
+          <table>
+            <thead><tr><th>ID</th><th>From</th><th>To</th></tr></thead>
+            <tbody>{connection_table}</tbody>
+          </table>
         </body>
         </html>
         """
@@ -1379,7 +1466,7 @@ class SubstationGuiMockup(QMainWindow):
                 Path(temporary).unlink()
 
         self.footer_status_label.setText(
-            f"Results saved: {file_path}"
+            f"PDF saved: {file_path}"
         )
 
     def _on_create_component_clicked(self):

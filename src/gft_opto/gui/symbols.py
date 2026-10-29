@@ -143,6 +143,10 @@ class OneLineSymbolItem(QGraphicsItem):
     def ports(self) -> dict[str, QPointF]:
         return {name: self._transformed_point(pt) for name, pt in self._base_ports.items()}
 
+    def base_port_positions(self) -> dict[str, QPointF]:
+        """Return port positions before the symbol's scale and rotation."""
+        return {name: QPointF(point) for name, point in self._base_ports.items()}
+
     def port_scene_pos(self, port_name: str) -> QPointF:
         return self.mapToScene(self._transformed_point(self._base_ports[port_name]))
 
