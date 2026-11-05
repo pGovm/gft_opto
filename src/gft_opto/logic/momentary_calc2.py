@@ -1,3 +1,5 @@
+
+from gft_opto.gui import messages
 # Defines DC loads and scenarios, totals their momentary currents, and supports netlist conversion and CSV/JSON results.
 
 # ============================================================
@@ -42,18 +44,18 @@ class Scenario:
         warnings = []
 
         if len(self.loads) == 0:
-            warnings.append("No loads added to this scenario!")
+            warnings.append(messages.MOMENTARY_CALC2_NO_LOADS_ADDED_TO_THIS_SCENARIO)
 
         # peak current = sum of all loads firing at once (worst case)
         peak_amps = sum(load.total_amps() for load in self.loads)
 
         if peak_amps > 1000:
             warnings.append(
-                f"Peak current is {peak_amps:.1f} A — that's over 1000 A, please double-check your inputs."
+                messages.MOMENTARY_CALC2_PEAK_CURRENT_IS_A_THAT_S_OVER_1000_A.format(peak_amps)
             )
         for load in self.loads:
             if load.current_A <= 0:
-                warnings.append(f"'{load.name}' has zero or negative amps — please check.")
+                warnings.append(messages.MOMENTARY_CALC2_HAS_ZERO_OR_NEGATIVE_AMPS_PLEASE_CHECK.format(load.name))
 
         load_details = []
         for load in self.loads:
@@ -87,8 +89,7 @@ class MomentaryLoadCalculator:
 
         if len(self.scenarios) >= MAX_SCENARIOS:
             raise Exception(
-                f"You've reached the maximum of {MAX_SCENARIOS} scenarios. "
-                "Remove one before adding another."
+                messages.MOMENTARY_CALC2_YOU_VE_REACHED_THE_MAXIMUM_OF_SCENARIOS_REMOVE_ONE.format(MAX_SCENARIOS)
             )
 
         scenario = Scenario(name, voltage)
@@ -99,8 +100,7 @@ class MomentaryLoadCalculator:
         """Attach an already-built Scenario (e.g. from scenario_from_netlist)."""
         if len(self.scenarios) >= MAX_SCENARIOS:
             raise Exception(
-                f"You've reached the maximum of {MAX_SCENARIOS} scenarios. "
-                "Remove one before adding another."
+                messages.MOMENTARY_CALC2_YOU_VE_REACHED_THE_MAXIMUM_OF_SCENARIOS_REMOVE_ONE.format(MAX_SCENARIOS)
             )
         self.scenarios.append(scenario)
         return scenario

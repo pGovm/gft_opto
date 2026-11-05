@@ -7,6 +7,8 @@ The canvas, symbols, wires, and undo commands live in sibling modules.
 This file builds the panels around the workspace and starts the application.
 """
 
+from gft_opto.gui import messages
+
 import functools
 import json
 import sys
@@ -20,7 +22,7 @@ from html import escape
 import pymupdf
 from PySide6.QtCore import Qt, QByteArray, QMimeData, QRectF
 from PySide6.QtGui import (
-    QAction, QColor, QPen, QBrush, QPalette,
+    QAction, QColor, QPen, QBrush, QPalette, QPainterPath, QPainterPathStroker,
     QDrag, QFont, QImage, QKeySequence, QPixmap, QTextDocument, QUndoStack,
 )
 from PySide6.QtPrintSupport import QPrinter
@@ -73,6 +75,26 @@ from collections import defaultdict
 
 # Drag-and-drop mime type for the equipment library
 MIME_EQUIPMENT = "application/x-substation-equipment"
+
+
+class _ZoneShape(QGraphicsPathItem):
+    """Reference drawing footprint, independent of electrical membership."""
+
+    def paint(self, painter, option, widget=None):
+        background = QColor(self.brush().color())
+        background.setAlpha(24)
+        painter.fillPath(self.path(), background)
+        super().paint(painter, option, widget)
+
+
+class _ZoneRectangle(QGraphicsRectItem):
+    """Translucent fill and hatching behind equipment; no electrical meaning."""
+
+    def paint(self, painter, option, widget=None):
+        background = QColor(self.brush().color())
+        background.setAlpha(24)
+        painter.fillRect(self.rect(), background)
+        super().paint(painter, option, widget)
 
 # Port / wire hit testing
 PORT_HIT_RADIUS = 14.0       # px — cursor must be this close to grab a port
@@ -210,6 +232,7 @@ class SubstationGuiMockup(QMainWindow):
         self.protection_zones = []
         self._zone_overlays = []
         self._zone_report = None
+        self._zones_visible = True
         self.setWindowTitle("AI-Assisted Substation Design Tool")
         self.setMinimumSize(1000, 700)
         self._apply_stylesheet()
@@ -451,7 +474,7 @@ class SubstationGuiMockup(QMainWindow):
             checked.clear()
             write_layout(path, data)
         except Exception as error:
-            QMessageBox.critical(self, "Save Failed", f"Could not save the layout:\n{error}")
+            QMessageBox.critical(self, messages.SUBSTATION_GUI4_SAVE_FAILED, messages.SUBSTATION_GUI4_COULD_NOT_SAVE_THE_LAYOUT.format(error))
             return False
         self.layout_path = str(Path(path).resolve())
         self._saved_snapshot = data
@@ -477,7 +500,7 @@ class SubstationGuiMockup(QMainWindow):
         # Build the entire replacement before discarding any current work.
         try:
             data = json.loads(Path(path).read_text(encoding="utf-8"))
-            scene = build_scene(data)
+            scene = build_scene(data, align_to_grid=True)
             pdf = data.get("pdf")
             normalized_pdf = str((Path(path).resolve().parent / pdf).resolve()) if pdf else pdf
             pdf = normalized_pdf
@@ -487,7 +510,7 @@ class SubstationGuiMockup(QMainWindow):
                     pixmap = self._read_pdf_pixmap(pdf)
                 except Exception:
                     replacement, _ = QFileDialog.getOpenFileName(
-                        self, "Locate Missing or Unreadable Background PDF (Cancel to open without it)", "", "PDF Files (*.pdf)"
+                        self, messages.SUBSTATION_GUI4_LOCATE_MISSING_OR_UNREADABLE_BACKGROUND_PDF_CANCEL_TO_OPEN, "", "PDF Files (*.pdf)"
                     )
                     if replacement:
                         pdf = str(Path(replacement).resolve())
@@ -504,7 +527,7 @@ class SubstationGuiMockup(QMainWindow):
             )
             return True
         except Exception as error:
-            QMessageBox.critical(self, "Open Failed", f"Could not open the layout:\n{error}")
+            QMessageBox.critical(self, messages.SUBSTATION_GUI4_OPEN_FAILED, messages.SUBSTATION_GUI4_COULD_NOT_OPEN_THE_LAYOUT.format(error))
             return False
 
     @staticmethod
@@ -513,7 +536,7 @@ class SubstationGuiMockup(QMainWindow):
             pix = document.load_page(0).get_pixmap(matrix=pymupdf.Matrix(2, 2), alpha=False)
             image = QPixmap()
             if not image.loadFromData(pix.tobytes("png")):
-                raise ValueError("Could not decode PDF background.")
+                raise ValueError(messages.SUBSTATION_GUI4_COULD_NOT_DECODE_PDF_BACKGROUND)
             return image
 
     def _install_layout(self, data, staged_scene, path, pixmap):
@@ -539,10 +562,12 @@ class SubstationGuiMockup(QMainWindow):
         view._grid_item = None
         view._init_grid()
         staged_scene.selectionChanged.connect(self._on_selection_changed)
+        staged_scene.changed.connect(self._sync_circuit_visibility)
+        self._sync_circuit_visibility()
         old_scene.deleteLater()
         self._workspace_original = pixmap
         if pixmap is not None:
-            view.set_background_pixmap(pixmap, scene_width=data["scene_rect"][2], scene_height=data["scene_rect"][3])
+            view.set_background_pixmap(pixmap, scene_width=data["scene_rect"][2], scene_height=data["scene_rect"][3], fit_existing_sheet=True)
             staged_scene.setSceneRect(QRectF(*data["scene_rect"]))
             view._sync_grid_to_scene()
         self.pdf_path = data.get("pdf")
@@ -616,6 +641,16 @@ class SubstationGuiMockup(QMainWindow):
         self.pdf_show_cb.setToolTip("Import a PDF first to enable this option")
         self.pdf_show_cb.toggled.connect(self.workspace_view.set_pdf_visible)
 
+        self.zones_show_cb = QCheckBox("Show Zones")
+        self.zones_show_cb.setChecked(self._zones_visible)
+        self.zones_show_cb.setToolTip("Show or hide zone shading without changing the study")
+        self.zones_show_cb.toggled.connect(self._set_zones_visible)
+
+        self.circuit_show_cb = QCheckBox("Show Circuit")
+        self.circuit_show_cb.setChecked(True)
+        self.circuit_show_cb.setToolTip("Show or hide drawn equipment and wires without deleting them")
+        self.circuit_show_cb.toggled.connect(self._sync_circuit_visibility)
+
         self.grid_snap_cb = QCheckBox("Snap to Grid")
         self.grid_snap_cb.setChecked(True)
         self.grid_snap_cb.toggled.connect(self.workspace_view.set_snap_to_grid)
@@ -637,6 +672,8 @@ class SubstationGuiMockup(QMainWindow):
 
         self.controls_layout.addWidget(self.grid_show_cb)
         self.controls_layout.addWidget(self.pdf_show_cb)
+        self.controls_layout.addWidget(self.circuit_show_cb)
+        self.controls_layout.addWidget(self.zones_show_cb)
         self.controls_layout.addWidget(self.grid_snap_cb)
         self.controls_layout.addLayout(opacity_row)
 
@@ -796,6 +833,7 @@ class SubstationGuiMockup(QMainWindow):
         )
         self.controls_layout.addWidget(rotate_btn)
 
+
         layout.addWidget(palette_group, 1)
         layout.addWidget(self.controls_group, 0)
         return container
@@ -811,6 +849,7 @@ class SubstationGuiMockup(QMainWindow):
         canvas_layout = QVBoxLayout(canvas)
 
         self.workspace_scene = QGraphicsScene(self)
+        self.workspace_scene.changed.connect(self._sync_circuit_visibility)
         self.workspace_scene.setSceneRect(
             QRectF(0, 0, DEFAULT_WORKSPACE_WIDTH, DEFAULT_WORKSPACE_HEIGHT)
         )
@@ -994,32 +1033,32 @@ class SubstationGuiMockup(QMainWindow):
             return
         report = check_circuit(self.workspace_scene)
         lines = [
-            "Circuit check: OK" if report["ok"] else "Circuit check: problems found",
+            "Circuit check: OK" if report["ok"] else messages.SUBSTATION_GUI4_CIRCUIT_PROBLEMS,
             "",
         ]
         open_ends = report["open_ends"]
         shorts = report["shorts"]
-        lines.append("Open ends:" if open_ends else "Open ends: none")
+        lines.append(messages.SUBSTATION_GUI4_OPEN_ENDS if open_ends else "Open ends: none")
         for issue in open_ends:
             lines.append(f"  • {issue}")
         lines.append("")
-        lines.append("Short circuits:" if shorts else "Short circuits: none")
+        lines.append(messages.SUBSTATION_GUI4_SHORT_CIRCUITS if shorts else messages.SUBSTATION_GUI4_SHORT_CIRCUITS_NONE)
         for issue in shorts:
             lines.append(f"  • {issue}")
         if hasattr(self, "footer_status_label"):
             if report["ok"]:
                 self.footer_status_label.setText("Circuit check passed")
-            elif open_ends == ["No components on the canvas."]:
-                self.footer_status_label.setText("Place components before checking the circuit")
+            elif open_ends == [messages.CIRCUIT_CHECK_NO_COMPONENTS_ON_THE_CANVAS]:
+                self.footer_status_label.setText(messages.SUBSTATION_GUI4_PLACE_COMPONENTS_BEFORE_CHECK)
             else:
                 self.footer_status_label.setText(
-                    f"Circuit check: {len(open_ends)} open, {len(shorts)} short"
+                    messages.SUBSTATION_GUI4_CIRCUIT_COUNTS.format(len(open_ends), len(shorts))
                 )
         message = "\n".join(lines)
         if report["ok"]:
             QMessageBox.information(self, "Validate", message)
         else:
-            QMessageBox.warning(self, "Validate", message)
+            QMessageBox.warning(self, messages.SUBSTATION_GUI4_VALIDATE, message)
 
     def _protection_netlist(self):
         netlist = netlist_from_scene(self.workspace_scene,
@@ -1042,7 +1081,7 @@ class SubstationGuiMockup(QMainWindow):
             netlist = self._protection_netlist()
             dialog = ZoneDialog(netlist, self.protection_zones or propose_zones(netlist), self)
         except (ValueError, TypeError) as error:
-            QMessageBox.warning(self, "Protection Zone Settings", str(error))
+            QMessageBox.warning(self, messages.SUBSTATION_GUI4_PROTECTION_ZONE_SETTINGS, str(error))
             return
         if dialog.exec() == QDialog.DialogCode.Accepted:
             changes = []
@@ -1078,6 +1117,21 @@ class SubstationGuiMockup(QMainWindow):
         layout.addWidget(close)
         dialog.exec()
 
+    def _sync_circuit_visibility(self, *_):
+        control = getattr(self, "circuit_show_cb", None)
+        visible = control.isChecked() if control is not None else True
+        for item in self.workspace_scene.items():
+            if isinstance(item, (OneLineSymbolItem, ConnectionItem)):
+                if not visible and item.isSelected():
+                    item.setSelected(False)
+                if item.isVisible() != visible:
+                    item.setVisible(visible)
+
+    def _set_zones_visible(self, visible):
+        self._zones_visible = visible
+        for overlay in self._zone_overlays:
+            overlay.setVisible(self._zones_visible)
+
     def _clear_zone_highlights(self):
         for overlay in self._zone_overlays:
             if overlay.scene() is not None:
@@ -1099,45 +1153,88 @@ class SubstationGuiMockup(QMainWindow):
         for index, zone in enumerate(rows):
             if selected_id and zone["id"] != selected_id:
                 continue
-            color = QColor(colors[index % len(colors)])
+            color = (QColor(colors[index]) if index < len(colors) else
+                     QColor.fromHsvF((index * 0.61803398875) % 1.0, 0.65, 0.8))
             pen = QPen(color, 3)
             if topology_mode:
                 pen.setStyle(Qt.PenStyle.DotLine)
             elif not zone["complete"]:
                 pen.setStyle(Qt.PenStyle.DashLine)
             tooltip = zone["name"] + (" (topology only; no automatic current)" if topology_mode else "")
-            for ident in zone["members"]:
-                if ident not in symbols:
-                    continue
-                margin = 8 + (index % 3) * 4
-                overlay = QGraphicsRectItem(symbols[ident].sceneBoundingRect().adjusted(-margin, -margin, margin, margin))
-                overlay.setPen(pen)
-                fill = QColor(color)
-                fill.setAlpha(25)
-                overlay.setBrush(QBrush(fill))
-                self._add_zone_overlay(overlay, tooltip, zone["id"])
-            # Membership is terminal-aware. Testing only both endpoint IDs would
-            # incorrectly highlight a parallel conductor on the other CT sides.
+            if not topology_mode:
+                tooltip += f" ({zone.get('kind', 'Manual')} zone)"
+            # Follow primary geometry instead of filling its bounding rectangle.
+            # Labels and empty space between branches do not define coverage.
+            coverage = QPainterPath()
+            stroker = QPainterPathStroker()
+            stroker.setWidth(120)
+            stroker.setCapStyle(Qt.PenCapStyle.SquareCap)
+            stroker.setJoinStyle(Qt.PenJoinStyle.MiterJoin)
             exact_keys = {tuple(tuple(endpoint) for endpoint in edge) for edge in zone["connections"]}
-            for wire in wires:
-                key = connection_key(wire)
-                if key not in exact_keys:
-                    continue
-                overlay = QGraphicsPathItem(wire.sceneTransform().map(wire.path()))
-                wire_pen = QPen(color, 7)
-                wire_pen.setCosmetic(True)
-                overlay.setPen(wire_pen)
-                overlay.setOpacity(0.4)
-                overlay._zone_connection_key = key
-                self._add_zone_overlay(overlay, tooltip, zone["id"])
+            visible_members = set(zone["members"])
+            visible_wires = [wire for wire in wires if connection_key(wire) in exact_keys]
+            # Apply the same display rules to configured and detected regions.
+            # Use saved symbol metadata for equipment created from templates.
+            visible_members -= {ident for ident, symbol in symbols.items()
+                                if getattr(symbol, "properties", {}).get("symbol_type", symbol.equip_type)
+                                in {"pt", "surge_arrester", "ground"}
+                                or getattr(symbol, "properties", {}).get("circuit_role") == "voltage_measurement"}
+            while True:
+                visible_wires = [wire for wire in visible_wires
+                                 if wire.from_item.instance_id in visible_members
+                                 and wire.to_item.instance_id in visible_members]
+                degrees = defaultdict(int)
+                for wire in visible_wires:
+                    degrees[wire.from_item.instance_id] += 1
+                    degrees[wire.to_item.instance_id] += 1
+                leaves = {ident for ident in visible_members if ident in symbols
+                          and symbols[ident].equip_type == "junction" and degrees[ident] <= 1}
+                if not leaves:
+                    break
+                visible_members -= leaves
+            for ident in visible_members:
+                if ident in symbols:
+                    symbol = symbols[ident]
+                    body = symbol._local_transform().mapRect(symbol._rect)
+                    piece = QPainterPath()
+                    piece.addRect(symbol.mapRectToScene(body).adjusted(-50, -50, 50, 50))
+                    coverage = coverage.united(piece)
+            for wire in visible_wires:
+                coverage = coverage.united(stroker.createStroke(wire.mapToScene(wire.path())))
+            if coverage.isEmpty():
+                continue
+            footprint = next((z.get("display_polygon") for z in self.protection_zones
+                              if z["id"] == zone["id"]), None) if not topology_mode else None
+            if (isinstance(footprint, list) and len(footprint) >= 3
+                    and all(isinstance(p, list) and len(p) == 2
+                            and all(isinstance(v, (int, float)) and math.isfinite(v) for v in p)
+                            for p in footprint)):
+                path = QPainterPath()
+                path.moveTo(*footprint[0])
+                for point in footprint[1:]:
+                    path.lineTo(*point)
+                path.closeSubpath()
+                overlay = _ZoneShape(path)
+                tooltip += " — reference drawing footprint; verify CT boundaries separately"
+            else:
+                overlay = _ZoneShape(coverage.simplified())
+            overlay.setPen(pen)
+            fill = QColor(color)
+            fill.setAlpha(65)
+            overlay.setBrush(QBrush(fill, Qt.BrushStyle.BDiagPattern))
+            # A pale solid background plus hatching resembles the reference sheet.
+            overlay.setData(2, QColor(color).name())
+            overlay._zone_connection_keys = exact_keys
+            self._add_zone_overlay(overlay, tooltip, zone["id"])
 
     def _add_zone_overlay(self, overlay, name, zone_id=None):
-        overlay.setZValue(10)
+        overlay.setZValue(-0.5)
         overlay.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
         overlay.setToolTip(name)
         overlay.setData(0, "protection-zone-overlay")
         overlay.setData(1, zone_id)
         self.workspace_scene.addItem(overlay)
+        overlay.setVisible(self._zones_visible)
         self._zone_overlays.append(overlay)
 
     def _on_run_evaluation_clicked(self):
@@ -1147,8 +1244,8 @@ class SubstationGuiMockup(QMainWindow):
         try:
             netlist = self._protection_netlist()
             if not netlist["components"]:
-                self.output_box.setPlainText("No components to evaluate. Rebuild the one-line and enter its current loads.")
-                self.footer_status_label.setText("Place components before evaluating protection zones")
+                self.output_box.setPlainText(messages.SUBSTATION_GUI4_NO_COMPONENTS_TO_EVALUATE_REBUILD_THE_ONE_LINE_AND)
+                self.footer_status_label.setText(messages.SUBSTATION_GUI4_PLACE_COMPONENTS_BEFORE_EVALUATION)
                 return
             if not self.protection_zones:
                 self.protection_zones = propose_zones(netlist)
@@ -1160,9 +1257,9 @@ class SubstationGuiMockup(QMainWindow):
             self._zone_report = report
             self.zone_view.blockSignals(True)
             self.zone_view.clear()
-            self.zone_view.addItem("All configured zones (dashed = incomplete)", None)
+            self.zone_view.addItem(messages.SUBSTATION_GUI4_ALL_CONFIGURED_ZONES_DASHED_INCOMPLETE, None)
             for index, zone in enumerate(report["zones"]):
-                self.zone_view.addItem(f"{index + 1}. {zone['name']} — {'confirmed' if zone['complete'] else 'review required'}", zone["id"])
+                self.zone_view.addItem(f"{index + 1}. {zone['name']} — {'confirmed' if zone['complete'] else messages.SUBSTATION_GUI4_REVIEW_REQUIRED}", zone["id"])
             self.zone_view.addItem("All detected regions (topology only)", ("topology", None))
             for region in report["topology_regions"]:
                 enclosure = " [enclosed]" if region["enclosed_by"] else " [outermost]"
@@ -1172,19 +1269,19 @@ class SubstationGuiMockup(QMainWindow):
             self.zone_view.blockSignals(False)
             self._show_zone_highlights()
             lines = [f"Momentary DC protection-zone study: {netlist['system_name']}",
-                "COMPLETE" if report["complete"] else "INCOMPLETE — configure/review flagged zones; partial totals are not final.",
+                "COMPLETE" if report["complete"] else messages.SUBSTATION_GUI4_INCOMPLETE_CONFIGURE_REVIEW_FLAGGED_ZONES_PARTIAL_TOTALS_ARE_NOT,
                 "Each configured zone is a separate fault event. Same-stage loads are simultaneous; other stages are separate.",
                 "DC supplies are reported separately. No battery amp-hour calculation.", ""]
             all_loads, warnings = [], list(report["warnings"])
-            lines.extend(f"REVIEW: {warning}" for warning in warnings)
+            lines.extend(messages.SUBSTATION_GUI4_REVIEW_WARNING.format(warning) for warning in warnings)
             for zone in report["zones"]:
                 lines.extend([f"{zone['name']} ({zone['kind']})", "  CT boundaries: " + ", ".join(zone["boundaries"]),
                               "  Equipment: " + ", ".join(zone["members"])])
                 for warning in zone["warnings"]:
-                    lines.append(f"  REVIEW: {warning}")
-                    warnings.append(f"{zone['name']}: {warning}")
+                    lines.append(messages.SUBSTATION_GUI4_INDENTED_REVIEW_WARNING.format(warning))
+                    warnings.append(messages.DIAGNOSTIC_WITH_CONTEXT.format(zone['name'], warning))
                 for scenario in zone["scenarios"]:
-                    prefix = "" if zone["complete"] else "Provisional "
+                    prefix = "" if zone["complete"] else messages.SUBSTATION_GUI4_PROVISIONAL
                     lines.append(f"  {prefix}{scenario['stage']}: {scenario['peak_current_A']:g} A across assigned supplies")
                     for advice in scenario.get("advisories", []):
                         lines.append(f"    NOTE: {advice}")
@@ -1203,27 +1300,27 @@ class SubstationGuiMockup(QMainWindow):
             for supply, peak in report["supply_peaks"].items():
                 lines.append(f"  {supply}: {peak['peak_current_A']:g} A — {peak['zone']} / {peak['stage']}")
             if not report["supply_peaks"]:
-                lines.append("  Not available until zone assignments and currents are complete.")
+                lines.append(messages.SUBSTATION_GUI4_NOT_AVAILABLE_UNTIL_ZONE_ASSIGNMENTS_AND_CURRENTS_ARE_COMPLETE)
             worst_supply = max(report["supply_peaks"],
                 key=lambda supply: report["supply_peaks"][supply]["peak_current_A"], default=None)
             self.last_result = {"scenario_name": netlist["system_name"], "voltage_V": netlist["voltage_V"],
-                "peak_current_A": report["supply_peaks"][worst_supply]["peak_current_A"] if worst_supply and report["complete"] else "Incomplete study",
+                "peak_current_A": report["supply_peaks"][worst_supply]["peak_current_A"] if worst_supply and report["complete"] else messages.SUBSTATION_GUI4_INCOMPLETE_STUDY,
                 "worst_case_supply": worst_supply,
                 "loads": all_loads, "warnings": warnings, "protection_analysis": report,
                 "calculation_steps": ["Group actions by zone and operating stage.",
                     "Count each physical coil or motor once per stage; multiply entered current by the verified unit count.",
                     "Sum currents per DC supply within each stage, then take each supply's maximum across complete zones.",
-                    "Stages and separate zone faults are not added together. Flagged zones have provisional results only."]}
+                    messages.SUBSTATION_GUI4_STAGES_AND_SEPARATE_ZONE_FAULTS_ARE_NOT_ADDED_TOGETHER]}
             netlist["zones"] = copy.deepcopy(self.protection_zones)
             self.last_netlist = netlist
             self._evaluated_snapshot = self._layout_data()
             self.save_results_btn.setEnabled(True)
             self.output_box.setPlainText("\n".join(lines))
-            self.footer_status_label.setText("Zone evaluation complete" if report["complete"] else "Zone evaluation needs review — Configure Protection Zones")
+            self.footer_status_label.setText("Zone evaluation complete" if report["complete"] else messages.SUBSTATION_GUI4_ZONE_EVALUATION_NEEDS_REVIEW_CONFIGURE_PROTECTION_ZONES)
         except Exception as error:
             self._invalidate_results()
-            self.output_box.setPlainText(f"Evaluation failed:\n{error}")
-            self.footer_status_label.setText("Zone evaluation failed; see analysis output")
+            self.output_box.setPlainText(messages.SUBSTATION_GUI4_EVALUATION_FAILED.format(error))
+            self.footer_status_label.setText(messages.SUBSTATION_GUI4_ZONE_EVALUATION_FAILED_SEE_ANALYSIS_OUTPUT)
         self.response_time_label.setText(f"Response time: {(time.perf_counter() - started) * 1000:.0f} ms")
 
     def _on_save_results_clicked(self):
@@ -1251,7 +1348,7 @@ class SubstationGuiMockup(QMainWindow):
         result = self.last_result
         peak = result.get("peak_current_A", "Not available")
         peak_display = f"{peak:g} A" if isinstance(peak, (int, float)) else str(peak)
-        study_status = "COMPLETE" if result.get("protection_analysis", {}).get("complete") else "INCOMPLETE — provisional study"
+        study_status = "COMPLETE" if result.get("protection_analysis", {}).get("complete") else messages.SUBSTATION_GUI4_INCOMPLETE_PROVISIONAL_STUDY
 
         loads = result.get("loads") or []
         load_rows = "".join(
@@ -1261,7 +1358,7 @@ class SubstationGuiMockup(QMainWindow):
             f"<td>{escape(str(load.get('note', '')))}</td>"
             "</tr>"
             for load in loads
-        ) or "<tr><td colspan='3'>No loads returned.</td></tr>"
+        ) or messages.SUBSTATION_GUI4_TR_TD_COLSPAN_3_NO_LOADS_RETURNED_TD_TR
 
         steps = result.get("calculation_steps") or []
 
@@ -1367,11 +1464,11 @@ class SubstationGuiMockup(QMainWindow):
             printer.setOutputFileName(temporary)
             document.print_(printer)
             if printer.printerState() == QPrinter.PrinterState.Error or Path(temporary).stat().st_size == 0:
-                raise OSError("The PDF file was not created or is empty.")
+                raise OSError(messages.SUBSTATION_GUI4_THE_PDF_FILE_WAS_NOT_CREATED_OR_IS_EMPTY)
             os.replace(temporary, file_path)
         except Exception as error:
             QMessageBox.critical(
-                self, "Save Failed", f"Could not create the PDF:\n{error}"
+                self, messages.SUBSTATION_GUI4_SAVE_FAILED, messages.SUBSTATION_GUI4_COULD_NOT_CREATE_THE_PDF.format(error)
             )
             return
         finally:
@@ -1397,7 +1494,7 @@ class SubstationGuiMockup(QMainWindow):
         name = data["name"]
         symbol_key = str(data.get("symbol_type", "custom"))
         if not name:
-            QMessageBox.warning(self, "Create Component", "Please enter a component name.")
+            QMessageBox.warning(self, messages.SUBSTATION_GUI4_CREATE_COMPONENT, messages.SUBSTATION_GUI4_PLEASE_ENTER_A_COMPONENT_NAME)
             return
 
         # Bus only sends Rating; other types send coil / motor currents.
@@ -1413,6 +1510,11 @@ class SubstationGuiMockup(QMainWindow):
         }
         if not properties["rating_kv"]:
             properties.pop("rating_kv")
+        if symbol_key == "surge_arrester":
+            properties = {key: value for key, value in properties.items()
+                          if key in {"rating_kv", "symbol_type"}}
+        elif symbol_key == "incoming_line":
+            properties = {"symbol_type": symbol_key}
 
         slug = "".join(ch if ch.isalnum() else "_" for ch in name.strip().lower())
         equip_id = f"custom_{slug}" if slug else f"custom_{len(EQUIPMENT_DEFS)}"
@@ -1480,22 +1582,24 @@ class SubstationGuiMockup(QMainWindow):
                 doc.close()
         except Exception as e:
             if hasattr(self, "footer_status_label"):
-                self.footer_status_label.setText(f"Import failed: {e}")
+                self.footer_status_label.setText(messages.SUBSTATION_GUI4_IMPORT_FAILED.format(e))
             return
 
         pm = QPixmap()
         if not pm.loadFromData(png_bytes):
             if hasattr(self, "footer_status_label"):
-                self.footer_status_label.setText("Import failed: could not decode rendered PNG")
+                self.footer_status_label.setText(messages.SUBSTATION_GUI4_IMPORT_FAILED_COULD_NOT_DECODE_RENDERED_PNG)
             return
 
         self._workspace_original = pm
         self.pdf_path = str(Path(pdf_path).resolve())
+        fit_layout = any(isinstance(item, OneLineSymbolItem) for item in self.workspace_scene.items())
         if hasattr(self, "workspace_view"):
             self.workspace_view.set_background_pixmap(
                 pm,
                 scene_width=scene_width,
                 scene_height=scene_height,
+                fit_existing_sheet=fit_layout,
             )
         if hasattr(self, "pdf_show_cb"):
             self.pdf_show_cb.setEnabled(True)
@@ -1506,7 +1610,7 @@ class SubstationGuiMockup(QMainWindow):
             sheet_height = scene_height / SCENE_UNITS_PER_INCH
             self.footer_status_label.setText(
                 f"Imported: {pdf_path} "
-                f"({sheet_width:g} × {sheet_height:g} in)"
+                + ("(fitted to layout sheet)" if fit_layout else f"({sheet_width:g} × {sheet_height:g} in)")
             )
         self._mark_modified()
 
@@ -1544,12 +1648,13 @@ class SubstationGuiMockup(QMainWindow):
             self.prop_name.blockSignals(True)
             self.prop_name.setText(item.visible_id())
             self.prop_name.blockSignals(False)
-        if isinstance(item, BusItem):
+        if isinstance(item, BusItem) or (isinstance(item, OneLineSymbolItem) and item.equip_type == "surge_arrester"):
             self.prop_type.setText(
                 BUILTIN_SYMBOLS.get(item.equip_type, {}).get("label", "Bus")
             )
             self.prop_status.setEnabled(False)
             self._set_bus_property_mode(True)
+            self.prop_voltage_label.setText("MCOV (kV):" if item.equip_type == "surge_arrester" else "Voltage (kV):")
             props = getattr(item, "properties", None)
             rating = props.get("rating_kv") if isinstance(props, dict) else None
             self.prop_voltage.blockSignals(True)
@@ -1560,6 +1665,9 @@ class SubstationGuiMockup(QMainWindow):
             self.prop_status.setEnabled(True)
             self._set_bus_property_mode(False)
             self._set_custom_component_properties(self._symbol_properties(item))
+            if item.equip_type == "incoming_line":
+                for widget in self._non_bus_property_widgets:
+                    widget.setVisible(False)
         elif isinstance(item, ConnectionItem):
             self.prop_type.setText("Connection")
             self.prop_name.setReadOnly(True)
@@ -1657,7 +1765,7 @@ class SubstationGuiMockup(QMainWindow):
             if not math.isfinite(value) or value < 0:
                 raise ValueError
         except ValueError:
-            self.footer_status_label.setText("Current must be a finite number greater than or equal to zero")
+            self.footer_status_label.setText(messages.SUBSTATION_GUI4_CURRENT_MUST_BE_A_FINITE_NUMBER_GREATER_THAN_OR)
             self._on_selection_changed()
             return
         self._edit_property(symbol, key, value)
@@ -1667,7 +1775,7 @@ class SubstationGuiMockup(QMainWindow):
         if not hasattr(self, "workspace_scene"):
             return
         selected = self.workspace_scene.selectedItems()
-        if len(selected) != 1 or not isinstance(selected[0], BusItem):
+        if len(selected) != 1 or not isinstance(selected[0], OneLineSymbolItem) or selected[0].equip_type not in {"bus", "surge_arrester"}:
             return
         bus = selected[0]
         raw = text.strip().lower().removesuffix("kv").strip()
@@ -1679,7 +1787,7 @@ class SubstationGuiMockup(QMainWindow):
                 if not math.isfinite(rating) or rating <= 0:
                     raise ValueError
             except ValueError:
-                self.footer_status_label.setText("Bus voltage must be a finite positive number, or blank")
+                self.footer_status_label.setText(messages.SUBSTATION_GUI4_BUS_VOLTAGE_MUST_BE_A_FINITE_POSITIVE_NUMBER_OR)
                 self._on_selection_changed()
                 return
         self._edit_property(bus, "rating_kv", rating)

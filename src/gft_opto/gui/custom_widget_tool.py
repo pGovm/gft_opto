@@ -35,10 +35,12 @@ from PySide6.QtWidgets import (
 
 SYMBOL_TYPE_CHOICES: list[tuple[str, str]] = [
     ("breaker", "Circuit Breaker"),
+    ("incoming_line", "Incoming AC Line"),
     ("disconnect", "Disconnect Switch"),
     ("mos", "Motor Operated Switch (MOS)"),
     ("ct", "Current Transformer (CT/BCT)"),
     ("pt", "Potential Transformer (PT/VT)"),
+    ("line_trap", "Line Trap"),
     ("xfmr_2w", "Transformer (2-winding)"),
     ("xfmr_3w", "Transformer (3-winding)"),
     ("ground", "Ground"),
@@ -180,9 +182,12 @@ class ComponentDialog(QDialog):
     def _update_fields_for_component(self, _text: str = ""):
         """Bus shows rating only; other types show coil / motor fields."""
         is_bus = self._is_bus()
-        self.form.setRowVisible(self.rating_spin, is_bus)
+        is_arrester = self.symbol_type_key() == "surge_arrester"
+        is_incoming = self.symbol_type_key() == "incoming_line"
+        self.form.labelForField(self.rating_spin).setText("MCOV (kV):" if is_arrester else "Rating (kV):")
+        self.form.setRowVisible(self.rating_spin, is_bus or is_arrester)
         for field_widget in self._non_bus_fields:
-            self.form.setRowVisible(field_widget, not is_bus)
+            self.form.setRowVisible(field_widget, not (is_bus or is_arrester or is_incoming))
         self.adjustSize()
 
     @staticmethod
@@ -214,9 +219,9 @@ class ComponentDialog(QDialog):
             "symbol_type": self.symbol_type_key(),
             "tags": ["Manufacturer", "Year"],
         }
-        if self._is_bus():
+        if self._is_bus() or self.symbol_type_key() == "surge_arrester":
             data["Rating"] = self.rating_spin.value()
-        else:
+        elif self.symbol_type_key() != "incoming_line":
             data.update({
                 "TripCoil1": self.trip_coil_1_spin.value(),
                 "TripCoil2": self.trip_coil_2_spin.value(),

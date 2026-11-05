@@ -63,6 +63,50 @@ class GuiWorkflows(unittest.TestCase):
         item.setSelected(True)
         return item
 
+    def test_surge_arrester_mcov_and_layout_round_trip(self):
+        from gft_opto.gui.custom_widget_tool import ComponentDialog
+        dialog = ComponentDialog(self.window)
+        dialog.symbol_combo.setCurrentIndex(dialog.symbol_combo.findData("surge_arrester"))
+        dialog.rating_spin.setValue(88)
+        data = dialog.component_data()
+        self.assertEqual(data["Rating"], 88)
+        self.assertNotIn("TripCoil1", data)
+        arrester = make_user_equipment("surge_arrester", "SA-H1", {"rating_kv": 88, "symbol_type": "surge_arrester"})
+        ground = GroundItem()
+        scene = self.window.workspace_scene
+        scene.addItem(arrester)
+        scene.addItem(ground)
+        scene.addItem(ConnectionItem(arrester, "right", ground, "node"))
+        arrester.setSelected(True)
+        self.assertEqual(self.window.prop_voltage_label.text(), "MCOV (kV):")
+        self.window._on_property_voltage_changed("90")
+        self.assertEqual(arrester.properties["rating_kv"], 90)
+        layout = self.window._layout_data()
+        restored = build_scene(layout)
+        loaded = next(i for i in restored.items() if isinstance(i, OneLineSymbolItem) and i.equip_type == "surge_arrester")
+        self.assertEqual(loaded.properties["rating_kv"], 90)
+        self.assertEqual(len(loaded.connections()), 1)
+        dialog.deleteLater()
+
+    def test_reference_incoming_lines_open_with_single_connected_terminal(self):
+        from gft_opto.gui.custom_widget_tool import ComponentDialog
+        dialog = ComponentDialog(self.window)
+        dialog.symbol_combo.setCurrentIndex(dialog.symbol_combo.findData("incoming_line"))
+        self.assertNotIn("TripCoil1", dialog.component_data())
+        self.assertNotIn("Rating", dialog.component_data())
+        path = Path(__file__).parent / "layouts" / "mvec_reference_one_line_draft.json"
+        self.assertTrue(self.window.open_layout(str(path)))
+        incoming = [i for i in self.window.workspace_scene.items()
+                    if isinstance(i, OneLineSymbolItem) and i.equip_type == "incoming_line"]
+        self.assertEqual(len(incoming), 2)
+        for item in incoming:
+            self.assertEqual(set(item.ports()), {"line"})
+            self.assertEqual(len(item.connections()), 1)
+        restored = build_scene(self.window._layout_data())
+        self.assertEqual(sum(isinstance(i, OneLineSymbolItem) and i.equip_type == "incoming_line"
+                             for i in restored.items()), 2)
+        dialog.deleteLater()
+
     def commit_current(self, text):
         field = self.window.prop_trip_coil_1
         field.setText(text)

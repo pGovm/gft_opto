@@ -2,6 +2,14 @@
 
 """Shared widget styles that should remain readable across system themes."""
 
+ZONE_COLORS = {
+    "Bus": "#0072b2",
+    "Transformer": "#d55e00",
+    "Line": "#009e73",
+    "Manual": "#cc79a7",
+}
+TOPOLOGY_ZONE_COLOR = "#64748b"
+
 SCROLLBAR_STYLE = """
     QScrollBar:vertical {
         background: #e4e9ef; width: 14px; margin: 0;

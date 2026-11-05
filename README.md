@@ -104,6 +104,20 @@ using **Save Calculation Results** to export a PDF. Draft exports are explicitly
 marked incomplete. Zone configuration is saved in layout JSON; older layouts
 without zone configuration still open normally.
 
+## Desktop executable
+
+Close the application, then rebuild the Windows executable from the project
+folder. The `package` group installs PyInstaller when needed:
+
+```powershell
+Remove-Item Env:QT_QPA_PLATFORM -ErrorAction SilentlyContinue
+uv run --group package pyinstaller --noconfirm gft-opto.spec
+```
+
+The result is `dist/gft-opto.exe`. A desktop shortcut pointing to that file
+opens the rebuilt version. `uv run gft-opto` runs the source directly and does
+not rebuild the executable.
+
 ## Regression checks
 
 With the project dependencies installed, run:

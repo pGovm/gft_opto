@@ -134,12 +134,31 @@ class GuiZoneIntegration(unittest.TestCase):
                       if r["level"] == "Primary" and
                       r["connections"] == json.loads(json.dumps([connection_key(first)])))
         self.select_region(region["id"])
-        highlighted = [it._zone_connection_key for it in self.window._zone_overlays
-                       if hasattr(it, "_zone_connection_key")]
+        highlighted = [key for it in self.window._zone_overlays for key in it._zone_connection_keys]
         self.assertEqual(highlighted, [connection_key(first)])
         self.assertEqual(scene_data(self.window.workspace_scene), before)
         self.assertEqual(self.window._zone_report["supply_peaks"], {})
         self.assertEqual(self.window.last_result["peak_current_A"], "Incomplete study")
+
+    def test_reference_zones_span_internal_cts_and_draw_one_rectangle_each(self):
+        from PySide6.QtWidgets import QGraphicsRectItem
+        path = Path(__file__).parent / "layouts" / "mvec_reference_one_line_draft.json"
+        self.assertTrue(self.window.open_layout(str(path)))
+        before = copy.deepcopy(self.window._layout_data())
+        self.window._on_run_evaluation_clicked()
+        zones = self.window._zone_report["zones"]
+        self.assertEqual(len(zones), 3)
+        transformer = next(z for z in zones if z["name"].startswith("TR2"))
+        self.assertEqual(set(transformer["boundaries"]), {"ct_1", "ct_6"})
+        self.assertTrue({"ct_2", "ct_3", "ct_4", "ct_5"} <= set(transformer["core"]))
+        self.assertEqual(len(self.window._zone_overlays), 3)
+        for overlay in self.window._zone_overlays:
+            self.assertIsInstance(overlay, QGraphicsRectItem)
+            self.assertEqual(overlay.brush().style(), Qt.BrushStyle.BDiagPattern)
+            self.assertEqual(overlay.acceptedMouseButtons(), Qt.MouseButton.NoButton)
+            self.assertLess(overlay.zValue(), 0)
+        self.assertFalse(self.window._zone_report["supply_peaks"])
+        self.assertEqual(self.window._layout_data(), before)
 
     def test_ct_only_drawing_displays_regions_without_fabricating_loads(self):
         a = self.add(CurrentTransformerItem(), 200)
@@ -152,8 +171,7 @@ class GuiZoneIntegration(unittest.TestCase):
         self.assertEqual(len(report["topology_regions"]), 1)
         self.assertTrue(report["topology_regions"][0]["wire_only"])
         self.assertEqual(self.window.last_result["loads"], [])
-        self.assertEqual([it._zone_connection_key for it in self.window._zone_overlays
-                          if hasattr(it, "_zone_connection_key")], [connection_key(wire)])
+        self.assertEqual([key for it in self.window._zone_overlays for key in it._zone_connection_keys], [connection_key(wire)])
 
     def test_zone_dialog_selects_and_confirms_wire_only_region(self):
         left = self.add(CircuitBreakerItem(), 150)

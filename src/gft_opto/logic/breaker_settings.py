@@ -2,6 +2,8 @@
 
 """Equipment settings shared by every protection-zone action for a breaker."""
 
+from gft_opto.gui import messages
+
 SUPPLY_KEYS = {
     "trip_coil_1_a": "trip_coil_1_supply", "trip_coil_2_a": "trip_coil_2_supply",
     "close_coil_a": "close_coil_supply", "motor_inrush_a": "motor_supply",
@@ -29,27 +31,27 @@ def resolve_breaker_action(component, action, zones):
     settings = breaker_settings(component, zones)
     basis, arrangement, poles = (settings[key] for key in ("coil_current_basis", "mechanism_arrangement", "pole_count"))
     if basis not in ("whole_breaker", "per_mechanism") or arrangement not in ("shared", "independent"):
-        raise ValueError("Review the breaker's current basis and mechanism arrangement.")
+        raise ValueError(messages.BREAKER_SETTINGS_REVIEW_THE_BREAKER_S_CURRENT_BASIS_AND_MECHANISM_ARRANGEMENT)
     if isinstance(poles, bool) or not isinstance(poles, int) or not 1 <= poles <= 3:
-        raise ValueError("Breaker pole count must be between 1 and 3.")
+        raise ValueError(messages.LAYOUT_IO_BREAKER_POLE_COUNT_MUST_BE_BETWEEN_1_AND_3)
     if "operation" not in action:
         legacy_units = action.get("units", 1)
         allowed = (1,) if action["load"].startswith("motor_") else (1, 3)
         if isinstance(legacy_units, bool) or legacy_units not in allowed:
-            raise ValueError("Replace the legacy units with an operating action in Configure Protection Zones.")
+            raise ValueError(messages.BREAKER_SETTINGS_REPLACE_THE_LEGACY_UNITS_WITH_AN_OPERATING_ACTION_IN)
     operation = action.get("operation", "all_poles")
     if operation not in ("all_poles", "one_pole", "device"):
-        raise ValueError("Replace the legacy units with an operating action in Configure Protection Zones.")
+        raise ValueError(messages.BREAKER_SETTINGS_REPLACE_THE_LEGACY_UNITS_WITH_AN_OPERATING_ACTION_IN)
     motor = action["load"].startswith("motor_")
     if motor:
         units = 1
     elif operation == "one_pole":
         if arrangement != "independent" or basis != "per_mechanism":
-            raise ValueError("One-pole operation requires independent mechanisms and a per-mechanism coil current.")
+            raise ValueError(messages.BREAKER_SETTINGS_ONE_POLE_OPERATION_REQUIRES_INDEPENDENT_MECHANISMS_AND_A_PER)
         units = 1
     else:
         units = poles if arrangement == "independent" and basis == "per_mechanism" else 1
     supply = settings[SUPPLY_KEYS[action["load"]]]
     if not isinstance(supply, str) or not supply.strip():
-        raise ValueError("Set this coil's DC supply in the selected breaker's properties.")
+        raise ValueError(messages.BREAKER_SETTINGS_SET_THIS_COIL_S_DC_SUPPLY_IN_THE_SELECTED)
     return supply.strip(), units

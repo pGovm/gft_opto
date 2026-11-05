@@ -16,6 +16,8 @@ or approved PDF outlines. Momentary results must still be evaluated separately.
 """
 from __future__ import annotations
 
+from gft_opto.gui import messages
+
 from collections import defaultdict
 from dataclasses import dataclass, field
 import hashlib
@@ -30,14 +32,14 @@ ConnectionKey = tuple[Endpoint, Endpoint]
 def _item_id(item: Any) -> str:
     value = getattr(item, "instance_id", None)
     if not isinstance(value, str) or not value.strip():
-        raise ValueError("Every component must have a nonempty string instance_id")
+        raise ValueError(messages.PROTECTION_ZONES_EVERY_COMPONENT_MUST_HAVE_A_NONEMPTY_STRING_INSTANCE_ID)
     return value
 
 
 def _port(connection: Any, attribute: str) -> str | None:
     value = getattr(connection, attribute, None)
     if value is not None and (not isinstance(value, str) or not value.strip()):
-        raise ValueError(f"{attribute} must be a nonempty string or None")
+        raise ValueError(messages.PROTECTION_ZONES_MUST_BE_A_NONEMPTY_STRING_OR_NONE.format(attribute))
     return value
 
 
@@ -104,7 +106,7 @@ def stable_zone_id(zone: Zone, namespace: str = "Zone") -> str:
     input iteration order, process hash seed or Python object address is used.
     """
     if not isinstance(namespace, str) or not namespace.strip():
-        raise ValueError("namespace must be a nonempty string")
+        raise ValueError(messages.PROTECTION_ZONES_NAMESPACE_MUST_BE_A_NONEMPTY_STRING)
     encoded = json.dumps(zone_signature(zone), sort_keys=True,
                          separators=(",", ":")).encode("utf-8")
     return f"{namespace}-{hashlib.sha256(encoded).hexdigest()[:24]}"
@@ -118,7 +120,7 @@ def _name_zone(zone: Zone) -> Zone:
 def _boundary_classes(boundary_types: Iterable[type] | type) -> tuple[type, ...]:
     types = (boundary_types,) if isinstance(boundary_types, type) else tuple(boundary_types)
     if any(not isinstance(t, type) for t in types):
-        raise TypeError("boundary_types must contain classes")
+        raise TypeError(messages.PROTECTION_ZONES_BOUNDARY_TYPES_MUST_CONTAIN_CLASSES)
     return types
 
 
@@ -190,9 +192,9 @@ def identify_zones(all_items: Iterable[Any], boundary_types: Iterable[type] | ty
     for item in items:
         name = _item_id(item)
         if name in registry and registry[name] is not item:
-            raise ValueError(f"Duplicate component ID: {name}")
+            raise ValueError(messages.PROTECTION_STUDY_DUPLICATE_COMPONENT_ID.format(name))
         if not callable(getattr(item, "connections", None)):
-            raise TypeError(f"{name}: expected a connections() method")
+            raise TypeError(messages.PROTECTION_ZONES_EXPECTED_A_CONNECTIONS_METHOD.format(name))
         registry[name] = item
     items = list(registry.values())
     scope = set(items)
@@ -252,12 +254,12 @@ def _validate_zones(zones: list[Zone]) -> None:
     ids = set()
     for zone in zones:
         if not isinstance(zone.zone_id, str) or not zone.zone_id.strip():
-            raise ValueError("Every zone must have a nonempty string zone_id")
+            raise ValueError(messages.PROTECTION_ZONES_EVERY_ZONE_MUST_HAVE_A_NONEMPTY_STRING_ZONE_ID)
         if zone.zone_id in ids:
-            raise ValueError(f"Duplicate zone ID: {zone.zone_id}")
+            raise ValueError(messages.PROTECTION_STUDY_DUPLICATE_ZONE_ID.format(zone.zone_id))
         ids.add(zone.zone_id)
         if zone.core_items & zone.boundary_items:
-            raise ValueError(f"{zone.zone_id}: core and boundary components must be disjoint")
+            raise ValueError(messages.PROTECTION_ZONES_CORE_AND_BOUNDARY_COMPONENTS_MUST_BE_DISJOINT.format(zone.zone_id))
 
 
 def find_enclosed_zones(zones: Iterable[Zone]) -> dict[str, list[str]]:
@@ -297,7 +299,7 @@ def _zones_by_boundary(zones: list[Zone]) -> dict:
 def _merge_across_boundary(zone_a: Zone, zone_b: Zone, boundary_item: Any) -> Zone:
     """Legacy single-boundary helper; public generator checks full incidence."""
     if boundary_item not in zone_a.boundary_items & zone_b.boundary_items:
-        raise ValueError("The boundary must be shared by both zones")
+        raise ValueError(messages.PROTECTION_ZONES_THE_BOUNDARY_MUST_BE_SHARED_BY_BOTH_ZONES)
     core = zone_a.core_items | zone_b.core_items | {boundary_item}
     return _name_zone(Zone(
         "", core, (zone_a.boundary_items | zone_b.boundary_items) - core,
@@ -357,5 +359,5 @@ def independent_zones(zones: Iterable[Zone], enclosures: dict[str, list[str]]) -
     _validate_zones(zones)
     missing = {z.zone_id for z in zones} - set(enclosures)
     if missing:
-        raise ValueError(f"Missing enclosure entries: {sorted(missing)}")
+        raise ValueError(messages.PROTECTION_ZONES_MISSING_ENCLOSURE_ENTRIES.format(sorted(missing)))
     return [z for z in zones if not enclosures[z.zone_id]]
