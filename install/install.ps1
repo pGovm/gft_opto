@@ -27,7 +27,7 @@ Write-Host "Using $(uv --version)"
 # 2. Dependencies: creates .venv with the exact version from uv.lock
 Write-Host "Installing Python and dependencies (the first run can take a few minutes)..."
 uv sync --locked
-Assert-LastExit "Dependency isntall"
+Assert-LastExit "Dependency install"
 
 #3. Check that the app and its libraries import.
 uv run --locked python -c "import PySide6, pymupdf, gft_opto.gui.substation_gui"

@@ -4,7 +4,7 @@ cd "$(dirname "$0")/.."
 
 if ! command -v uv >/dev/null 2>&1; then
     echo "Installing uv..."
-    curl -fsSL https://astral.sh/uv/install/sh | sh
+    curl -fsSL https://astral.sh/uv/install.sh | sh
     export PATH="$HOME/.local/bin:$PATH"
 fi
 
