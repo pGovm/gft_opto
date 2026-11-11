@@ -175,7 +175,20 @@ class _DisjointSets:
             self.rank[a] += 1
 
 
-def identify_zones(all_items: Iterable[Any], boundary_types: Iterable[type] | type) -> list[Zone]:
+def is_open_switch(item: Any) -> bool:
+    """Only an explicit open state on a switching device breaks conduction."""
+    record = getattr(item, "record", {})
+    props = record.get("properties", {}) if record else getattr(item, "properties", {})
+    typ = props.get("symbol_type") or record.get("type") or record.get("symbol") or getattr(item, "equip_type", "")
+    typ = str(typ).strip().lower().replace("-", "_").replace(" ", "_")
+    state = " ".join(str(props.get("status", "")).lower().replace("_", " ").replace("-", " ").split())
+    return typ in {"breaker", "cb", "circuit_breaker", "disconnect", "mos"} and state in {
+        "open", "opened", "normally open", "n.o.", "n.o", "n/o", "no",
+    }
+
+
+def identify_zones(all_items: Iterable[Any], boundary_types: Iterable[type] | type,
+                   *, respect_switch_state: bool = False) -> list[Zone]:
     """Partition equipment AND its in-scope connections at boundary terminals.
 
     Both inputs may be generators. Connections leaving the supplied item set,
@@ -184,7 +197,9 @@ def identify_zones(all_items: Iterable[Any], boundary_types: Iterable[type] | ty
     conductor has no region. Duplicate component IDs are rejected.
 
     This retains the original item-level connectivity convention for ordinary
-    components; it does not interpret switch status, current ratings or relays.
+    components by default. With respect_switch_state, explicit open switches
+    retain separate terminal regions. Their symbols belong to each attached
+    region, but are not CT boundaries. Current ratings and relays are not inferred.
     """
     types = _boundary_classes(boundary_types)
     items = list(all_items)  # Snapshot once: never consume an iterator twice.
@@ -199,7 +214,8 @@ def identify_zones(all_items: Iterable[Any], boundary_types: Iterable[type] | ty
     items = list(registry.values())
     scope = set(items)
     boundaries = {i for i in items if isinstance(i, types)}
-    ordinary = scope - boundaries
+    opened = {i for i in scope - boundaries if respect_switch_state and is_open_switch(i)}
+    ordinary = scope - boundaries - opened
     edges: dict[ConnectionKey, set] = defaultdict(set)
 
     for item in items:
@@ -244,6 +260,14 @@ def identify_zones(all_items: Iterable[Any], boundary_types: Iterable[type] | ty
         for name, _ in key:
             if registry[name] in boundaries:
                 zone.boundary_items.add(registry[name])
+            elif registry[name] in opened:
+                zone.core_items.add(registry[name])
+
+    # Keep isolated open devices visible without inventing a conducting bridge.
+    attached = {registry[name] for key in edges for name, _ in key}
+    for item in opened - attached:
+        groups.add(("item", item))
+        region(("item", item)).core_items.add(item)
 
     zones = sorted((_name_zone(z) for z in by_root.values()), key=lambda z: z.zone_id)
     _validate_zones(zones)

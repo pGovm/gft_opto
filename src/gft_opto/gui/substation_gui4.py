@@ -1073,7 +1073,7 @@ class SubstationGuiMockup(QMainWindow):
         """Detect real scene components and conductors; never save live Zone objects."""
         items = [item for item in self.workspace_scene.items()
                  if isinstance(item, OneLineSymbolItem)]
-        primary = identify_zones(items, (CurrentTransformerItem,))
+        primary = identify_zones(items, (CurrentTransformerItem,), respect_switch_state=True)
         return topology_records(primary)
 
     def _configure_protection_zones(self):

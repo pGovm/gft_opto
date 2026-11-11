@@ -22,7 +22,7 @@ from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 from gft_opto.gui.layout_io import build_scene, scene_data, library_from_layout
 from gft_opto.gui.substation_gui4 import SubstationGuiMockup
 from gft_opto.gui.symbols import (
-    BusItem, CircuitBreakerItem, CurrentTransformerItem, GroundItem,
+    BusItem, CircuitBreakerItem, CurrentTransformerItem, GroundItem, IncomingLineItem,
     ConnectionItem, EQUIPMENT_DEFS, OneLineSymbolItem,
 )
 from gft_opto.gui.zone_dialog import ZoneDialog
@@ -108,6 +108,34 @@ class GuiZoneIntegration(unittest.TestCase):
     def test_live_scene_catalog_matches_netlist_catalog(self):
         self.example()
         self.assertEqual(self.window._scene_topology(), analyze_topology(self.window._protection_netlist()))
+
+    def test_open_breaker_scene_and_netlist_partition_the_same_terminals(self):
+        bus, ct, breaker, ground, _, _ = self.example()
+        breaker.properties["status"] = "Open"
+        direct = self.window._scene_topology()
+        self.assertEqual(direct, analyze_topology(self.window._protection_netlist()))
+        primary = [r for r in direct if r["level"] == "Primary"]
+        self.assertFalse(any({ct.instance_id, ground.instance_id} <= set(r["members"]) for r in primary))
+        self.assertEqual(sum(breaker.instance_id in r["core"] for r in primary), 2)
+
+    def test_automatic_bus_and_feeder_highlights_overlap_at_bracketed_breaker(self):
+        bus = self.add(BusItem(), 100)
+        ct_bus = self.add(CurrentTransformerItem(), 300)
+        breaker = self.add(CircuitBreakerItem(), 450)
+        ct_line = self.add(CurrentTransformerItem(), 600)
+        line = self.add(IncomingLineItem(), 800)
+        for a, b in zip((bus, ct_bus, breaker, ct_line), (ct_bus, breaker, ct_line, line)):
+            self.wire(a, "right", b, "line" if b is line else "left")
+        before = scene_data(self.window.workspace_scene)
+        self.window._on_run_evaluation_clicked()
+        report = self.window._zone_report
+        self.assertIsNotNone(report, self.window.output_box.toPlainText())
+        self.assertEqual({z["kind"] for z in report["zones"]}, {"Bus", "Line"})
+        self.assertEqual(len(report["zones"]), 2)
+        self.assertTrue(all(breaker.instance_id in z["core"] for z in report["zones"]))
+        self.assertEqual(len(self.window._zone_overlays), 2)
+        self.assertEqual(scene_data(self.window.workspace_scene), before)
+        self.assertFalse(report["supply_peaks"])
 
     def test_detection_and_highlights_do_not_change_saved_electrical_scene(self):
         self.example()
@@ -239,7 +267,7 @@ class GuiZoneIntegration(unittest.TestCase):
         with patch.object(QMessageBox, "warning") as warning:
             dialog.accept()
         warning.assert_not_called()
-        self.assertTrue(dialog.zones[0]["topology_signature"].startswith("ct-study-v2:"))
+        self.assertTrue(dialog.zones[0]["topology_signature"].startswith("ct-study-v3:"))
         self.assertIn("configuration_signature", dialog.zones[0])
 
     def test_editing_boundary_clears_snapshot_and_confirmation(self):

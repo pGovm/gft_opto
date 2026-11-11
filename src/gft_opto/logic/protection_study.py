@@ -23,7 +23,7 @@ from gft_opto.logic.momentary_calc2 import Load, Scenario, NETLIST_PROPERTY_LOAD
 from gft_opto.logic.breaker_settings import resolve_breaker_action, breaker_settings, SETTING_KEYS
 from gft_opto.logic.protection_zones import (
     Zone, connection_key, identify_zones, generate_composite_zones,
-    find_enclosed_zones, zone_signature,
+    find_enclosed_zones, zone_signature, is_open_switch,
 )
 
 LOADS = dict(NETLIST_PROPERTY_LOAD_MAP)
@@ -123,7 +123,7 @@ class _Graph:
             self.wires.append(wire)
 
     def primary(self) -> list[Zone]:
-        return identify_zones(self.items.values(), _Boundary)
+        return identify_zones(self.items.values(), _Boundary, respect_switch_state=True)
 
 
 def topology_signature(netlist: dict) -> str:
@@ -136,7 +136,7 @@ def topology_signature(netlist: dict) -> str:
     """
     graph = _Graph(netlist)
     payload = {
-        "version": 2,
+        "version": 3,
         "components": sorted((i, kind(c), str(c.get("properties", {}).get("status", "Closed")))
                              for i, c in graph.records.items()),
         "connections": sorted({connection_key(w) for w in graph.wires}, key=lambda x: json.dumps(x)),
@@ -145,7 +145,7 @@ def topology_signature(netlist: dict) -> str:
         "breaker_settings": sorted((i, breaker_settings(c))
                                    for i, c in graph.records.items() if kind(c) == "breaker"),
     }
-    return "ct-study-v2:" + _digest(payload)
+    return "ct-study-v3:" + _digest(payload)
 
 
 def configuration_signature(zone: dict) -> str:
@@ -348,7 +348,8 @@ def _trip_candidates(graph: _Graph, region: Zone) -> list[str]:
     transformer. This is a topology convenience, not relay or trip-logic inference.
     """
     inside = {i.instance_id for i in region.all_items}
-    breakers = {i.instance_id for i in region.core_items if kind(i.record) == "breaker"}
+    breakers = {i.instance_id for i in region.core_items
+                if kind(i.record) == "breaker" and not is_open_switch(i)}
     queue = deque()
     for boundary in region.boundary_items:
         for wire in boundary.connections():
@@ -362,6 +363,8 @@ def _trip_candidates(graph: _Graph, region: Zone) -> list[str]:
             continue
         seen.add(item.instance_id)
         typ = kind(item.record)
+        if is_open_switch(item):
+            continue
         if typ == "breaker":
             breakers.add(item.instance_id)
             continue
@@ -372,16 +375,21 @@ def _trip_candidates(graph: _Graph, region: Zone) -> list[str]:
     return sorted(breakers)
 
 
-def _outer_ct_run_boundaries(region: Zone) -> set[str]:
-    """Extend a draft through unbranched, directly connected CT groups.
+def _proposal_ct_boundaries(region: Zone) -> set[str]:
+    """Extend a draft to CTs across an unbranched single-breaker bay.
 
-    This is a proposal heuristic, not a relay/core assignment. Stop at other
-    equipment, branches, unnamed terminals or loops; retain explicit user zones.
+    Consecutive CT groups and closed isolators/junctions may lie on either side
+    of the breaker. Retain the last CT reached, never an isolator or breaker as
+    a substitute boundary. Branches, open devices, a second breaker, protected
+    assets, unnamed terminals and loops stop expansion. This proposes overlap;
+    it does not assign relay cores or change explicit user boundaries.
     """
     result = set()
     for boundary in region.boundary_items:
         current = boundary
         visited = {current.instance_id}
+        outer = current.instance_id
+        breakers = 0
         inward = [w for w in current.connections() if connection_key(w) in region.connection_keys]
         while len(inward) == 1:
             entry = inward[0]
@@ -392,35 +400,83 @@ def _outer_ct_run_boundaries(region: Zone) -> set[str]:
             wire = outward[0]
             exit_port = wire.from_port if wire.from_item is current else wire.to_port
             other = wire.to_item if wire.from_item is current else wire.from_item
-            if exit_port is None or exit_port == entry_port or kind(other.record) != "ct" or other.instance_id in visited:
+            typ = kind(other.record)
+            if (exit_port is None or (exit_port == entry_port and kind(current.record) != "junction")
+                    or other.instance_id in visited or is_open_switch(other)):
+                break
+            if typ == "breaker":
+                if breakers:
+                    break
+                breakers += 1
+            elif typ not in {"ct", "disconnect", "mos", "junction"}:
+                break
+            # No through-path is established by a branch or a dangling device.
+            if len(other.connections()) != 2:
+                break
+            ports = [w.from_port if w.from_item is other else w.to_port
+                     for w in other.connections()]
+            if None in ports or (typ != "junction" and len(set(ports)) != 2):
                 break
             current = other
             visited.add(current.instance_id)
             inward = [wire]
-        result.add(current.instance_id)
+            if typ == "ct":
+                outer = current.instance_id
+        result.add(outer)
     return result
 
 
 def propose_zones(netlist: dict) -> list[dict]:
-    """Preserve bus/transformer proposals, using the real terminal-aware detector.
+    """Propose asset and terminal-line regions with candidate CT overlap.
 
-    A breaker-only drawing gets Line proposals. No proposal is confirmed and no
-    coil current is invented. Users can select any primary/composite conductor
-    region from the dialog and explicitly choose its operating loads.
+    Line terminals get a proposal alongside buses and transformers only when
+    their primary region has CT boundaries and no bus/transformer, and expansion
+    includes a closed breaker. This avoids suggesting a new line event solely
+    because a metering tap can reach a remote bay through a branched bus.
+    A breaker-only drawing retains its fallback proposals.
+    No proposal is confirmed, no coil current or relay assignment is invented.
     """
     graph = _Graph(netlist)
     primary = graph.primary()
     seeds = [i for i in graph.items.values() if kind(i.record) in {"bus", "xfmr_2w", "xfmr_3w"}]
+    line_seeds = []
+    for region in primary:
+        if not region.boundary_items or any(kind(i.record) in {"bus", "xfmr_2w", "xfmr_3w"}
+                                            for i in region.core_items):
+            continue
+        terminals = [i for i in region.core_items if kind(i.record) == "incoming_line"]
+        if not terminals:
+            continue
+        candidate_graph = _Graph(netlist, _proposal_ct_boundaries(region))
+        seed = candidate_graph.items[terminals[0].instance_id]
+        candidate = next((r for r in candidate_graph.primary() if seed in r.core_items), None)
+        if (candidate is not None
+                and not any(kind(i.record) in {"bus", "xfmr_2w", "xfmr_3w"} for i in candidate.core_items)
+                and any(kind(i.record) == "breaker" and not is_open_switch(i) for i in candidate.core_items)):
+            line_seeds.extend(terminals)
     if not seeds:
-        seeds = [i for i in graph.items.values() if kind(i.record) == "breaker"]
+        seeds = [i for i in graph.items.values()
+                 if kind(i.record) == "breaker" and not is_open_switch(i)]
+        # Prefer the actual line endpoint over a separate breaker-only event.
+        line_regions = [r for r in primary if any(i in r.core_items for i in line_seeds)]
+        covered_breakers = set()
+        for region in line_regions:
+            covered_breakers.update(_trip_candidates(graph, region))
+        seeds = [i for i in seeds if i.instance_id not in covered_breakers]
+    seeds.extend(line_seeds)
     result = []
+    footprints = set()
     for seed in sorted(seeds, key=lambda i: (kind(i.record) != "bus", i.instance_id)):
         region = next((r for r in primary if seed in r.core_items), None)
         if region is None:
             continue
-        # A run of CT groups may serve one protected asset. Keep intermediate
-        # CTs inside this draft rather than treating each as a separate event.
-        boundaries = _outer_ct_run_boundaries(region)
+        # Select the first breakers from the original CT partition. Searching
+        # outward again after extending to opposite-side CTs could walk through
+        # a neighboring line node and incorrectly add its next breaker.
+        trip_candidates = _trip_candidates(graph, region)
+        # Neighboring schemes may use CT groups on opposite sides of a breaker.
+        # This candidate expansion retains that overlap for explicit review.
+        boundaries = _proposal_ct_boundaries(region)
         expanded_graph = _Graph(netlist, boundaries)
         expanded_seed = expanded_graph.items[seed.instance_id]
         expanded = next((r for r in expanded_graph.primary() if expanded_seed in r.core_items), None)
@@ -428,13 +484,23 @@ def propose_zones(netlist: dict) -> list[dict]:
             region = expanded
         category = "Bus" if kind(seed.record) == "bus" else (
             "Transformer" if kind(seed.record).startswith("xfmr") else "Line")
+        if category == "Transformer":
+            assets = [kind(i.record) for i in region.core_items]
+            if "bus" in assets or sum(t in {"xfmr_2w", "xfmr_3w"} for t in assets) != 1:
+                # Shared bus/transformer topology cannot establish an individual
+                # transformer scheme. Keep the raw region available for review.
+                continue
+        footprint = (category, _digest(zone_signature(region)))
+        if footprint in footprints:
+            continue
+        footprints.add(footprint)
         result.append({
             "id": "study-" + _digest(seed.instance_id)[:20],
             "name": f"{_label(seed)} {category} Zone", "kind": category,
             "seed": seed.instance_id,
             "boundary_cts": sorted(i.instance_id for i in region.boundary_items),
             "actions": [{"component": ident, "load": "trip_coil_1_a", "stage": "Primary trip",
-                         "supply": "DC 1", "units": 1} for ident in _trip_candidates(expanded_graph, region)],
+                         "supply": "DC 1", "units": 1} for ident in trip_candidates],
             "confirmed": False,
         })
     return result
@@ -451,9 +517,20 @@ def add_missing_proposals(netlist: dict, zones: list[dict]) -> list[dict]:
     result = copy.deepcopy(zones)
     seeds = {z["seed"] for z in result}
     used_ids = {z["id"] for z in result}
+    footprints = set()
+    for existing in result:
+        region, warnings = _resolve_region(netlist, existing)
+        if region is not None and not warnings:
+            footprints.add((existing["kind"], _digest(zone_signature(region))))
     for proposed in propose_zones(netlist):
         if proposed["seed"] in seeds:
             continue
+        region, warnings = _resolve_region(netlist, proposed)
+        footprint = (proposed["kind"], _digest(zone_signature(region))) if region is not None and not warnings else None
+        if footprint is not None and footprint in footprints:
+            continue
+        if footprint is not None:
+            footprints.add(footprint)
         base = proposed["id"]
         suffix = 2
         while proposed["id"] in used_ids:

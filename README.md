@@ -46,12 +46,24 @@ be reviewed after pasting. Copy/paste inside text fields still edits text normal
 
 1. Import the one-line PDF and rebuild it with connected equipment. Enter
    the relevant coil and motor currents in the properties panel.
-2. Click **Run Evaluation**. Bus and transformer zone proposals are traced
+2. Click **Run Evaluation**. Bus, transformer, and eligible line/feeder proposals are traced
    through actual wires and junctions, stopping at candidate CT boundaries.
-   Visually crossing wires without a junction are not connected. Line/manual
-   zones can be added explicitly. The selector also shows primary/composite
+   An unbranched path through one closed breaker can extend a proposal to CTs
+   on the opposite side, allowing neighboring schemes to overlap at the breaker.
+   A line terminal must have a CT-bounded region containing a closed breaker
+   after this expansion; metering taps reaching remote bays through branches
+   do not create line events. Separate transformer proposals require separating
+   CT topology, rather than a shared bus/transformer region.
+   Visually crossing wires without a junction are not connected. Additional
+   line/manual zones can be added explicitly. The selector also shows primary/composite
    topology regions, including CT-to-CT conductors. These are display candidates,
    not extra fault events or automatically assigned operating loads.
+   Explicitly open breakers, disconnects, and motor-operated switches separate
+   the regions at their terminals; normally open bypasses do not join bus sections.
+   Missing or unrecognized status values retain the connected behavior. Trip
+   suggestions stop at open switches and omit open breakers. Existing operating
+   assignments remain available for explicit review. Proposals of the same kind
+   covering the same equipment and conductors are shown once.
 3. Click **Configure Protection Zones** above the analysis output. Review each
    zone's protected equipment, CT boundaries, and operating-load rows. Only CTs
    checked for that zone act as its boundaries; metering/other CTs can be left
@@ -74,6 +86,7 @@ be reviewed after pasting. Copy/paste inside text fields still edits text normal
 6. Check the verification box for each zone after reviewing its assignments,
    then Save. Editing zone settings clears that zone's verification. Wiring,
    equipment, and switch-status changes require reconfirmation. Older layouts
+   approved before the switch-aware detector also require reconfirmation. They
    still open; compatible legacy supply/multiplier settings are carried into
    breaker settings when saving the zone editor. Unsupported legacy multipliers
    are flagged for review rather than silently changed.
