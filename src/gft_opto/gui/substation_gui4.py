@@ -7,6 +7,8 @@ The canvas, symbols, wires, and undo commands live in sibling modules.
 This file builds the panels around the workspace and starts the application.
 """
 
+from gft_opto.gui import messages
+
 import functools
 import json
 import sys
@@ -20,15 +22,15 @@ from html import escape
 import pymupdf
 from PySide6.QtCore import Qt, QByteArray, QMimeData, QPointF, QRectF
 from PySide6.QtGui import (
-    QAction, QColor, QPen, QBrush, QPalette,
-    QDrag, QFont, QImage, QKeySequence, QPixmap, QTextDocument, QUndoStack,
+    QAction, QColor, QPen, QBrush, QPalette, QPainterPath, QPainterPathStroker,
+    QDrag, QImage, QKeySequence, QPixmap, QTextDocument, QUndoStack,
 )
 from PySide6.QtPrintSupport import QPrinter
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFrame, QGraphicsScene,
     QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget,
     QListWidgetItem, QMainWindow, QMessageBox, QPushButton, QSlider, QTextEdit,
-    QVBoxLayout, QWidget, QGraphicsRectItem, QGraphicsPathItem, QSpinBox, QScrollArea, QMenu
+    QVBoxLayout, QWidget, QGraphicsRectItem, QGraphicsPathItem, QSpinBox, QScrollArea, QSizePolicy,
 )
 
 from gft_opto.gui.circuit_check import check_circuit
@@ -62,7 +64,8 @@ from gft_opto.logic.momentary_calc2 import netlist_from_scene
 from gft_opto.logic.protection_zones import connection_key, identify_zones
 from gft_opto.logic.protection_study import propose_zones, evaluate_zones, topology_records
 from gft_opto.gui.zone_dialog import ZoneDialog
-from gft_opto.gui.theme import SCROLLBAR_STYLE
+from gft_opto.gui.theme import SCROLLBAR_STYLE, readable_palette, ui_font
+from gft_opto.gui.ribbon import RibbonBar, populate_ribbon
 from gft_opto.logic.breaker_settings import breaker_settings, SETTING_KEYS
 from pathlib import Path
 from collections import defaultdict
@@ -79,6 +82,26 @@ from gft_opto.logic.netlist_manager import (
 
 # Drag-and-drop mime type for the equipment library
 MIME_EQUIPMENT = "application/x-substation-equipment"
+
+
+class _ZoneShape(QGraphicsPathItem):
+    """Reference drawing footprint, independent of electrical membership."""
+
+    def paint(self, painter, option, widget=None):
+        background = QColor(self.brush().color())
+        background.setAlpha(24)
+        painter.fillPath(self.path(), background)
+        super().paint(painter, option, widget)
+
+
+class _ZoneRectangle(QGraphicsRectItem):
+    """Translucent fill and hatching behind equipment; no electrical meaning."""
+
+    def paint(self, painter, option, widget=None):
+        background = QColor(self.brush().color())
+        background.setAlpha(24)
+        painter.fillRect(self.rect(), background)
+        super().paint(painter, option, widget)
 
 # Port / wire hit testing
 PORT_HIT_RADIUS = 14.0       # px — cursor must be this close to grab a port
@@ -106,7 +129,7 @@ RESIZE_HANDLE_HIT = 12.0
 MIN_SYMBOL_SCALE = 0.5
 MAX_SYMBOL_SCALE = 3.0
 SYMBOL_SCALE_STEP = 0.25     # snap resize to this increment
-SYMBOL_ROTATION_STEP = 90.0  # degrees — R / Shift+R and Quick Actions
+SYMBOL_ROTATION_STEP = 90.0  # degrees — R / Shift+R and the Edit tab
 ROTATE_HANDLE_OFFSET = 28.0  # px above symbol AABB top edge
 ROTATE_HANDLE_RADIUS = 8.0
 ROTATE_HANDLE_HIT = 14.0
@@ -216,12 +239,14 @@ class SubstationGuiMockup(QMainWindow):
         self.protection_zones = []
         self._zone_overlays = []
         self._zone_report = None
+        self._zones_visible = True
         self.setWindowTitle("AI-Assisted Substation Design Tool")
         self.setMinimumSize(1000, 700)
         self._apply_stylesheet()
         self._build_ui()
         self._setup_undo_redo()
-        self._setup_file_shortcuts()
+        self._setup_actions()
+        populate_ribbon(self)
         self._loading = False
         self._saved_snapshot = self._layout_data()
         self.project_box.editingFinished.connect(self._mark_modified)
@@ -231,14 +256,17 @@ class SubstationGuiMockup(QMainWindow):
         self._on_selection_changed()
 
     def _apply_stylesheet(self):
+        self.setFont(ui_font())
+        self.setPalette(readable_palette(self.palette()))
         self.setStyleSheet("""
+    QWidget { font-size: 10pt; font-weight: normal; }
     QMainWindow { background-color: #f4f6f8; }
+    QLabel#appTitle { font-size: 11pt; font-weight: 600; }
 
     QMenuBar, QMenu {
         background-color: #ffffff;
         color: #1f2933;
-        font-family: "Segoe UI";
-        font-size: 11pt;
+        font-size: 10pt;
     }
     QMenuBar::item { background: transparent; padding: 6px 12px; }
     QMenuBar::item:selected, QMenu::item:selected {
@@ -253,7 +281,7 @@ class SubstationGuiMockup(QMainWindow):
     QCheckBox {
         color: #1f2933;
         spacing: 8px;
-        font-size: 11pt;
+        font-size: 10pt;
         font-weight: normal;
     }
 
@@ -269,6 +297,7 @@ class SubstationGuiMockup(QMainWindow):
         background: #006A4E;
         border-color: #006A4E;
     }
+    QCheckBox:disabled { color: #64748b; }
 
     QSlider::groove:horizontal {
         height: 6px;
@@ -289,7 +318,7 @@ class SubstationGuiMockup(QMainWindow):
         border-radius: 12px;
         margin-top: 20px;
         font-weight: bold;
-        font-size: 12pt;
+        font-size: 11pt;
         padding-top: 25px;
     }
 
@@ -313,14 +342,15 @@ class SubstationGuiMockup(QMainWindow):
     QLineEdit, QTextEdit, QComboBox, QListWidget, QSpinBox {
         background: white; border: 1px solid #cbd2d9;
         border-radius: 8px; padding: 8px; color: #1f2933;
+        selection-background-color: #006a4e; selection-color: #ffffff;
     }
     QComboBox QAbstractItemView {
         background-color: #ffffff; color: #1f2933;
         selection-background-color: #006a4e; selection-color: #ffffff;
-        font-family: "Segoe UI"; font-size: 10pt; font-weight: normal;
+        font-size: 10pt; font-weight: normal;
     }
     QGroupBox#selectedProperties QWidget {
-        color: #1f2933; font-family: "Segoe UI";
+        color: #1f2933;
         font-size: 10pt; font-weight: normal;
     }
     QGroupBox#selectedProperties QLabel { background-color: transparent; }
@@ -335,10 +365,9 @@ class SubstationGuiMockup(QMainWindow):
         background-color: #f4f6f8; color: #52606d;
     }
     QScrollArea#propertiesScroll { border: none; background-color: #f4f6f8; }
-    QGroupBox#quickActions { padding-top: 16px; }
-    QGroupBox#quickActions QPushButton { padding: 5px 12px; }
     QFrame#canvasFrame { background: white; border: 2px dashed #9fb3c8; border-radius: 14px; }
     QFrame#toolbarFrame { background: white; border: 1px solid #d9e2ec; border-radius: 12px; }
+    QToolTip { background: #ffffff; color: #1f2933; border: 1px solid #cbd2d9; padding: 4px; }
 
     QMessageBox {
         background-color: #ffffff;
@@ -346,7 +375,7 @@ class SubstationGuiMockup(QMainWindow):
     QMessageBox QLabel {
         color: #1f2933;
         background-color: transparent;
-        font-size: 11pt;
+        font-size: 10pt;
     }
 """ + SCROLLBAR_STYLE)
 
@@ -364,13 +393,8 @@ class SubstationGuiMockup(QMainWindow):
         self.addAction(self.undo_action)
         self.addAction(self.redo_action)
 
-        if hasattr(self, "undo_btn"):
-            self.undo_btn.clicked.connect(self.undo_stack.undo)
-            self.redo_btn.clicked.connect(self.undo_stack.redo)
-            self.undo_stack.canUndoChanged.connect(self.undo_btn.setEnabled)
-            self.undo_stack.canRedoChanged.connect(self.redo_btn.setEnabled)
-            self.undo_btn.setEnabled(self.undo_stack.canUndo())
-            self.redo_btn.setEnabled(self.undo_stack.canRedo())
+        self.undo_action.setIconText("Undo")
+        self.redo_action.setIconText("Redo")
 
         self.undo_stack.indexChanged.connect(self._on_undo_index_changed)
 
@@ -383,17 +407,43 @@ class SubstationGuiMockup(QMainWindow):
             f"Ready — last action: {text}" if text else "Ready"
         )
 
-    def _setup_file_shortcuts(self):
-        for title, shortcut, callback in (
-            ("New Layout", "Ctrl+N", self.new_layout),
-            ("Open Layout…", "Ctrl+O", self.open_layout),
-            ("Save Layout", "Ctrl+S", lambda: self.save_layout()),
-            ("Save Layout As…", "Ctrl+Shift+S", lambda: self.save_layout(save_as=True)),
+    def _setup_actions(self):
+        # All command buttons use these actions, including shortcut and enabled
+        # state. Clipboard/delete/rotate shortcuts remain local to the workspace
+        # so that text fields retain their normal editing behavior.
+        for name, title, caption, shortcut, callback in (
+            ("new_layout", "New Layout", "New", "Ctrl+N", self.new_layout),
+            ("open_layout", "Open Layout…", "Open", "Ctrl+O", self.open_layout),
+            ("save_layout", "Save Layout", "Save", "Ctrl+S", self.save_layout),
+            ("save_as", "Save Layout As…", "Save As", "Ctrl+Shift+S", lambda: self.save_layout(save_as=True)),
+            ("import_pdf", "Import PDF", "Import PDF", None, self.on_import_pdf_clicked),
+            ("import_netlist", "Import Netlist JSON", "Import Netlist", None, self.import_netlist_json),
+            ("export_results", "Save Calculation PDF", "Export Results", None, self._on_save_results_clicked),
+            ("save_netlist_pdf", "Save Netlist PDF", "Netlist PDF", None, self._on_save_netlist_pdf),
+            ("copy", "Copy Selected Components", "Copy", None, self.workspace_view.copy_selected),
+            ("paste", "Paste Components", "Paste", None, self.workspace_view.paste_components),
+            ("delete", "Delete Selected", "Delete", None, self.workspace_view.delete_selected),
+            ("rotate", "Rotate Selected 90°", "Rotate 90°", None, self.workspace_view.rotate_selected),
+            ("create_component", "Create Component", "Create Component", None, self._on_create_component_clicked),
+            ("validate", "Validate Circuit", "Validate", None, self._on_check_circuit_clicked),
+            ("configure_zones", "Configure Protection Zones", "Configure Zones", None, self._configure_protection_zones),
+            ("evaluate", "Run Evaluation", "Run Evaluation", None, self._on_run_evaluation_clicked),
+            ("expand_analysis", "Expand Analysis", "Expand Analysis", None, self._expand_zone_analysis),
         ):
             action = QAction(title, self)
-            action.setShortcut(QKeySequence(shortcut))
-            action.triggered.connect(callback)
+            action.setIconText(caption)
+            action.setToolTip(f"{title} ({shortcut})" if shortcut else title)
+            if shortcut:
+                action.setShortcut(QKeySequence(shortcut))
+            action.triggered.connect(lambda checked=False, callback=callback: callback())
+            setattr(self, name + "_action", action)
             self.addAction(action)
+        self.export_results_action.setEnabled(False)
+        self.import_netlist_action.setToolTip(
+            "Replace the current drawing with a validated netlist JSON file"
+        )
+        self.copy_action.setToolTip("Copy selected components (Ctrl+C in workspace)")
+        self.paste_action.setToolTip("Paste components (Ctrl+V in workspace)")
 
     def _layout_data(self):
         rect = self.workspace_scene.sceneRect()
@@ -420,7 +470,7 @@ class SubstationGuiMockup(QMainWindow):
         if self.last_result is not None:
             self.output_box.append("\nResults are outdated. Run Evaluation again before exporting.")
         self.last_result = self.last_netlist = None
-        self.save_results_btn.setEnabled(False)
+        self.export_results_action.setEnabled(False)
 
     def _mark_modified(self, *_args):
         if self._loading:
@@ -457,7 +507,7 @@ class SubstationGuiMockup(QMainWindow):
             checked.clear()
             write_layout(path, data)
         except Exception as error:
-            QMessageBox.critical(self, "Save Failed", f"Could not save the layout:\n{error}")
+            QMessageBox.critical(self, messages.SUBSTATION_GUI4_SAVE_FAILED, messages.SUBSTATION_GUI4_COULD_NOT_SAVE_THE_LAYOUT.format(error))
             return False
         self.layout_path = str(Path(path).resolve())
         self._saved_snapshot = data
@@ -483,7 +533,7 @@ class SubstationGuiMockup(QMainWindow):
         # Build the entire replacement before discarding any current work.
         try:
             data = json.loads(Path(path).read_text(encoding="utf-8"))
-            scene = build_scene(data)
+            scene = build_scene(data, align_to_grid=True)
             pdf = data.get("pdf")
             normalized_pdf = str((Path(path).resolve().parent / pdf).resolve()) if pdf else pdf
             pdf = normalized_pdf
@@ -493,7 +543,7 @@ class SubstationGuiMockup(QMainWindow):
                     pixmap = self._read_pdf_pixmap(pdf)
                 except Exception:
                     replacement, _ = QFileDialog.getOpenFileName(
-                        self, "Locate Missing or Unreadable Background PDF (Cancel to open without it)", "", "PDF Files (*.pdf)"
+                        self, messages.SUBSTATION_GUI4_LOCATE_MISSING_OR_UNREADABLE_BACKGROUND_PDF_CANCEL_TO_OPEN, "", "PDF Files (*.pdf)"
                     )
                     if replacement:
                         pdf = str(Path(replacement).resolve())
@@ -510,7 +560,7 @@ class SubstationGuiMockup(QMainWindow):
             )
             return True
         except Exception as error:
-            QMessageBox.critical(self, "Open Failed", f"Could not open the layout:\n{error}")
+            QMessageBox.critical(self, messages.SUBSTATION_GUI4_OPEN_FAILED, messages.SUBSTATION_GUI4_COULD_NOT_OPEN_THE_LAYOUT.format(error))
             return False
         
 # import JSON netlist file function 
@@ -639,7 +689,7 @@ class SubstationGuiMockup(QMainWindow):
             pix = document.load_page(0).get_pixmap(matrix=pymupdf.Matrix(2, 2), alpha=False)
             image = QPixmap()
             if not image.loadFromData(pix.tobytes("png")):
-                raise ValueError("Could not decode PDF background.")
+                raise ValueError(messages.SUBSTATION_GUI4_COULD_NOT_DECODE_PDF_BACKGROUND)
             return image
 
     def _install_layout(self, data, staged_scene, path, pixmap):
@@ -665,10 +715,12 @@ class SubstationGuiMockup(QMainWindow):
         view._grid_item = None
         view._init_grid()
         staged_scene.selectionChanged.connect(self._on_selection_changed)
+        staged_scene.changed.connect(self._sync_circuit_visibility)
+        self._sync_circuit_visibility()
         old_scene.deleteLater()
         self._workspace_original = pixmap
         if pixmap is not None:
-            view.set_background_pixmap(pixmap, scene_width=data["scene_rect"][2], scene_height=data["scene_rect"][3])
+            view.set_background_pixmap(pixmap, scene_width=data["scene_rect"][2], scene_height=data["scene_rect"][3], fit_existing_sheet=True)
             staged_scene.setSceneRect(QRectF(*data["scene_rect"]))
             view._sync_grid_to_scene()
         self.pdf_path = data.get("pdf")
@@ -696,7 +748,7 @@ class SubstationGuiMockup(QMainWindow):
         reserve_ids(staged_scene)
         self.last_result = self.last_netlist = None
         self.output_box.clear()
-        self.save_results_btn.setEnabled(False)
+        self.export_results_action.setEnabled(False)
         self.zone_view.blockSignals(True)
         self.zone_view.clear()
         self.zone_view.addItem("Run Evaluation to display zones")
@@ -720,8 +772,8 @@ class SubstationGuiMockup(QMainWindow):
         self.setCentralWidget(central)
 
         main_layout = QVBoxLayout(central)
-        main_layout.setContentsMargins(22, 22, 22, 22)
-        main_layout.setSpacing(18)
+        main_layout.setContentsMargins(16, 12, 16, 12)
+        main_layout.setSpacing(12)
 
         main_layout.addWidget(self._build_header())
         main_layout.addLayout(self._build_content())
@@ -742,14 +794,29 @@ class SubstationGuiMockup(QMainWindow):
         self.pdf_show_cb.setToolTip("Import a PDF first to enable this option")
         self.pdf_show_cb.toggled.connect(self.workspace_view.set_pdf_visible)
 
+        self.zones_show_cb = QCheckBox("Show Zones")
+        self.zones_show_cb.setChecked(self._zones_visible)
+        self.zones_show_cb.setToolTip("Show or hide zone shading without changing the study")
+        self.zones_show_cb.toggled.connect(self._set_zones_visible)
+
+        self.circuit_show_cb = QCheckBox("Show Circuit")
+        self.circuit_show_cb.setChecked(True)
+        self.circuit_show_cb.setToolTip("Show or hide drawn equipment and wires without deleting them")
+        self.circuit_show_cb.toggled.connect(self._sync_circuit_visibility)
+
         self.grid_snap_cb = QCheckBox("Snap to Grid")
         self.grid_snap_cb.setChecked(True)
         self.grid_snap_cb.toggled.connect(self.workspace_view.set_snap_to_grid)
 
-        opacity_row = QHBoxLayout()
+        self.grid_opacity_controls = QWidget()
+        opacity_row = QHBoxLayout(self.grid_opacity_controls)
+        opacity_row.setContentsMargins(0, 0, 0, 0)
         opacity_row.addWidget(QLabel("Grid Opacity:"))
         self.grid_opacity_slider = QSlider(Qt.Orientation.Horizontal)
         self.grid_opacity_slider.setRange(0, 100)
+        self.grid_opacity_slider.setMinimumWidth(100)
+        self.grid_opacity_slider.setMaximumWidth(180)
+        self.grid_opacity_slider.setAccessibleName("Grid opacity")
         self.grid_opacity_label = QLabel(f"{self.grid_opacity_slider.value()}%")
         opacity_row.addWidget(self.grid_opacity_slider, 1)
         opacity_row.addWidget(self.grid_opacity_label)
@@ -760,11 +827,6 @@ class SubstationGuiMockup(QMainWindow):
 
         self.grid_opacity_slider.valueChanged.connect(_on_opacity_changed)
         self.grid_opacity_slider.setValue(round(DEFAULT_GRID_OPACITY * 100))
-
-        self.controls_layout.addWidget(self.grid_show_cb)
-        self.controls_layout.addWidget(self.pdf_show_cb)
-        self.controls_layout.addWidget(self.grid_snap_cb)
-        self.controls_layout.addLayout(opacity_row)
 
     def _build_footer(self):
         footer = QFrame()
@@ -786,17 +848,22 @@ class SubstationGuiMockup(QMainWindow):
     def _build_header(self):
         frame = QFrame()
         frame.setObjectName("toolbarFrame")
-        layout = QVBoxLayout(frame)
-        layout.setContentsMargins(20, 14, 20, 14)
-        layout.setSpacing(10)
+        layout = QHBoxLayout(frame)
+        layout.setContentsMargins(12, 8, 12, 8)
+        layout.setSpacing(16)
 
-        title_row = QHBoxLayout()
-        title_row.setSpacing(12)
-        actions_row = QHBoxLayout()
-        actions_row.setSpacing(12)
+        identity = QWidget()
+        identity.setObjectName("headerIdentity")
+        identity.setMinimumWidth(225)
+        identity.setMaximumWidth(480)
+        identity.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+        identity_layout = QVBoxLayout(identity)
+        identity_layout.setContentsMargins(0, 0, 0, 0)
+        identity_layout.setSpacing(6)
+        identity_layout.addStretch(1)
 
         logo = QLabel()
-        logo_pix = load_gft_logo_pixmap()
+        logo_pix = load_gft_logo_pixmap(height=28)
         if not logo_pix.isNull():
             logo.setPixmap(logo_pix)
             logo.setFixedSize(logo_pix.size())
@@ -804,64 +871,31 @@ class SubstationGuiMockup(QMainWindow):
         logo.setStyleSheet("background: transparent; border: none;")
 
         title = QLabel("AI-Assisted Substation Protection & Control Design")
-        title.setFont(QFont("Arial", 12, QFont.Weight.Bold))
+        title.setObjectName("appTitle")
         title.setWordWrap(True)
+        title.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
 
         project_box = QLineEdit("Untitled Project")
-        project_box.setMinimumWidth(160)
+        project_box.setMinimumWidth(120)
+        project_box.setMaximumWidth(280)
+        project_box.setAccessibleName("Project name")
         self.project_box = project_box
 
-        save_btn = QPushButton("Save Layout")
-        save_btn.clicked.connect(lambda: self.save_layout())
-        self.save_as_btn = QPushButton("Save Layout As")
-        self.save_as_btn.clicked.connect(lambda: self.save_layout(save_as=True))
-        self.open_layout_btn = QPushButton("Open Layout")
-        self.open_layout_btn.clicked.connect(lambda: self.open_layout())
-        self.import_netlist_btn = QPushButton("Import Netlist JSON")
-        self.import_netlist_btn.setToolTip(
-            "Replace the current drawing with a validated netlist JSON file"
-        )
-        self.import_netlist_btn.clicked.connect(self.import_netlist_json)
-        self.new_layout_btn = QPushButton("New Layout")
-        self.new_layout_btn.clicked.connect(self.new_layout)
-        self.load_btn = QPushButton("Import PDF")
-        self.load_btn.clicked.connect(self.on_import_pdf_clicked)
-        self.check_btn = QPushButton("Validate")
-        self.check_btn.clicked.connect(self._on_check_circuit_clicked)
-        self.run_btn = QPushButton("Run Evaluation")
-        self.run_btn.clicked.connect(self._on_run_evaluation_clicked)
-
-        self.save_results_btn = QPushButton("Save Results")
-        save_results_menu = QMenu(self.save_results_btn)
-        save_calculation_action = QAction("Save Calculation PDF", self)
-        save_netlist_action = QAction("Save Netlist PDF", self)
-        save_results_menu.addAction(save_calculation_action)
-        save_results_menu.addAction(save_netlist_action)
-        self.save_results_btn.setMenu(save_results_menu)
-        save_calculation_action.triggered.connect(self._on_save_results_clicked)
-        save_netlist_action.triggered.connect(self._on_save_netlist_pdf)
-        self.save_results_btn.setEnabled(False)
-
         identity_row = QHBoxLayout()
+        identity_row.setSpacing(8)
         identity_row.addWidget(logo)
         identity_row.addWidget(title, 1)
-        identity_row.addWidget(QLabel("Project:"))
-        identity_row.addWidget(project_box)
-        layout.addLayout(identity_row)
+        identity_layout.addLayout(identity_row)
+        project_row = QHBoxLayout()
+        project_row.setSpacing(6)
+        project_row.addWidget(QLabel("Project:"))
+        project_row.addWidget(project_box, 1)
+        identity_layout.addLayout(project_row)
+        identity_layout.addStretch(1)
+        layout.addWidget(identity)
 
-        actions_grid = QGridLayout()
-        actions_grid.setHorizontalSpacing(12)
-        actions_grid.setVerticalSpacing(10)
-        buttons = (
-            self.new_layout_btn, self.open_layout_btn, save_btn, self.save_as_btn,
-            self.load_btn, self.check_btn, self.run_btn, self.save_results_btn,
-            self.import_netlist_btn,
-        )
-        for index, button in enumerate(buttons):
-            actions_grid.addWidget(button, index // 4, index % 4)
-        for column in range(4):
-            actions_grid.setColumnStretch(column, 1)
-        layout.addLayout(actions_grid)
+        self.ribbon = RibbonBar()
+        layout.addWidget(self.ribbon, 1)
         return frame
 
     def _build_content(self):
@@ -877,11 +911,6 @@ class SubstationGuiMockup(QMainWindow):
         layout = QVBoxLayout(container)
         layout.setSpacing(16)
         layout.setContentsMargins(0, 0, 0, 0)
-
-        # Create Component button (sits above the Equipment Library)
-        self.create_component_btn = QPushButton("Create Component")
-        self.create_component_btn.clicked.connect(self._on_create_component_clicked)
-        layout.addWidget(self.create_component_btn)
 
         # Equipment palette
         palette_group = QGroupBox("Equipment Library")
@@ -907,43 +936,7 @@ class SubstationGuiMockup(QMainWindow):
 
         search.textChanged.connect(_filter_equipment)
 
-        # Quick actions
-        self.controls_group = QGroupBox("Quick Actions")
-        self.controls_group.setObjectName("quickActions")
-        self.controls_layout = QVBoxLayout(self.controls_group)
-        self.controls_layout.setContentsMargins(10, 8, 10, 10)
-        self.controls_layout.setSpacing(4)
-
-        self.undo_btn = QPushButton("Undo")
-        self.redo_btn = QPushButton("Redo")
-        self.controls_layout.addWidget(self.undo_btn)
-        self.controls_layout.addWidget(self.redo_btn)
-
-        clipboard_row = QHBoxLayout()
-        self.copy_btn = QPushButton("Copy")
-        self.copy_btn.setToolTip("Copy selected components (Ctrl+C in workspace)")
-        self.copy_btn.clicked.connect(lambda: self.workspace_view.copy_selected())
-        self.paste_btn = QPushButton("Paste")
-        self.paste_btn.setToolTip("Paste components (Ctrl+V in workspace)")
-        self.paste_btn.clicked.connect(lambda: self.workspace_view.paste_components())
-        clipboard_row.addWidget(self.copy_btn)
-        clipboard_row.addWidget(self.paste_btn)
-        self.controls_layout.addLayout(clipboard_row)
-
-        delete_btn = QPushButton("Delete Selected")
-        delete_btn.clicked.connect(
-            lambda: self.workspace_view.delete_selected() if hasattr(self, "workspace_view") else None
-        )
-        self.controls_layout.addWidget(delete_btn)
-
-        rotate_btn = QPushButton("Rotate 90°")
-        rotate_btn.clicked.connect(
-            lambda: self.workspace_view.rotate_selected() if hasattr(self, "workspace_view") else None
-        )
-        self.controls_layout.addWidget(rotate_btn)
-
         layout.addWidget(palette_group, 1)
-        layout.addWidget(self.controls_group, 0)
         return container
 
     def _build_center_panel(self):
@@ -957,6 +950,7 @@ class SubstationGuiMockup(QMainWindow):
         canvas_layout = QVBoxLayout(canvas)
 
         self.workspace_scene = QGraphicsScene(self)
+        self.workspace_scene.changed.connect(self._sync_circuit_visibility)
         self.workspace_scene.setSceneRect(
             QRectF(0, 0, DEFAULT_WORKSPACE_WIDTH, DEFAULT_WORKSPACE_HEIGHT)
         )
@@ -1102,12 +1096,6 @@ class SubstationGuiMockup(QMainWindow):
 
         analysis_group = QGroupBox("Analysis Output")
         analysis_layout = QVBoxLayout(analysis_group)
-        self.zone_setup_btn = QPushButton("Configure Protection Zones")
-        self.zone_setup_btn.clicked.connect(self._configure_protection_zones)
-        analysis_layout.addWidget(self.zone_setup_btn)
-        self.expand_analysis_btn = QPushButton("Expand Analysis")
-        self.expand_analysis_btn.clicked.connect(self._expand_zone_analysis)
-        analysis_layout.addWidget(self.expand_analysis_btn)
         self.zone_view = QComboBox()
         self.zone_view.addItem("Run Evaluation to display zones")
         self.zone_view.currentIndexChanged.connect(self._show_zone_highlights)
@@ -1140,32 +1128,32 @@ class SubstationGuiMockup(QMainWindow):
             return
         report = check_circuit(self.workspace_scene)
         lines = [
-            "Circuit check: OK" if report["ok"] else "Circuit check: problems found",
+            "Circuit check: OK" if report["ok"] else messages.SUBSTATION_GUI4_CIRCUIT_PROBLEMS,
             "",
         ]
         open_ends = report["open_ends"]
         shorts = report["shorts"]
-        lines.append("Open ends:" if open_ends else "Open ends: none")
+        lines.append(messages.SUBSTATION_GUI4_OPEN_ENDS if open_ends else "Open ends: none")
         for issue in open_ends:
             lines.append(f"  • {issue}")
         lines.append("")
-        lines.append("Short circuits:" if shorts else "Short circuits: none")
+        lines.append(messages.SUBSTATION_GUI4_SHORT_CIRCUITS if shorts else messages.SUBSTATION_GUI4_SHORT_CIRCUITS_NONE)
         for issue in shorts:
             lines.append(f"  • {issue}")
         if hasattr(self, "footer_status_label"):
             if report["ok"]:
                 self.footer_status_label.setText("Circuit check passed")
-            elif open_ends == ["No components on the canvas."]:
-                self.footer_status_label.setText("Place components before checking the circuit")
+            elif open_ends == [messages.CIRCUIT_CHECK_NO_COMPONENTS_ON_THE_CANVAS]:
+                self.footer_status_label.setText(messages.SUBSTATION_GUI4_PLACE_COMPONENTS_BEFORE_CHECK)
             else:
                 self.footer_status_label.setText(
-                    f"Circuit check: {len(open_ends)} open, {len(shorts)} short"
+                    messages.SUBSTATION_GUI4_CIRCUIT_COUNTS.format(len(open_ends), len(shorts))
                 )
         message = "\n".join(lines)
         if report["ok"]:
             QMessageBox.information(self, "Validate", message)
         else:
-            QMessageBox.warning(self, "Validate", message)
+            QMessageBox.warning(self, messages.SUBSTATION_GUI4_VALIDATE, message)
 
     def _protection_netlist(self):
         netlist = netlist_from_scene(self.workspace_scene,
@@ -1186,7 +1174,7 @@ class SubstationGuiMockup(QMainWindow):
         """Detect real scene components and conductors; never save live Zone objects."""
         items = [item for item in self.workspace_scene.items()
                  if isinstance(item, OneLineSymbolItem)]
-        primary = identify_zones(items, (CurrentTransformerItem,))
+        primary = identify_zones(items, (CurrentTransformerItem,), respect_switch_state=True)
         return topology_records(primary)
 
     def _configure_protection_zones(self):
@@ -1194,7 +1182,7 @@ class SubstationGuiMockup(QMainWindow):
             netlist = self._protection_netlist()
             dialog = ZoneDialog(netlist, self.protection_zones or propose_zones(netlist), self)
         except (ValueError, TypeError) as error:
-            QMessageBox.warning(self, "Protection Zone Settings", str(error))
+            QMessageBox.warning(self, messages.SUBSTATION_GUI4_PROTECTION_ZONE_SETTINGS, str(error))
             return
         if dialog.exec() == QDialog.DialogCode.Accepted:
             changes = []
@@ -1230,6 +1218,21 @@ class SubstationGuiMockup(QMainWindow):
         layout.addWidget(close)
         dialog.exec()
 
+    def _sync_circuit_visibility(self, *_):
+        control = getattr(self, "circuit_show_cb", None)
+        visible = control.isChecked() if control is not None else True
+        for item in self.workspace_scene.items():
+            if isinstance(item, (OneLineSymbolItem, ConnectionItem)):
+                if not visible and item.isSelected():
+                    item.setSelected(False)
+                if item.isVisible() != visible:
+                    item.setVisible(visible)
+
+    def _set_zones_visible(self, visible):
+        self._zones_visible = visible
+        for overlay in self._zone_overlays:
+            overlay.setVisible(self._zones_visible)
+
     def _clear_zone_highlights(self):
         for overlay in self._zone_overlays:
             if overlay.scene() is not None:
@@ -1251,45 +1254,88 @@ class SubstationGuiMockup(QMainWindow):
         for index, zone in enumerate(rows):
             if selected_id and zone["id"] != selected_id:
                 continue
-            color = QColor(colors[index % len(colors)])
+            color = (QColor(colors[index]) if index < len(colors) else
+                     QColor.fromHsvF((index * 0.61803398875) % 1.0, 0.65, 0.8))
             pen = QPen(color, 3)
             if topology_mode:
                 pen.setStyle(Qt.PenStyle.DotLine)
             elif not zone["complete"]:
                 pen.setStyle(Qt.PenStyle.DashLine)
             tooltip = zone["name"] + (" (topology only; no automatic current)" if topology_mode else "")
-            for ident in zone["members"]:
-                if ident not in symbols:
-                    continue
-                margin = 8 + (index % 3) * 4
-                overlay = QGraphicsRectItem(symbols[ident].sceneBoundingRect().adjusted(-margin, -margin, margin, margin))
-                overlay.setPen(pen)
-                fill = QColor(color)
-                fill.setAlpha(25)
-                overlay.setBrush(QBrush(fill))
-                self._add_zone_overlay(overlay, tooltip, zone["id"])
-            # Membership is terminal-aware. Testing only both endpoint IDs would
-            # incorrectly highlight a parallel conductor on the other CT sides.
+            if not topology_mode:
+                tooltip += f" ({zone.get('kind', 'Manual')} zone)"
+            # Follow primary geometry instead of filling its bounding rectangle.
+            # Labels and empty space between branches do not define coverage.
+            coverage = QPainterPath()
+            stroker = QPainterPathStroker()
+            stroker.setWidth(120)
+            stroker.setCapStyle(Qt.PenCapStyle.SquareCap)
+            stroker.setJoinStyle(Qt.PenJoinStyle.MiterJoin)
             exact_keys = {tuple(tuple(endpoint) for endpoint in edge) for edge in zone["connections"]}
-            for wire in wires:
-                key = connection_key(wire)
-                if key not in exact_keys:
-                    continue
-                overlay = QGraphicsPathItem(wire.sceneTransform().map(wire.path()))
-                wire_pen = QPen(color, 7)
-                wire_pen.setCosmetic(True)
-                overlay.setPen(wire_pen)
-                overlay.setOpacity(0.4)
-                overlay._zone_connection_key = key
-                self._add_zone_overlay(overlay, tooltip, zone["id"])
+            visible_members = set(zone["members"])
+            visible_wires = [wire for wire in wires if connection_key(wire) in exact_keys]
+            # Apply the same display rules to configured and detected regions.
+            # Use saved symbol metadata for equipment created from templates.
+            visible_members -= {ident for ident, symbol in symbols.items()
+                                if getattr(symbol, "properties", {}).get("symbol_type", symbol.equip_type)
+                                in {"pt", "surge_arrester", "ground"}
+                                or getattr(symbol, "properties", {}).get("circuit_role") == "voltage_measurement"}
+            while True:
+                visible_wires = [wire for wire in visible_wires
+                                 if wire.from_item.instance_id in visible_members
+                                 and wire.to_item.instance_id in visible_members]
+                degrees = defaultdict(int)
+                for wire in visible_wires:
+                    degrees[wire.from_item.instance_id] += 1
+                    degrees[wire.to_item.instance_id] += 1
+                leaves = {ident for ident in visible_members if ident in symbols
+                          and symbols[ident].equip_type == "junction" and degrees[ident] <= 1}
+                if not leaves:
+                    break
+                visible_members -= leaves
+            for ident in visible_members:
+                if ident in symbols:
+                    symbol = symbols[ident]
+                    body = symbol._local_transform().mapRect(symbol._rect)
+                    piece = QPainterPath()
+                    piece.addRect(symbol.mapRectToScene(body).adjusted(-50, -50, 50, 50))
+                    coverage = coverage.united(piece)
+            for wire in visible_wires:
+                coverage = coverage.united(stroker.createStroke(wire.mapToScene(wire.path())))
+            if coverage.isEmpty():
+                continue
+            footprint = next((z.get("display_polygon") for z in self.protection_zones
+                              if z["id"] == zone["id"]), None) if not topology_mode else None
+            if (isinstance(footprint, list) and len(footprint) >= 3
+                    and all(isinstance(p, list) and len(p) == 2
+                            and all(isinstance(v, (int, float)) and math.isfinite(v) for v in p)
+                            for p in footprint)):
+                path = QPainterPath()
+                path.moveTo(*footprint[0])
+                for point in footprint[1:]:
+                    path.lineTo(*point)
+                path.closeSubpath()
+                overlay = _ZoneShape(path)
+                tooltip += " — reference drawing footprint; verify CT boundaries separately"
+            else:
+                overlay = _ZoneShape(coverage.simplified())
+            overlay.setPen(pen)
+            fill = QColor(color)
+            fill.setAlpha(65)
+            overlay.setBrush(QBrush(fill, Qt.BrushStyle.BDiagPattern))
+            # A pale solid background plus hatching resembles the reference sheet.
+            overlay.setData(2, QColor(color).name())
+            overlay._zone_connection_keys = exact_keys
+            self._add_zone_overlay(overlay, tooltip, zone["id"])
 
     def _add_zone_overlay(self, overlay, name, zone_id=None):
-        overlay.setZValue(10)
+        overlay.setZValue(-0.5)
         overlay.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
         overlay.setToolTip(name)
         overlay.setData(0, "protection-zone-overlay")
         overlay.setData(1, zone_id)
         self.workspace_scene.addItem(overlay)
+        overlay.setVisible(self._zones_visible)
         self._zone_overlays.append(overlay)
 
     def _on_run_evaluation_clicked(self):
@@ -1299,8 +1345,8 @@ class SubstationGuiMockup(QMainWindow):
         try:
             netlist = self._protection_netlist()
             if not netlist["components"]:
-                self.output_box.setPlainText("No components to evaluate. Rebuild the one-line and enter its current loads.")
-                self.footer_status_label.setText("Place components before evaluating protection zones")
+                self.output_box.setPlainText(messages.SUBSTATION_GUI4_NO_COMPONENTS_TO_EVALUATE_REBUILD_THE_ONE_LINE_AND)
+                self.footer_status_label.setText(messages.SUBSTATION_GUI4_PLACE_COMPONENTS_BEFORE_EVALUATION)
                 return
             if not self.protection_zones:
                 self.protection_zones = propose_zones(netlist)
@@ -1312,9 +1358,9 @@ class SubstationGuiMockup(QMainWindow):
             self._zone_report = report
             self.zone_view.blockSignals(True)
             self.zone_view.clear()
-            self.zone_view.addItem("All configured zones (dashed = incomplete)", None)
+            self.zone_view.addItem(messages.SUBSTATION_GUI4_ALL_CONFIGURED_ZONES_DASHED_INCOMPLETE, None)
             for index, zone in enumerate(report["zones"]):
-                self.zone_view.addItem(f"{index + 1}. {zone['name']} — {'confirmed' if zone['complete'] else 'review required'}", zone["id"])
+                self.zone_view.addItem(f"{index + 1}. {zone['name']} — {'confirmed' if zone['complete'] else messages.SUBSTATION_GUI4_REVIEW_REQUIRED}", zone["id"])
             self.zone_view.addItem("All detected regions (topology only)", ("topology", None))
             for region in report["topology_regions"]:
                 enclosure = " [enclosed]" if region["enclosed_by"] else " [outermost]"
@@ -1324,19 +1370,19 @@ class SubstationGuiMockup(QMainWindow):
             self.zone_view.blockSignals(False)
             self._show_zone_highlights()
             lines = [f"Momentary DC protection-zone study: {netlist['system_name']}",
-                "COMPLETE" if report["complete"] else "INCOMPLETE — configure/review flagged zones; partial totals are not final.",
+                "COMPLETE" if report["complete"] else messages.SUBSTATION_GUI4_INCOMPLETE_CONFIGURE_REVIEW_FLAGGED_ZONES_PARTIAL_TOTALS_ARE_NOT,
                 "Each configured zone is a separate fault event. Same-stage loads are simultaneous; other stages are separate.",
                 "DC supplies are reported separately. No battery amp-hour calculation.", ""]
             all_loads, warnings = [], list(report["warnings"])
-            lines.extend(f"REVIEW: {warning}" for warning in warnings)
+            lines.extend(messages.SUBSTATION_GUI4_REVIEW_WARNING.format(warning) for warning in warnings)
             for zone in report["zones"]:
                 lines.extend([f"{zone['name']} ({zone['kind']})", "  CT boundaries: " + ", ".join(zone["boundaries"]),
                               "  Equipment: " + ", ".join(zone["members"])])
                 for warning in zone["warnings"]:
-                    lines.append(f"  REVIEW: {warning}")
-                    warnings.append(f"{zone['name']}: {warning}")
+                    lines.append(messages.SUBSTATION_GUI4_INDENTED_REVIEW_WARNING.format(warning))
+                    warnings.append(messages.DIAGNOSTIC_WITH_CONTEXT.format(zone['name'], warning))
                 for scenario in zone["scenarios"]:
-                    prefix = "" if zone["complete"] else "Provisional "
+                    prefix = "" if zone["complete"] else messages.SUBSTATION_GUI4_PROVISIONAL
                     lines.append(f"  {prefix}{scenario['stage']}: {scenario['peak_current_A']:g} A across assigned supplies")
                     for advice in scenario.get("advisories", []):
                         lines.append(f"    NOTE: {advice}")
@@ -1362,27 +1408,27 @@ class SubstationGuiMockup(QMainWindow):
             for supply, peak in report["supply_peaks"].items():
                 lines.append(f"  {supply}: {peak['peak_current_A']:g} A — {peak['zone']} / {peak['stage']}")
             if not report["supply_peaks"]:
-                lines.append("  Not available until zone assignments and currents are complete.")
+                lines.append(messages.SUBSTATION_GUI4_NOT_AVAILABLE_UNTIL_ZONE_ASSIGNMENTS_AND_CURRENTS_ARE_COMPLETE)
             worst_supply = max(report["supply_peaks"],
                 key=lambda supply: report["supply_peaks"][supply]["peak_current_A"], default=None)
             self.last_result = {"scenario_name": netlist["system_name"], "voltage_V": netlist["voltage_V"],
-                "peak_current_A": report["supply_peaks"][worst_supply]["peak_current_A"] if worst_supply and report["complete"] else "Incomplete study",
+                "peak_current_A": report["supply_peaks"][worst_supply]["peak_current_A"] if worst_supply and report["complete"] else messages.SUBSTATION_GUI4_INCOMPLETE_STUDY,
                 "worst_case_supply": worst_supply,
                 "loads": all_loads, "warnings": warnings, "protection_analysis": report,
                 "calculation_steps": ["Group actions by zone and operating stage.",
                     "Count each physical coil or motor once per stage; multiply entered current by the verified unit count.",
                     "Sum currents per DC supply within each stage, then take each supply's maximum across complete zones.",
-                    "Stages and separate zone faults are not added together. Flagged zones have provisional results only."]}
+                    messages.SUBSTATION_GUI4_STAGES_AND_SEPARATE_ZONE_FAULTS_ARE_NOT_ADDED_TOGETHER]}
             netlist["zones"] = copy.deepcopy(self.protection_zones)
             self.last_netlist = netlist
             self._evaluated_snapshot = self._layout_data()
-            self.save_results_btn.setEnabled(True)
+            self.export_results_action.setEnabled(True)
             self.output_box.setPlainText("\n".join(lines))
-            self.footer_status_label.setText("Zone evaluation complete" if report["complete"] else "Zone evaluation needs review — Configure Protection Zones")
+            self.footer_status_label.setText("Zone evaluation complete" if report["complete"] else messages.SUBSTATION_GUI4_ZONE_EVALUATION_NEEDS_REVIEW_CONFIGURE_PROTECTION_ZONES)
         except Exception as error:
             self._invalidate_results()
-            self.output_box.setPlainText(f"Evaluation failed:\n{error}")
-            self.footer_status_label.setText("Zone evaluation failed; see analysis output")
+            self.output_box.setPlainText(messages.SUBSTATION_GUI4_EVALUATION_FAILED.format(error))
+            self.footer_status_label.setText(messages.SUBSTATION_GUI4_ZONE_EVALUATION_FAILED_SEE_ANALYSIS_OUTPUT)
         self.response_time_label.setText(f"Response time: {(time.perf_counter() - started) * 1000:.0f} ms")
 
     def _on_save_results_clicked(self):
@@ -1398,7 +1444,7 @@ class SubstationGuiMockup(QMainWindow):
         peak = result.get("peak_current_A", "Not available")
         peak_display = f"{peak:g} A" if isinstance(peak, (int, float)) else str(peak)
         report = result.get("protection_analysis") or {}
-        study_status = "COMPLETE" if report.get("complete") else "INCOMPLETE — provisional study"
+        study_status = "COMPLETE" if report.get("complete") else messages.SUBSTATION_GUI4_INCOMPLETE_PROVISIONAL_STUDY
 
         loads = result.get("loads") or []
         load_rows = "".join(
@@ -1631,15 +1677,12 @@ class SubstationGuiMockup(QMainWindow):
             printer.setOutputFormat(QPrinter.OutputFormat.PdfFormat)
             printer.setOutputFileName(temporary)
             document.print_(printer)
-            if (
-                printer.printerState() == QPrinter.PrinterState.Error
-                or Path(temporary).stat().st_size == 0
-            ):
-                raise OSError("The PDF file was not created or is empty.")
+            if printer.printerState() == QPrinter.PrinterState.Error or Path(temporary).stat().st_size == 0:
+                raise OSError(messages.SUBSTATION_GUI4_THE_PDF_FILE_WAS_NOT_CREATED_OR_IS_EMPTY)
             os.replace(temporary, file_path)
         except OSError as error:
             QMessageBox.critical(
-                self, "Save Failed", f"Could not create the PDF:\n{error}"
+                self, messages.SUBSTATION_GUI4_SAVE_FAILED, messages.SUBSTATION_GUI4_COULD_NOT_CREATE_THE_PDF.format(error)
             )
             return
         finally:
@@ -1750,7 +1793,7 @@ class SubstationGuiMockup(QMainWindow):
         name = data["name"]
         symbol_key = str(data.get("symbol_type", "custom"))
         if not name:
-            QMessageBox.warning(self, "Create Component", "Please enter a component name.")
+            QMessageBox.warning(self, messages.SUBSTATION_GUI4_CREATE_COMPONENT, messages.SUBSTATION_GUI4_PLEASE_ENTER_A_COMPONENT_NAME)
             return
 
         # Bus only sends Rating; other types send coil / motor currents.
@@ -1766,6 +1809,11 @@ class SubstationGuiMockup(QMainWindow):
         }
         if not properties["rating_kv"]:
             properties.pop("rating_kv")
+        if symbol_key == "surge_arrester":
+            properties = {key: value for key, value in properties.items()
+                          if key in {"rating_kv", "symbol_type"}}
+        elif symbol_key == "incoming_line":
+            properties = {"symbol_type": symbol_key}
 
         slug = "".join(ch if ch.isalnum() else "_" for ch in name.strip().lower())
         equip_id = f"custom_{slug}" if slug else f"custom_{len(EQUIPMENT_DEFS)}"
@@ -1833,22 +1881,24 @@ class SubstationGuiMockup(QMainWindow):
                 doc.close()
         except Exception as e:
             if hasattr(self, "footer_status_label"):
-                self.footer_status_label.setText(f"Import failed: {e}")
+                self.footer_status_label.setText(messages.SUBSTATION_GUI4_IMPORT_FAILED.format(e))
             return
 
         pm = QPixmap()
         if not pm.loadFromData(png_bytes):
             if hasattr(self, "footer_status_label"):
-                self.footer_status_label.setText("Import failed: could not decode rendered PNG")
+                self.footer_status_label.setText(messages.SUBSTATION_GUI4_IMPORT_FAILED_COULD_NOT_DECODE_RENDERED_PNG)
             return
 
         self._workspace_original = pm
         self.pdf_path = str(Path(pdf_path).resolve())
+        fit_layout = any(isinstance(item, OneLineSymbolItem) for item in self.workspace_scene.items())
         if hasattr(self, "workspace_view"):
             self.workspace_view.set_background_pixmap(
                 pm,
                 scene_width=scene_width,
                 scene_height=scene_height,
+                fit_existing_sheet=fit_layout,
             )
         if hasattr(self, "pdf_show_cb"):
             self.pdf_show_cb.setEnabled(True)
@@ -1859,7 +1909,7 @@ class SubstationGuiMockup(QMainWindow):
             sheet_height = scene_height / SCENE_UNITS_PER_INCH
             self.footer_status_label.setText(
                 f"Imported: {pdf_path} "
-                f"({sheet_width:g} × {sheet_height:g} in)"
+                + ("(fitted to layout sheet)" if fit_layout else f"({sheet_width:g} × {sheet_height:g} in)")
             )
         self._mark_modified()
 
@@ -1897,12 +1947,13 @@ class SubstationGuiMockup(QMainWindow):
             self.prop_name.blockSignals(True)
             self.prop_name.setText(item.visible_id())
             self.prop_name.blockSignals(False)
-        if isinstance(item, BusItem):
+        if isinstance(item, BusItem) or (isinstance(item, OneLineSymbolItem) and item.equip_type == "surge_arrester"):
             self.prop_type.setText(
                 BUILTIN_SYMBOLS.get(item.equip_type, {}).get("label", "Bus")
             )
             self.prop_status.setEnabled(False)
             self._set_bus_property_mode(True)
+            self.prop_voltage_label.setText("MCOV (kV):" if item.equip_type == "surge_arrester" else "Voltage (kV):")
             props = getattr(item, "properties", None)
             rating = props.get("rating_kv") if isinstance(props, dict) else None
             self.prop_voltage.blockSignals(True)
@@ -1913,6 +1964,9 @@ class SubstationGuiMockup(QMainWindow):
             self.prop_status.setEnabled(True)
             self._set_bus_property_mode(False)
             self._set_custom_component_properties(self._symbol_properties(item))
+            if item.equip_type == "incoming_line":
+                for widget in self._non_bus_property_widgets:
+                    widget.setVisible(False)
         elif isinstance(item, ConnectionItem):
             self.prop_type.setText("Connection")
             self.prop_name.setReadOnly(True)
@@ -2010,7 +2064,7 @@ class SubstationGuiMockup(QMainWindow):
             if not math.isfinite(value) or value < 0:
                 raise ValueError
         except ValueError:
-            self.footer_status_label.setText("Current must be a finite number greater than or equal to zero")
+            self.footer_status_label.setText(messages.SUBSTATION_GUI4_CURRENT_MUST_BE_A_FINITE_NUMBER_GREATER_THAN_OR)
             self._on_selection_changed()
             return
         self._edit_property(symbol, key, value)
@@ -2020,7 +2074,7 @@ class SubstationGuiMockup(QMainWindow):
         if not hasattr(self, "workspace_scene"):
             return
         selected = self.workspace_scene.selectedItems()
-        if len(selected) != 1 or not isinstance(selected[0], BusItem):
+        if len(selected) != 1 or not isinstance(selected[0], OneLineSymbolItem) or selected[0].equip_type not in {"bus", "surge_arrester"}:
             return
         bus = selected[0]
         raw = text.strip().lower().removesuffix("kv").strip()
@@ -2032,7 +2086,7 @@ class SubstationGuiMockup(QMainWindow):
                 if not math.isfinite(rating) or rating <= 0:
                     raise ValueError
             except ValueError:
-                self.footer_status_label.setText("Bus voltage must be a finite positive number, or blank")
+                self.footer_status_label.setText(messages.SUBSTATION_GUI4_BUS_VOLTAGE_MUST_BE_A_FINITE_POSITIVE_NUMBER_OR)
                 self._on_selection_changed()
                 return
         self._edit_property(bus, "rating_kv", rating)
@@ -2103,7 +2157,7 @@ class SubstationGuiMockup(QMainWindow):
 def main() -> None:
     """Open the substation design window."""
     app = QApplication(sys.argv)
-    app.setFont(QFont("Segoe UI", 11))
+    app.setFont(ui_font())
 
     window = SubstationGuiMockup()
     window.showMaximized()

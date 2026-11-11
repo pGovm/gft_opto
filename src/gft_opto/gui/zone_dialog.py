@@ -1,6 +1,8 @@
 # Lets users review protection-zone boundaries and configure the loads and operating stages for each zone.
 
 """Editable CT boundaries and explicit per-stage coil/motor assignments."""
+
+from gft_opto.gui import messages
 import copy
 import uuid
 
@@ -74,8 +76,8 @@ class ZoneDialog(QDialog):
         )
         self.guidance.setWordWrap(True)
         if conflicts:
-            self.guidance.setText(self.guidance.text() + "\nLegacy supply conflicts: " + ", ".join(sorted(conflicts))
-                + ". Review these breaker's supply settings before confirming.")
+            self.guidance.setText(self.guidance.text() + messages.ZONE_DIALOG_LEGACY_SUPPLY_CONFLICTS.format(", ".join(sorted(conflicts)))
+                + messages.ZONE_DIALOG_REVIEW_THESE_BREAKER_S_SUPPLY_SETTINGS_BEFORE_CONFIRMING)
         self._base_guidance = self.guidance.text()
         outer.addWidget(self.guidance)
         body = QHBoxLayout()
@@ -83,7 +85,7 @@ class ZoneDialog(QDialog):
         left = QVBoxLayout()
         self.zone_list = QListWidget()
         left.addWidget(self.zone_list)
-        for label, callback in (("Detect Missing Zones", self.detect), ("Add Zone", self.add_zone), ("Delete Zone", self.delete_zone)):
+        for label, callback in ((messages.ZONE_DIALOG_DETECT_MISSING_ZONES, self.detect), ("Add Zone", self.add_zone), ("Delete Zone", self.delete_zone)):
             button = QPushButton(label)
             button.clicked.connect(callback)
             left.addWidget(button)
@@ -104,7 +106,7 @@ class ZoneDialog(QDialog):
         self.seed = QComboBox()
         self.seed.addItem("No equipment seed (wire-only region)", "")
         for ident, component in self.components.items():
-            if kind(component) not in ("ct", "pt", "ground", "junction"):
+            if kind(component) not in ("ct", "pt", "ground", "junction", "surge_arrester", "incoming_line"):
                 self.seed.addItem(f"{component.get('label', ident)} [{ident}]", ident)
         form.addRow("Zone name", self.name)
         form.addRow("Zone type", self.zone_kind)
@@ -112,6 +114,7 @@ class ZoneDialog(QDialog):
         right.addLayout(form)
         right.addWidget(QLabel("Boundary CTs (assigned to this protection scheme):"))
         self.cts = QListWidget()
+        self.cts.setToolTip(messages.ZONE_DIALOG_SELECT_ONLY_THE_OUTER_CT_BOUNDARIES_FOR_THIS_SCHEME)
         self.cts.setMaximumHeight(150)
         for ident, component in self.components.items():
             if kind(component) == "ct":
@@ -121,7 +124,7 @@ class ZoneDialog(QDialog):
                 entry.setCheckState(Qt.CheckState.Unchecked)
                 self.cts.addItem(entry)
         right.addWidget(self.cts)
-        right.addWidget(QLabel("Operating loads — use a separate stage for reclose, motor operation, or breaker failure:"))
+        right.addWidget(QLabel(messages.ZONE_DIALOG_OPERATING_LOADS_USE_A_SEPARATE_STAGE_FOR_RECLOSE_MOTOR))
         self.actions = QTableWidget(0, 6)
         self.actions.setHorizontalHeaderLabels(["Equipment", "Load", "Stage", "DC supply", "Operation", "Multiplier"])
         self.actions.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
@@ -238,7 +241,7 @@ class ZoneDialog(QDialog):
             else:
                 self.zones[self.active].pop("candidate_breakers", None)
             eligible = [i for i in region["core"] if i in self.components
-                        and kind(self.components[i]) not in ("ct", "pt", "ground", "junction")]
+                        and kind(self.components[i]) not in ("ct", "pt", "ground", "junction", "surge_arrester", "incoming_line")]
             eligible.sort(key=lambda i: (kind(self.components[i]) != "bus", i))
             seed = eligible[0] if eligible else ""
             self.seed.setCurrentIndex(self.seed.findData(seed))
@@ -312,7 +315,7 @@ class ZoneDialog(QDialog):
             for ident in zone.get("candidate_breakers", [])
             if ident in self.components
         ]
-        messages = []
+        notes = []
         buses = [
             f"{self.components[ident].get('label') or ident} [{ident}]"
             for ident in zone.get("candidate_buses", [])
@@ -331,25 +334,25 @@ class ZoneDialog(QDialog):
                     if ident in self.components and kind(self.components[ident]) == "bus"
                 ]
         if zone["kind"] == "Bus" and len(buses) > 1:
-            messages.append(
+            notes.append(
                 "Review required: multiple buses share this detected region "
                 f"({', '.join(buses)}). Topology alone does not determine whether "
                 "they share a protection zone; configure separate fault events if needed."
             )
         if candidates:
-            messages.append(
+            notes.append(
                 "Suggested nearby breakers (not assigned): " + ", ".join(candidates)
                 + ". Add only the operating loads verified for this protection scheme."
             )
-        self.guidance.setText("\n".join(messages) if messages else self._base_guidance)
+        self.guidance.setText("\n".join(notes) if notes else self._base_guidance)
         self.zone_kind.setCurrentText(zone["kind"])
         if zone["seed"] and self.seed.findData(zone["seed"]) < 0:
-            self.seed.addItem(f"Missing: {zone['seed']}", zone["seed"])
+            self.seed.addItem(messages.ZONE_DIALOG_MISSING.format(zone['seed']), zone["seed"])
         self.seed.setCurrentIndex(self.seed.findData(zone["seed"]))
         existing = {self.cts.item(i).data(Qt.ItemDataRole.UserRole) for i in range(self.cts.count())}
         for ident in zone["boundary_cts"]:
             if ident not in existing:
-                entry = QListWidgetItem(f"Missing CT: {ident}")
+                entry = QListWidgetItem(messages.ZONE_DIALOG_MISSING_CT.format(ident))
                 entry.setData(Qt.ItemDataRole.UserRole, ident)
                 entry.setFlags(entry.flags() | Qt.ItemFlag.ItemIsUserCheckable)
                 entry.setCheckState(Qt.CheckState.Unchecked)
@@ -373,10 +376,10 @@ class ZoneDialog(QDialog):
         equipment._saved_action = copy.deepcopy(action)
         equipment.addItem("Select equipment", "")
         for ident, component in self.components.items():
-            if kind(component) not in ("ct", "pt", "ground", "junction", "bus"):
+            if kind(component) not in ("ct", "pt", "ground", "junction", "bus", "surge_arrester", "incoming_line"):
                 equipment.addItem(f"{component.get('label', ident)} [{ident}]", ident)
         if equipment.findData(action["component"]) < 0:
-            equipment.addItem(f"Missing: {action['component']}", action["component"])
+            equipment.addItem(messages.ZONE_DIALOG_MISSING.format(action['component']), action["component"])
         equipment.setCurrentIndex(equipment.findData(action["component"]))
         for key, label in LOADS.items():
             load.addItem(label, key)
@@ -435,7 +438,7 @@ class ZoneDialog(QDialog):
                 supply.setToolTip("Set this supply in the selected breaker's properties")
             else:
                 if operation.currentData() == "legacy":
-                    raise ValueError("Review the legacy multiplier and select Whole device.")
+                    raise ValueError(messages.ZONE_DIALOG_REVIEW_THE_LEGACY_MULTIPLIER_AND_SELECT_WHOLE_DEVICE)
                 units = 1
             multiplier.setText(f"×{units}")
             multiplier.setToolTip("Calculated from the equipment current basis and operating action")
@@ -454,7 +457,7 @@ class ZoneDialog(QDialog):
             self.capture()
             zones = add_missing_proposals(self.netlist, self.zones)
         except (ValueError, TypeError) as error:
-            QMessageBox.warning(self, "Incomplete Zone Settings", str(error))
+            QMessageBox.warning(self, messages.ZONE_DIALOG_INCOMPLETE_ZONE_SETTINGS, str(error))
             return
         self.zones = zones
         self.refresh_list()
@@ -481,12 +484,12 @@ class ZoneDialog(QDialog):
                     zone["configuration_signature"] = configuration_signature(zone)
             report = evaluate_zones(self.netlist, candidate)
             confirmed_ids = {z["id"] for z in candidate if z["confirmed"]}
-            errors = [f"{row['name']}: {message}" for row in report["zones"]
+            errors = [messages.DIAGNOSTIC_WITH_CONTEXT.format(row['name'], message) for row in report["zones"]
                       if row["id"] in confirmed_ids for message in row["warnings"]]
             if errors:
-                raise ValueError("\n".join(errors) + "\nUncheck confirmation to save these settings as a draft.")
+                raise ValueError("\n".join(errors) + messages.ZONE_DIALOG_UNCHECK_CONFIRMATION_TO_SAVE_THESE_SETTINGS_AS_A_DRAFT)
         except (ValueError, TypeError) as error:
-            QMessageBox.warning(self, "Incomplete Zone Settings", str(error))
+            QMessageBox.warning(self, messages.ZONE_DIALOG_INCOMPLETE_ZONE_SETTINGS, str(error))
             return
         self.zones = candidate
         super().accept()

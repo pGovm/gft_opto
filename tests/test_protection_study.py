@@ -65,6 +65,44 @@ def confirmed(netlist):
 
 
 class ProtectionZones(unittest.TestCase):
+    def test_ct_run_is_inside_one_proposed_event_and_explicit_boundaries_win(self):
+        netlist = example()
+        netlist["connections"] = [w for w in netlist["connections"]
+                                  if not (w["from_id"] == "ct1" and w["to_id"] == "cb1")]
+        previous = "ct1"
+        for ident in ("ct1a", "ct1b", "ct1c"):
+            netlist["components"].append({"id": ident, "type": "ct", "properties": {}})
+            netlist["connections"].append({"from_id": previous, "from_port": "left",
+                                            "to_id": ident, "to_port": "right"})
+            previous = ident
+        netlist["connections"].append({"from_id": previous, "from_port": "left",
+                                        "to_id": "cb1", "to_port": "right"})
+        zone = propose_zones(netlist)[0]
+        self.assertEqual(set(zone["boundary_cts"]), {"ct1c", "ct2"})
+        zone["actions"] = [
+            {"component": ident, "load": "trip_coil_1_a", "stage": "Primary trip",
+             "supply": "DC 1", "units": 1}
+            for ident in zone["candidate_breakers"]
+        ]
+        approve(netlist, zone)
+        report = evaluate_zones(netlist, [zone])
+        self.assertTrue(report["complete"], report["zones"][0]["warnings"])
+        self.assertTrue({"ct1", "ct1a", "ct1b"} <= set(report["zones"][0]["core"]))
+        self.assertEqual(report["supply_peaks"]["DC 1"]["peak_current_A"], 30)
+        zone["boundary_cts"] = ["ct1", "ct2"]
+        approve(netlist, zone)
+        self.assertNotIn("ct1a", evaluate_zones(netlist, [zone])["zones"][0]["members"])
+
+    def test_surge_arrester_cannot_be_a_dc_operating_load(self):
+        netlist = example()
+        netlist["components"].append({"id": "sa", "type": "surge_arrester", "properties": {"trip_coil_1_a": 100}})
+        zone = confirmed(netlist)
+        zone["actions"].append({"component": "sa", "load": "trip_coil_1_a", "stage": "Primary trip", "supply": "DC 1", "units": 1})
+        approve(netlist, zone)
+        report = evaluate_zones(netlist, [zone])
+        self.assertFalse(report["complete"])
+        self.assertIn("passive equipment", " ".join(report["zones"][0]["warnings"]))
+
     def test_ct_boundaries_and_nearest_breaker_proposals(self):
         netlist = example()
         zone = propose_zones(netlist)[0]

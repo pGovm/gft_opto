@@ -11,6 +11,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import QGraphicsItem, QGraphicsPathItem, QGraphicsScene
 
+from gft_opto.gui.theme import ui_font
 from gft_opto.gui.routing import (
     MAX_SYMBOL_SCALE,
     MIN_BUS_LENGTH,
@@ -249,8 +250,7 @@ class OneLineSymbolItem(QGraphicsItem):
 
     def _label_font(self) -> QFont:
         """Keep the name the same visual size when the symbol is scaled."""
-        font = QFont("Sans-Serif", 11)
-        font.setWeight(QFont.Weight.Bold)
+        font = ui_font(11, QFont.Weight.Bold)
         font.setPointSizeF(11.0 / max(self.scale_factor, 1e-6))
         return font
 
@@ -555,7 +555,7 @@ class MotorOperatedSwitchItem(OneLineSymbolItem):
         # Circled M (motor operator), AEP style
         painter.setBrush(QBrush(Qt.GlobalColor.white))
         painter.drawEllipse(QRectF(-8, 8, 16, 16))
-        painter.setFont(QFont("Sans-Serif", 7, QFont.Weight.Bold))
+        painter.setFont(ui_font(7, QFont.Weight.Bold))
         painter.drawText(QRectF(-8, 8, 16, 16), Qt.AlignmentFlag.AlignCenter, "M")
         self._end_paint(painter)
 
@@ -623,6 +623,63 @@ class PotentialTransformerItem(OneLineSymbolItem):
 
 
 
+class IncomingLineItem(OneLineSymbolItem):
+    """Off-sheet AC line continuation with one connectable terminal below."""
+
+    def __init__(self):
+        super().__init__("incoming_line", "Incoming AC Line", {"line": QPointF(0, 40)})
+        self._rect = QRectF(-12, -24, 24, 64)
+
+    def paint(self, painter: QPainter, option, widget=None):
+        self._begin_paint(painter)
+        painter.drawLine(0, 40, 0, -24)
+        painter.drawLine(0, -24, -8, -10)
+        painter.drawLine(0, -24, 8, -10)
+        self._end_paint(painter)
+
+
+class LineTrapItem(OneLineSymbolItem):
+    """Series carrier-frequency line trap: a coil inside a rectangular enclosure."""
+
+    def __init__(self):
+        super().__init__("line_trap", "Line Trap", {
+            "left": QPointF(-40, 0), "right": QPointF(40, 0),
+        })
+        self._rect = QRectF(-40, -24, 80, 48)
+
+    def paint(self, painter: QPainter, option, widget=None):
+        self._begin_paint(painter)
+        painter.setBrush(QBrush(Qt.BrushStyle.NoBrush))
+        painter.drawRect(QRectF(-28, -23, 56, 46))
+        coil = QPainterPath(QPointF(-40, 0))
+        coil.lineTo(-24, 0)
+        for x in (-24, -8, 8):
+            coil.cubicTo(x, -18, x + 16, -18, x + 16, 0)
+        coil.lineTo(40, 0)
+        painter.drawPath(coil)
+        self._end_paint(painter)
+
+
+class SurgeArresterItem(OneLineSymbolItem):
+    """Line-to-earth surge arrester; connect the right terminal to ground."""
+
+    def __init__(self):
+        super().__init__(
+            "surge_arrester", "Surge Arrester",
+            {"left": QPointF(-40, 0), "right": QPointF(40, 0)},
+        )
+        self._rect = QRectF(-40, -16, 80, 32)
+
+    def paint(self, painter: QPainter, option, widget=None):
+        self._begin_paint(painter)
+        painter.drawLine(-40, 0, -16, 0)
+        painter.drawLine(16, 0, 40, 0)
+        painter.setBrush(QBrush(Qt.GlobalColor.white))
+        painter.drawEllipse(QRectF(-16, -5, 10, 10))
+        painter.drawEllipse(QRectF(6, -5, 10, 10))
+        self._end_paint(painter)
+
+
 class GroundItem(OneLineSymbolItem):
     """Earth ground: three horizontal bars."""
 
@@ -632,6 +689,7 @@ class GroundItem(OneLineSymbolItem):
             "Ground",
             {"node": QPointF(0, -16)},
         )
+        self.show_name_label = False
         self._rect = QRectF(-14, -16, 28, 36)
 
     def paint(self, painter: QPainter, option, widget=None):
@@ -992,6 +1050,7 @@ def refresh_symbol_labels(
 # Glyphs used by Create Component. Not listed in the Equipment Library until
 # the user adds them.
 BUILTIN_SYMBOLS = {
+    "incoming_line": {"label": "Incoming AC Line", "factory": IncomingLineItem},
     "xfmr_2w": {"label": "Transformer (2-winding)", "factory": Transformer2WItem},
     "xfmr_3w": {"label": "Transformer (3-winding)", "factory": Transformer3WItem},
     "breaker": {"label": "Circuit Breaker", "factory": CircuitBreakerItem},
@@ -999,6 +1058,8 @@ BUILTIN_SYMBOLS = {
     "mos": {"label": "Motor Operated Switch (MOS)", "factory": MotorOperatedSwitchItem},
     "ct": {"label": "Current Transformer (CT/BCT)", "factory": CurrentTransformerItem},
     "pt": {"label": "Potential Transformer (PT/VT)", "factory": PotentialTransformerItem},
+    "surge_arrester": {"label": "Surge Arrester", "factory": SurgeArresterItem},
+    "line_trap": {"label": "Line Trap", "factory": LineTrapItem},
     "ground": {"label": "Ground", "factory": GroundItem},
     "bus": {"label": "Bus", "factory": BusItem},
 }

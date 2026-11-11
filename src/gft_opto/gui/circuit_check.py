@@ -2,6 +2,8 @@
 
 """Open-end and short-circuit check for a drawn one-line."""
 
+from gft_opto.gui import messages
+
 from collections import defaultdict
 
 from PySide6.QtWidgets import QGraphicsScene
@@ -73,7 +75,7 @@ def check_circuit(scene: QGraphicsScene) -> dict:
     if not symbols:
         return {
             "ok": False,
-            "open_ends": ["No components on the canvas."],
+            "open_ends": [messages.CIRCUIT_CHECK_NO_COMPONENTS_ON_THE_CANVAS],
             "shorts": [],
         }
 
@@ -104,17 +106,17 @@ def check_circuit(scene: QGraphicsScene) -> dict:
         if isinstance(symbol, JunctionItem):
             count = degree.get((id(symbol), "node"), 0)
             if count == 0:
-                open_ends.append(f"{name}: junction is not connected")
+                open_ends.append(messages.CIRCUIT_CHECK_JUNCTION_IS_NOT_CONNECTED.format(name))
             elif count == 1:
-                open_ends.append(f"{name}: dangling wire (only one connection)")
+                open_ends.append(messages.CIRCUIT_CHECK_DANGLING_WIRE_ONLY_ONE_CONNECTION.format(name))
             continue
         if isinstance(symbol, BusItem):
             if not any(degree.get((id(symbol), port), 0) for port in symbol.ports()):
-                open_ends.append(f"{name}: bus is not connected")
+                open_ends.append(messages.CIRCUIT_CHECK_BUS_IS_NOT_CONNECTED.format(name))
             continue
         for port in symbol.ports():
             if degree.get((id(symbol), port), 0) == 0:
-                open_ends.append(f"{name}: {port} is not connected")
+                open_ends.append(messages.CIRCUIT_CHECK_IS_NOT_CONNECTED.format(name, port))
 
         pairs = _DEVICE_PORT_PAIRS.get(symbol.equip_type)
         if pairs is None and not isinstance(symbol, (GroundItem, JunctionItem, BusItem)):
@@ -129,7 +131,7 @@ def check_circuit(scene: QGraphicsScene) -> dict:
             if degree.get(left_key, 0) == 0 or degree.get(right_key, 0) == 0:
                 continue
             if nodes.find(left_key) == nodes.find(right_key):
-                shorts.append(f"{name}: {left} and {right} are on the same node")
+                shorts.append(messages.CIRCUIT_CHECK_AND_ARE_ON_THE_SAME_NODE.format(name, left, right))
 
     for ground in symbols:
         if not isinstance(ground, GroundItem):
@@ -145,7 +147,7 @@ def check_circuit(scene: QGraphicsScene) -> dict:
                 continue
             if nodes.find(ground_key) == nodes.find((id(bus), bus_ports[0])):
                 shorts.append(
-                    f"{_symbol_caption(bus)} is tied directly to {_symbol_caption(ground)}"
+                    messages.CIRCUIT_CHECK_IS_TIED_DIRECTLY_TO.format(_symbol_caption(bus), _symbol_caption(ground))
                 )
 
     return {

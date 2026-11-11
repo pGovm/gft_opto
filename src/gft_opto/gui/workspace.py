@@ -2,6 +2,8 @@
 
 """Workspace grid and the canvas view that edits the one-line."""
 
+from gft_opto.gui import messages
+
 import math
 import json
 import re
@@ -683,6 +685,7 @@ class WorkspaceView(QGraphicsView):
         pixmap: QPixmap,
         scene_width: float | None = None,
         scene_height: float | None = None,
+        fit_existing_sheet: bool = False,
     ):
         """Place a PDF image at its physical drawing-sheet size."""
         scn = self.scene()
@@ -691,7 +694,15 @@ class WorkspaceView(QGraphicsView):
             self._background_item = None
 
         self._background_item = QGraphicsPixmapItem(pixmap)
-        if (
+        if fit_existing_sheet and scn is not None and not pixmap.isNull():
+            sheet = scn.sceneRect()
+            factor = min(sheet.width() / pixmap.width(), sheet.height() / pixmap.height())
+            self._background_item.setTransform(QTransform.fromScale(factor, factor))
+            self._background_item.setPos(
+                sheet.x() + (sheet.width() - pixmap.width() * factor) / 2,
+                sheet.y() + (sheet.height() - pixmap.height() * factor) / 2,
+            )
+        elif (
             scene_width is not None
             and scene_height is not None
             and pixmap.width() > 0
@@ -710,7 +721,9 @@ class WorkspaceView(QGraphicsView):
         scn = self.scene()
         if scn is not None:
             scn.addItem(self._background_item)
-            if scene_width is not None and scene_height is not None:
+            if fit_existing_sheet:
+                pass  # Keep the layout's sheet, grid origin and equipment positions.
+            elif scene_width is not None and scene_height is not None:
                 scn.setSceneRect(QRectF(0, 0, scene_width, scene_height))
             else:
                 scn.setSceneRect(self._background_item.sceneBoundingRect())
@@ -757,7 +770,7 @@ class WorkspaceView(QGraphicsView):
             if not symbols:
                 return False
         except (ValueError, KeyError, TypeError, AttributeError) as error:
-            self._set_status(f"Could not paste components: {error}")
+            self._set_status(messages.WORKSPACE_COULD_NOT_PASTE_COMPONENTS.format(error))
             return False
         count = getattr(self, "_paste_count", 0) + 1 if getattr(self, "_last_paste_payload", None) == raw else 1
         reserve_ids(self.scene())
@@ -790,7 +803,7 @@ class WorkspaceView(QGraphicsView):
         self._push(PasteComponentsCommand(self.scene(), symbols, wires, self._sync_grid_to_scene))
         self._last_paste_payload, self._paste_count = raw, count
         self.ensureVisible(symbols[0])
-        self._set_status(f"Pasted {len(symbols)} component(s) — review protection-zone assignments")
+        self._set_status(messages.WORKSPACE_PASTED_COMPONENT_S_REVIEW_PROTECTION_ZONE_ASSIGNMENTS.format(len(symbols)))
         return True
 
     def keyPressEvent(self, event):

@@ -64,6 +64,50 @@ class GuiWorkflows(unittest.TestCase):
         item.setSelected(True)
         return item
 
+    def test_surge_arrester_mcov_and_layout_round_trip(self):
+        from gft_opto.gui.custom_widget_tool import ComponentDialog
+        dialog = ComponentDialog(self.window)
+        dialog.symbol_combo.setCurrentIndex(dialog.symbol_combo.findData("surge_arrester"))
+        dialog.rating_spin.setValue(88)
+        data = dialog.component_data()
+        self.assertEqual(data["Rating"], 88)
+        self.assertNotIn("TripCoil1", data)
+        arrester = make_user_equipment("surge_arrester", "SA-H1", {"rating_kv": 88, "symbol_type": "surge_arrester"})
+        ground = GroundItem()
+        scene = self.window.workspace_scene
+        scene.addItem(arrester)
+        scene.addItem(ground)
+        scene.addItem(ConnectionItem(arrester, "right", ground, "node"))
+        arrester.setSelected(True)
+        self.assertEqual(self.window.prop_voltage_label.text(), "MCOV (kV):")
+        self.window._on_property_voltage_changed("90")
+        self.assertEqual(arrester.properties["rating_kv"], 90)
+        layout = self.window._layout_data()
+        restored = build_scene(layout)
+        loaded = next(i for i in restored.items() if isinstance(i, OneLineSymbolItem) and i.equip_type == "surge_arrester")
+        self.assertEqual(loaded.properties["rating_kv"], 90)
+        self.assertEqual(len(loaded.connections()), 1)
+        dialog.deleteLater()
+
+    def test_reference_incoming_lines_open_with_single_connected_terminal(self):
+        from gft_opto.gui.custom_widget_tool import ComponentDialog
+        dialog = ComponentDialog(self.window)
+        dialog.symbol_combo.setCurrentIndex(dialog.symbol_combo.findData("incoming_line"))
+        self.assertNotIn("TripCoil1", dialog.component_data())
+        self.assertNotIn("Rating", dialog.component_data())
+        path = Path(__file__).parent / "layouts" / "mvec_reference_one_line_draft.json"
+        self.assertTrue(self.window.open_layout(str(path)))
+        incoming = [i for i in self.window.workspace_scene.items()
+                    if isinstance(i, OneLineSymbolItem) and i.equip_type == "incoming_line"]
+        self.assertEqual(len(incoming), 2)
+        for item in incoming:
+            self.assertEqual(set(item.ports()), {"line"})
+            self.assertEqual(len(item.connections()), 1)
+        restored = build_scene(self.window._layout_data())
+        self.assertEqual(sum(isinstance(i, OneLineSymbolItem) and i.equip_type == "incoming_line"
+                             for i in restored.items()), 2)
+        dialog.deleteLater()
+
     def commit_current(self, text):
         field = self.window.prop_trip_coil_1
         field.setText(text)
@@ -324,26 +368,80 @@ class GuiWorkflows(unittest.TestCase):
         self.assertTrue(w.prop_name.isReadOnly())
         self.assertTrue(w.prop_trip_coil_1.isReadOnly())
 
-    def test_header_controls_fit_and_open_layout_button_works(self):
+    def test_ribbon_controls_fit_and_open_layout_button_works(self):
         w = self.window
-        w.resize(1280, 800)
         w.show()
-        self.app.processEvents()
-        self.assertLessEqual(w.minimumSizeHint().width(), 1280)
-        for control in (
-            w.new_layout_btn, w.open_layout_btn, w.import_netlist_btn,
-            w.load_btn, w.run_btn, w.save_results_btn,
-        ):
-            self.assertTrue(control.isVisible())
-            origin = control.mapTo(w, QPointF(0, 0).toPoint())
-            self.assertGreaterEqual(origin.x(), 0)
-            self.assertLessEqual(origin.x() + control.width(), w.width())
-        self.assertIsNone(w.menuWidget())
-        self.assertTrue(w.save_as_btn.isVisible())
+        self.assertEqual([w.ribbon.tabText(i).replace("&", "") for i in range(w.ribbon.count())],
+                         ["File", "Edit", "View", "Analysis"])
+        pages = ((w.new_layout_btn, w.open_layout_btn, w.save_layout_btn, w.save_as_btn,
+                  w.load_btn, w.import_netlist_btn, w.save_results_btn),
+                 (w.undo_btn, w.redo_btn, w.copy_btn, w.paste_btn, w.delete_btn, w.rotate_btn,
+                  w.create_component_btn),
+                 (w.grid_show_cb, w.pdf_show_cb, w.circuit_show_cb, w.zones_show_cb,
+                  w.grid_snap_cb, w.grid_opacity_slider),
+                 (w.check_btn, w.zone_setup_btn, w.run_btn, w.expand_analysis_btn))
+        for width in (1000, 1280):
+            w.resize(width, 800)
+            for index, controls in enumerate(pages):
+                w.ribbon.setCurrentIndex(index)
+                self.app.processEvents()
+                for control in controls:
+                    self.assertTrue(control.isVisible())
+                    origin = control.mapTo(w, QPointF(0, 0).toPoint())
+                    self.assertGreaterEqual(origin.x(), 0)
+                    self.assertLessEqual(origin.x() + control.width(), w.width())
         self.assertTrue(any(action.shortcut().toString() == "Ctrl+O" for action in w.actions()))
+        w.ribbon.setCurrentIndex(0)
         with patch("gft_opto.gui.substation_gui4.QFileDialog.getOpenFileName", return_value=("", "")) as dialog:
             w.open_layout_btn.click()
             dialog.assert_called_once()
+
+    def test_ribbon_undo_redo_follow_the_actual_edit_history(self):
+        w = self.window
+        w.ribbon.setCurrentIndex(1)
+        self.assertFalse(w.undo_btn.isEnabled())
+        self.assertFalse(w.redo_btn.isEnabled())
+        breaker = self.add_breaker()
+        self.assertTrue(w.undo_btn.isEnabled())
+        w.undo_btn.click()
+        self.assertIsNone(breaker.scene())
+        self.assertFalse(w.undo_btn.isEnabled())
+        self.assertTrue(w.redo_btn.isEnabled())
+        w.redo_btn.click()
+        self.assertIs(breaker.scene(), w.workspace_scene)
+        self.assertEqual(w.undo_btn.text(), "Undo")
+
+    def test_ribbon_view_controls_keep_working_after_changing_tabs(self):
+        w = self.window
+        breaker = self.add_breaker()
+        w.ribbon.setCurrentIndex(2)
+        w.grid_show_cb.click()
+        self.assertFalse(w.workspace_view._grid_item.isVisible())
+        w.circuit_show_cb.click()
+        self.assertFalse(breaker.isVisible())
+        w.zones_show_cb.click()
+        self.assertFalse(w._zones_visible)
+        w.grid_opacity_slider.setValue(60)
+        w.grid_snap_cb.click()
+        self.assertFalse(w.workspace_view._snap_to_grid)
+        w.ribbon.setCurrentIndex(0)
+        w.ribbon.setCurrentIndex(2)
+        self.assertFalse(w.grid_show_cb.isChecked())
+        self.assertEqual(w.workspace_view._grid_item.opacity(), 0.6)
+        w.grid_snap_cb.setChecked(True)
+
+    def test_ribbon_evaluation_commits_pending_property_edits(self):
+        w = self.window
+        w.show()
+        w.activateWindow()
+        breaker = self.add_breaker()
+        w.ribbon.setCurrentIndex(3)
+        w.prop_trip_coil_1.setFocus()
+        w.prop_trip_coil_1.setText("17")
+        self.app.processEvents()
+        QTest.mouseClick(w.run_btn, Qt.MouseButton.LeftButton)
+        self.assertEqual(breaker.properties["trip_coil_1_a"], 17)
+        self.assertIsNotNone(w.last_result)
 
     def test_pdf_background_round_trip(self):
         w = self.window

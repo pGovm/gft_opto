@@ -1,6 +1,50 @@
-# Provides shared visual styles, currently the visible scrollbar styling used throughout the GUI.
+# Provides consistent UI fonts, readable colors, and shared scrollbar styles.
 
 """Shared widget styles that should remain readable across system themes."""
+
+from PySide6.QtGui import QColor, QFont, QFontDatabase, QPalette
+
+
+def ui_font(point_size=10, weight=QFont.Weight.Normal):
+    """Use an installed system UI font, including for painted symbol labels."""
+    font = QFontDatabase.systemFont(QFontDatabase.SystemFont.GeneralFont)
+    font.setStyleHint(QFont.StyleHint.SansSerif)
+    font.setPointSizeF(point_size)
+    font.setWeight(weight)
+    font.setItalic(False)
+    return font
+
+
+def readable_palette(base):
+    """Keep white surfaces and their text consistent with a dark system theme."""
+    palette = QPalette(base)
+    for role, color in {
+        QPalette.ColorRole.Window: "#f4f6f8",
+        QPalette.ColorRole.WindowText: "#1f2933",
+        QPalette.ColorRole.Base: "#ffffff",
+        QPalette.ColorRole.AlternateBase: "#eef2f6",
+        QPalette.ColorRole.Text: "#1f2933",
+        QPalette.ColorRole.Button: "#ffffff",
+        QPalette.ColorRole.ButtonText: "#1f2933",
+        QPalette.ColorRole.Highlight: "#006a4e",
+        QPalette.ColorRole.HighlightedText: "#ffffff",
+        QPalette.ColorRole.PlaceholderText: "#64748b",
+        QPalette.ColorRole.ToolTipBase: "#ffffff",
+        QPalette.ColorRole.ToolTipText: "#1f2933",
+    }.items():
+        palette.setColor(role, QColor(color))
+    for role in (QPalette.ColorRole.WindowText, QPalette.ColorRole.Text, QPalette.ColorRole.ButtonText):
+        palette.setColor(QPalette.ColorGroup.Disabled, role, QColor("#64748b"))
+    return palette
+
+
+ZONE_COLORS = {
+    "Bus": "#0072b2",
+    "Transformer": "#d55e00",
+    "Line": "#009e73",
+    "Manual": "#cc79a7",
+}
+TOPOLOGY_ZONE_COLOR = "#64748b"
 
 SCROLLBAR_STYLE = """
     QScrollBar:vertical {

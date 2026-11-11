@@ -9,6 +9,8 @@ operating scenarios: only explicitly configured actions enter calculations.
 """
 from __future__ import annotations
 
+from gft_opto.gui import messages
+
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
 import hashlib
@@ -21,13 +23,13 @@ from gft_opto.logic.momentary_calc2 import Load, Scenario, NETLIST_PROPERTY_LOAD
 from gft_opto.logic.breaker_settings import resolve_breaker_action, breaker_settings, SETTING_KEYS
 from gft_opto.logic.protection_zones import (
     Zone, connection_key, identify_zones, generate_composite_zones,
-    find_enclosed_zones, zone_signature,
+    find_enclosed_zones, zone_signature, is_open_switch,
 )
 
 LOADS = dict(NETLIST_PROPERTY_LOAD_MAP)
 STAGES = ("Primary trip", "Backup trip", "Breaker failure", "Reclose", "Motor inrush", "Motor run")
 ZONE_KINDS = ("Bus", "Transformer", "Line", "Manual")
-_PASSIVE = {"ct", "pt", "ground", "junction", "bus"}
+_PASSIVE = {"ct", "pt", "ground", "junction", "bus", "surge_arrester", "incoming_line", "line_trap"}
 
 
 def kind(component: dict) -> str:
@@ -42,7 +44,7 @@ def kind(component: dict) -> str:
 
 def _text(value: Any, label: str, *, empty: bool = False) -> str:
     if not isinstance(value, str) or (not empty and not value.strip()):
-        raise ValueError(f"{label} must be {'a string' if empty else 'a nonempty string'}.")
+        raise ValueError(messages.PROTECTION_STUDY_MUST_BE.format(label, 'a string' if empty else 'a nonempty string'))
     return value
 
 
@@ -85,21 +87,21 @@ class _Graph:
     """Validated netlist adapter. Connections retain their named terminals."""
     def __init__(self, netlist: dict, boundary_ids: set[str] | None = None):
         if not isinstance(netlist, dict):
-            raise ValueError("Netlist must be an object.")
+            raise ValueError(messages.PROTECTION_STUDY_NETLIST_MUST_BE_AN_OBJECT)
         components, connections = netlist.get("components"), netlist.get("connections")
         if not isinstance(components, list) or not isinstance(connections, list):
-            raise ValueError("Netlist components and connections must be lists.")
+            raise ValueError(messages.PROTECTION_STUDY_NETLIST_COMPONENTS_AND_CONNECTIONS_MUST_BE_LISTS)
         self.items: dict[str, _Item] = {}
         self.records: dict[str, dict] = {}
         self.wires: list[_Wire] = []
         for component in components:
             if not isinstance(component, dict):
-                raise ValueError("Each netlist component must be an object.")
+                raise ValueError(messages.PROTECTION_STUDY_EACH_NETLIST_COMPONENT_MUST_BE_AN_OBJECT)
             ident = _text(component.get("id"), "Component ID")
             if ident in self.items:
-                raise ValueError(f"Duplicate component ID: {ident}")
+                raise ValueError(messages.PROTECTION_STUDY_DUPLICATE_COMPONENT_ID.format(ident))
             if not isinstance(component.get("properties", {}), dict):
-                raise ValueError(f"{ident}: properties must be an object.")
+                raise ValueError(messages.PROTECTION_STUDY_PROPERTIES_MUST_BE_AN_OBJECT.format(ident))
             boundary = kind(component) == "ct" and (boundary_ids is None or ident in boundary_ids)
             self.items[ident] = (_Boundary if boundary else _Item)(ident, component)
             self.records[ident] = component
@@ -109,9 +111,9 @@ class _Graph:
             elif isinstance(record, (list, tuple)) and len(record) == 4:
                 a, ap, b, bp = record
             else:
-                raise ValueError("Each connection needs two component IDs and two terminals.")
+                raise ValueError(messages.PROTECTION_STUDY_EACH_CONNECTION_NEEDS_TWO_COMPONENT_IDS_AND_TWO_TERMINALS)
             if not isinstance(a, str) or not isinstance(b, str) or a not in self.items or b not in self.items:
-                raise ValueError(f"Wire references an unknown component: {a!r}, {b!r}")
+                raise ValueError(messages.PROTECTION_STUDY_WIRE_REFERENCES_AN_UNKNOWN_COMPONENT.format(a, b))
             for port in (ap, bp):
                 if port is not None:
                     _text(port, "Terminal")
@@ -121,7 +123,7 @@ class _Graph:
             self.wires.append(wire)
 
     def primary(self) -> list[Zone]:
-        return identify_zones(self.items.values(), _Boundary)
+        return identify_zones(self.items.values(), _Boundary, respect_switch_state=True)
 
 
 def topology_signature(netlist: dict) -> str:
@@ -134,7 +136,7 @@ def topology_signature(netlist: dict) -> str:
     """
     graph = _Graph(netlist)
     payload = {
-        "version": 2,
+        "version": 3,
         "components": sorted((i, kind(c), str(c.get("properties", {}).get("status", "Closed")))
                              for i, c in graph.records.items()),
         "connections": sorted({connection_key(w) for w in graph.wires}, key=lambda x: json.dumps(x)),
@@ -143,7 +145,7 @@ def topology_signature(netlist: dict) -> str:
         "breaker_settings": sorted((i, breaker_settings(c))
                                    for i, c in graph.records.items() if kind(c) == "breaker"),
     }
-    return "ct-study-v2:" + _digest(payload)
+    return "ct-study-v3:" + _digest(payload)
 
 
 def configuration_signature(zone: dict) -> str:
@@ -154,25 +156,25 @@ def configuration_signature(zone: dict) -> str:
 
 def _validate_region(signature: Any) -> None:
     if not isinstance(signature, dict) or set(signature) != {"core", "boundary", "connections"}:
-        raise ValueError("Detected region must contain core, boundary and connections.")
+        raise ValueError(messages.PROTECTION_STUDY_DETECTED_REGION_MUST_CONTAIN_CORE_BOUNDARY_AND_CONNECTIONS)
     for key in ("core", "boundary"):
         values = signature[key]
         if not isinstance(values, list):
-            raise ValueError(f"Detected-region {key} must be a list.")
+            raise ValueError(messages.PROTECTION_STUDY_DETECTED_REGION_MUST_BE_A_LIST.format(key))
         for value in values:
             _text(value, f"Detected-region {key} ID")
         if len(values) != len(set(values)):
-            raise ValueError(f"Duplicate detected-region {key} ID.")
+            raise ValueError(messages.PROTECTION_STUDY_DUPLICATE_DETECTED_REGION_ID.format(key))
     if set(signature["core"]) & set(signature["boundary"]):
-        raise ValueError("Detected-region core and boundaries must be disjoint.")
+        raise ValueError(messages.PROTECTION_STUDY_DETECTED_REGION_CORE_AND_BOUNDARIES_MUST_BE_DISJOINT)
     if not isinstance(signature["connections"], list):
-        raise ValueError("Detected-region connections must be a list.")
+        raise ValueError(messages.PROTECTION_STUDY_DETECTED_REGION_CONNECTIONS_MUST_BE_A_LIST)
     for edge in signature["connections"]:
         if not isinstance(edge, (list, tuple)) or len(edge) != 2:
-            raise ValueError("Invalid detected-region connection.")
+            raise ValueError(messages.PROTECTION_STUDY_INVALID_DETECTED_REGION_CONNECTION)
         for endpoint in edge:
             if not isinstance(endpoint, (list, tuple)) or len(endpoint) != 2:
-                raise ValueError("Invalid detected-region terminal.")
+                raise ValueError(messages.PROTECTION_STUDY_INVALID_DETECTED_REGION_TERMINAL)
             _text(endpoint[0], "Detected-region component ID")
             if endpoint[1] is not None:
                 _text(endpoint[1], "Detected-region terminal")
@@ -186,42 +188,42 @@ def validate_zones(zones: list[dict]) -> None:
     saved. Unknown extra metadata is retained for compatibility.
     """
     if not isinstance(zones, list):
-        raise ValueError("Zones must be a list.")
+        raise ValueError(messages.PROTECTION_STUDY_ZONES_MUST_BE_A_LIST)
     ids = set()
     for zone in zones:
         if not isinstance(zone, dict):
-            raise ValueError("Each saved zone must be an object, not a live Zone.")
+            raise ValueError(messages.PROTECTION_STUDY_EACH_SAVED_ZONE_MUST_BE_AN_OBJECT_NOT_A)
         ident = _text(zone.get("id"), "Zone ID")
         if ident in ids:
-            raise ValueError(f"Duplicate zone ID: {ident}")
+            raise ValueError(messages.PROTECTION_STUDY_DUPLICATE_ZONE_ID.format(ident))
         ids.add(ident)
         _text(zone.get("name"), f"{ident}: zone name")
         if zone.get("kind") not in ZONE_KINDS:
-            raise ValueError(f"{ident}: unknown zone kind.")
+            raise ValueError(messages.PROTECTION_STUDY_UNKNOWN_ZONE_KIND.format(ident))
         _text(zone.get("seed"), f"{ident}: seed", empty=True)
         if not isinstance(zone.get("confirmed"), bool):
-            raise ValueError(f"{ident}: confirmed must be true or false.")
+            raise ValueError(messages.PROTECTION_STUDY_CONFIRMED_MUST_BE_TRUE_OR_FALSE.format(ident))
         boundaries = zone.get("boundary_cts")
         if not isinstance(boundaries, list):
-            raise ValueError(f"{ident}: boundary_cts must be a list.")
+            raise ValueError(messages.PROTECTION_STUDY_BOUNDARY_CTS_MUST_BE_A_LIST.format(ident))
         for boundary in boundaries:
             _text(boundary, "Boundary CT ID")
         if len(set(boundaries)) != len(boundaries):
-            raise ValueError(f"{ident}: duplicate boundary CTs.")
+            raise ValueError(messages.PROTECTION_STUDY_DUPLICATE_BOUNDARY_CTS.format(ident))
         actions = zone.get("actions")
         if not isinstance(actions, list):
-            raise ValueError(f"{ident}: actions must be a list.")
+            raise ValueError(messages.PROTECTION_STUDY_ACTIONS_MUST_BE_A_LIST.format(ident))
         for action in actions:
             if not isinstance(action, dict):
-                raise ValueError(f"{ident}: each action must be an object.")
+                raise ValueError(messages.PROTECTION_STUDY_EACH_ACTION_MUST_BE_AN_OBJECT.format(ident))
             _text(action.get("component"), "Action component", empty=True)
             if not isinstance(action.get("load"), str) or action["load"] not in LOADS:
-                raise ValueError(f"{ident}: unknown load property.")
+                raise ValueError(messages.PROTECTION_STUDY_UNKNOWN_LOAD_PROPERTY.format(ident))
             # Draft rows may be blank, but cannot produce a complete result.
             _text(action.get("stage"), "Action stage", empty=True)
             if "operation" in action:
                 if action["operation"] not in ("all_poles", "one_pole", "device", "legacy"):
-                    raise ValueError(f"{ident}: unknown operating action.")
+                    raise ValueError(messages.PROTECTION_STUDY_UNKNOWN_OPERATING_ACTION.format(ident))
                 if "supply" in action:
                     _text(action["supply"], "DC supply", empty=True)
             else:
@@ -229,10 +231,10 @@ def validate_zones(zones: list[dict]) -> None:
             if "operation" not in action or "units" in action:
                 units = action.get("units")
                 if isinstance(units, bool) or not isinstance(units, int) or not 1 <= units <= 100:
-                    raise ValueError(f"{ident}: units must be an integer from 1 to 100.")
+                    raise ValueError(messages.PROTECTION_STUDY_UNITS_MUST_BE_AN_INTEGER_FROM_1_TO_100.format(ident))
         for key in ("topology_signature", "configuration_signature"):
             if key in zone and not isinstance(zone[key], str):
-                raise ValueError(f"{ident}: {key} must be a string.")
+                raise ValueError(messages.PROTECTION_STUDY_MUST_BE_A_STRING.format(ident, key))
         if "topology_region" in zone:
             _validate_region(zone["topology_region"])
 
@@ -274,17 +276,17 @@ def analyze_topology(netlist: dict) -> list[dict]:
 def _geometry_warnings(graph: _Graph, region: Zone, zone: dict) -> list[str]:
     warnings = []
     if not zone["boundary_cts"] and zone["kind"] != "Manual":
-        warnings.append("No boundary CTs assigned. Review the region or use an explicit Manual switching scenario.")
+        warnings.append(messages.PROTECTION_STUDY_NO_BOUNDARY_CTS_ASSIGNED_REVIEW_THE_REGION_OR_USE)
     touched = {item.instance_id for item in region.boundary_items}
     for ident in zone["boundary_cts"]:
         if ident not in graph.items:
-            warnings.append(f"Boundary CT {ident} is missing.")
+            warnings.append(messages.PROTECTION_STUDY_BOUNDARY_CT_IS_MISSING.format(ident))
             continue
         if kind(graph.records[ident]) != "ct":
-            warnings.append(f"Boundary {ident} is not a CT.")
+            warnings.append(messages.PROTECTION_STUDY_BOUNDARY_IS_NOT_A_CT.format(ident))
             continue
         if ident not in touched:
-            warnings.append(f"Boundary CT {ident} is disconnected from the protected region.")
+            warnings.append(messages.PROTECTION_STUDY_BOUNDARY_CT_IS_DISCONNECTED_FROM_THE_PROTECTED_REGION.format(ident))
             continue
         all_ports, region_ports = set(), set()
         for wire in graph.items[ident].connections():
@@ -296,11 +298,11 @@ def _geometry_warnings(graph: _Graph, region: Zone, zone: dict) -> list[str]:
                     region_ports.add(port)
         named_ports = all_ports - {None}
         if None in all_ports:
-            warnings.append(f"Boundary CT {ident} has an unnamed terminal; verify its two sides.")
+            warnings.append(messages.PROTECTION_STUDY_BOUNDARY_CT_HAS_AN_UNNAMED_TERMINAL_VERIFY_ITS_TWO.format(ident))
         elif len(named_ports) < 2:
-            warnings.append(f"Boundary CT {ident} has an unconnected terminal.")
+            warnings.append(messages.PROTECTION_STUDY_BOUNDARY_CT_HAS_AN_UNCONNECTED_TERMINAL.format(ident))
         if len(region_ports - {None}) > 1:
-            warnings.append(f"Boundary CT {ident} is bypassed: multiple CT terminals reach this region.")
+            warnings.append(messages.PROTECTION_STUDY_BOUNDARY_CT_IS_BYPASSED_MULTIPLE_CT_TERMINALS_REACH_THIS.format(ident))
     return warnings
 
 
@@ -315,20 +317,20 @@ def _resolve_region(netlist: dict, zone: dict) -> tuple[Zone | None, list[str]]:
         candidates = primary + generate_composite_zones(primary)
         matches = [r for r in candidates if _json(zone_signature(r)) == _json(snapshot)]
         if len(matches) != 1:
-            return None, ["The selected detected region changed or is missing. Select its current region again."]
+            return None, [messages.PROTECTION_STUDY_THE_SELECTED_DETECTED_REGION_CHANGED_OR_IS_MISSING_SELECT]
         region = matches[0]
         if boundaries != {i.instance_id for i in region.boundary_items}:
-            return None, ["Stored CT boundaries do not match the selected detected region."]
+            return None, [messages.PROTECTION_STUDY_STORED_CT_BOUNDARIES_DO_NOT_MATCH_THE_SELECTED_DETECTED]
         if zone["seed"] and zone["seed"] not in {i.instance_id for i in region.core_items}:
-            return None, ["Protected equipment does not belong to the selected detected region."]
+            return None, [messages.PROTECTION_STUDY_PROTECTED_EQUIPMENT_DOES_NOT_BELONG_TO_THE_SELECTED_DETECTED]
     else:
         graph = _Graph(netlist, boundaries)
         seed = graph.items.get(zone["seed"])
         if seed is None:
-            return None, [f"Protected equipment {zone['seed']!r} is missing or not selected."]
+            return None, [messages.PROTECTION_STUDY_PROTECTED_EQUIPMENT_IS_MISSING_OR_NOT_SELECTED.format(zone['seed'])]
         matches = [r for r in graph.primary() if seed in r.core_items]
         if len(matches) != 1:
-            return None, ["Protected equipment must be inside the region, not an assigned boundary CT."]
+            return None, [messages.PROTECTION_STUDY_PROTECTED_EQUIPMENT_MUST_BE_INSIDE_THE_REGION_NOT_AN]
         region = matches[0]
     warnings = _geometry_warnings(graph, region, zone)
     buses = sorted(
@@ -357,7 +359,8 @@ def _trip_candidates(graph: _Graph, region: Zone) -> list[str]:
     transformer. This is a topology convenience, not relay or trip-logic inference.
     """
     inside = {i.instance_id for i in region.all_items}
-    breakers = {i.instance_id for i in region.core_items if kind(i.record) == "breaker"}
+    breakers = {i.instance_id for i in region.core_items
+                if kind(i.record) == "breaker" and not is_open_switch(i)}
     queue = deque()
     for boundary in region.boundary_items:
         for wire in boundary.connections():
@@ -371,85 +374,160 @@ def _trip_candidates(graph: _Graph, region: Zone) -> list[str]:
             continue
         seen.add(item.instance_id)
         typ = kind(item.record)
+        if is_open_switch(item):
+            continue
         if typ == "breaker":
             breakers.add(item.instance_id)
             continue
-        if typ in {"bus", "xfmr_2w", "xfmr_3w", "ground", "pt"}:
+        if typ in {"bus", "xfmr_2w", "xfmr_3w", "ground", "pt", "surge_arrester", "incoming_line", "line_trap"}:
             continue
         for wire in item.connections():
             queue.append(wire.to_item if wire.from_item is item else wire.from_item)
     return sorted(breakers)
 
 
-def propose_zones(netlist: dict) -> list[dict]:
-    """Propose one bus zone per detected region and retain breaker candidates.
+def _proposal_ct_boundaries(region: Zone) -> set[str]:
+    """Extend a draft to CTs across an unbranched single-breaker bay.
 
-    Nearby breakers are suggestions only; proposals never assign operating
-    loads. Users can configure multiple fault events for a shared region.
+    Consecutive CT groups and closed isolators/junctions may lie on either side
+    of the breaker. Retain the last CT reached, never an isolator or breaker as
+    a substitute boundary. Branches, open devices, a second breaker, protected
+    assets, unnamed terminals and loops stop expansion. This proposes overlap;
+    it does not assign relay cores or change explicit user boundaries.
+    """
+    result = set()
+    for boundary in region.boundary_items:
+        current = boundary
+        visited = {current.instance_id}
+        outer = current.instance_id
+        breakers = 0
+        inward = [w for w in current.connections() if connection_key(w) in region.connection_keys]
+        while len(inward) == 1:
+            entry = inward[0]
+            entry_port = entry.from_port if entry.from_item is current else entry.to_port
+            outward = [w for w in current.connections() if w is not entry]
+            if entry_port is None or len(outward) != 1:
+                break
+            wire = outward[0]
+            exit_port = wire.from_port if wire.from_item is current else wire.to_port
+            other = wire.to_item if wire.from_item is current else wire.from_item
+            typ = kind(other.record)
+            if (exit_port is None or (exit_port == entry_port and kind(current.record) != "junction")
+                    or other.instance_id in visited or is_open_switch(other)):
+                break
+            if typ == "breaker":
+                if breakers:
+                    break
+                breakers += 1
+            elif typ not in {"ct", "disconnect", "mos", "junction"}:
+                break
+            # No through-path is established by a branch or a dangling device.
+            if len(other.connections()) != 2:
+                break
+            ports = [w.from_port if w.from_item is other else w.to_port
+                     for w in other.connections()]
+            if None in ports or (typ != "junction" and len(set(ports)) != 2):
+                break
+            current = other
+            visited.add(current.instance_id)
+            inward = [wire]
+            if typ == "ct":
+                outer = current.instance_id
+        result.add(outer)
+    return result
+
+
+def propose_zones(netlist: dict) -> list[dict]:
+    """Propose asset and terminal-line regions with candidate CT overlap.
+
+    Line terminals get a proposal alongside buses and transformers only when
+    their primary region has CT boundaries and no bus/transformer, and expansion
+    includes a closed breaker. This avoids suggesting a new line event solely
+    because a metering tap can reach a remote bay through a branched bus.
+    A breaker-only drawing retains its fallback proposals.
+    Buses sharing a region get one proposal. Nearby breakers are suggestions
+    only ("candidate_breakers"); proposals never assign operating loads.
+    No proposal is confirmed, no coil current or relay assignment is invented.
     """
     graph = _Graph(netlist)
     primary = graph.primary()
-    result = []
-    bus_regions = []
+    seeds = [i for i in graph.items.values() if kind(i.record) in {"bus", "xfmr_2w", "xfmr_3w"}]
+    line_seeds = []
     for region in primary:
-        buses = sorted(
-            (item for item in region.core_items if kind(item.record) == "bus"),
-            key=lambda item: item.instance_id,
-        )
-        if buses:
-            bus_regions.append((region, buses))
-    for region, buses in bus_regions:
-        seed = buses[0]
-        labels = ", ".join(_label(bus) for bus in buses)
-        result.append({
-            "id": "study-" + _digest(zone_signature(region))[:20],
-            "name": f"{labels} Bus Zone", "kind": "Bus",
-            "seed": seed.instance_id,
-            "candidate_buses": [bus.instance_id for bus in buses],
-            "boundary_cts": sorted(i.instance_id for i in region.boundary_items),
-            "proposal_region": _json(zone_signature(region)),
-            "candidate_breakers": _trip_candidates(graph, region),
-            "actions": [],
-            "confirmed": False,
-        })
-    transformers = sorted(
-        (
-            item for item in graph.items.values()
-            if kind(item.record) in {"xfmr_2w", "xfmr_3w"}
-        ),
-        key=lambda item: item.instance_id,
-    )
-    for seed in transformers:
+        if not region.boundary_items or any(kind(i.record) in {"bus", "xfmr_2w", "xfmr_3w"}
+                                            for i in region.core_items):
+            continue
+        terminals = [i for i in region.core_items if kind(i.record) == "incoming_line"]
+        if not terminals:
+            continue
+        candidate_graph = _Graph(netlist, _proposal_ct_boundaries(region))
+        seed = candidate_graph.items[terminals[0].instance_id]
+        candidate = next((r for r in candidate_graph.primary() if seed in r.core_items), None)
+        if (candidate is not None
+                and not any(kind(i.record) in {"bus", "xfmr_2w", "xfmr_3w"} for i in candidate.core_items)
+                and any(kind(i.record) == "breaker" and not is_open_switch(i) for i in candidate.core_items)):
+            line_seeds.extend(terminals)
+    if not seeds:
+        seeds = [i for i in graph.items.values()
+                 if kind(i.record) == "breaker" and not is_open_switch(i)]
+        # Prefer the actual line endpoint over a separate breaker-only event.
+        line_regions = [r for r in primary if any(i in r.core_items for i in line_seeds)]
+        covered_breakers = set()
+        for region in line_regions:
+            covered_breakers.update(_trip_candidates(graph, region))
+        seeds = [i for i in seeds if i.instance_id not in covered_breakers]
+    seeds.extend(line_seeds)
+    result = []
+    footprints = set()
+    for seed in sorted(seeds, key=lambda i: (kind(i.record) != "bus", i.instance_id)):
         region = next((r for r in primary if seed in r.core_items), None)
         if region is None:
             continue
-        result.append({
+        # Select the first breakers from the original CT partition. Searching
+        # outward again after extending to opposite-side CTs could walk through
+        # a neighboring line node and incorrectly add its next breaker.
+        trip_candidates = _trip_candidates(graph, region)
+        # Neighboring schemes may use CT groups on opposite sides of a breaker.
+        # This candidate expansion retains that overlap for explicit review.
+        boundaries = _proposal_ct_boundaries(region)
+        expanded_graph = _Graph(netlist, boundaries)
+        expanded_seed = expanded_graph.items[seed.instance_id]
+        expanded = next((r for r in expanded_graph.primary() if expanded_seed in r.core_items), None)
+        if expanded is not None:
+            region = expanded
+        category = "Bus" if kind(seed.record) == "bus" else (
+            "Transformer" if kind(seed.record).startswith("xfmr") else "Line")
+        if category == "Transformer":
+            assets = [kind(i.record) for i in region.core_items]
+            if "bus" in assets or sum(t in {"xfmr_2w", "xfmr_3w"} for t in assets) != 1:
+                # Shared bus/transformer topology cannot establish an individual
+                # transformer scheme. Keep the raw region available for review.
+                continue
+        footprint = (category, _digest(zone_signature(region)))
+        if footprint in footprints:
+            continue
+        footprints.add(footprint)
+        proposal = {
             "id": "study-" + _digest(seed.instance_id)[:20],
-            "name": f"{_label(seed)} Transformer Zone", "kind": "Transformer",
+            "name": f"{_label(seed)} {category} Zone", "kind": category,
             "seed": seed.instance_id,
             "boundary_cts": sorted(i.instance_id for i in region.boundary_items),
-            "candidate_breakers": _trip_candidates(graph, region),
+            "candidate_breakers": trip_candidates,
             "actions": [],
             "confirmed": False,
-        })
-    if not bus_regions and not transformers:
-        breakers = sorted(
-            (item for item in graph.items.values() if kind(item.record) == "breaker"),
-            key=lambda item: item.instance_id,
-        )
-        for seed in breakers:
-            region = next((r for r in primary if seed in r.core_items), None)
-            if region is None:
-                continue
-            result.append({
-                "id": "study-" + _digest(seed.instance_id)[:20],
-                "name": f"{_label(seed)} Line Zone", "kind": "Line",
-                "seed": seed.instance_id,
-                "boundary_cts": sorted(i.instance_id for i in region.boundary_items),
-                "candidate_breakers": _trip_candidates(graph, region),
-                "actions": [],
-                "confirmed": False,
+        }
+        if category == "Bus":
+            # One proposal covers every bus sharing the region; the user decides
+            # whether they form one scheme or need separate fault events.
+            buses = sorted((i for i in region.core_items if kind(i.record) == "bus"),
+                           key=lambda item: item.instance_id)
+            proposal.update({
+                "id": "study-" + _digest(zone_signature(region))[:20],
+                "name": ", ".join(_label(bus) for bus in buses) + " Bus Zone",
+                "candidate_buses": [bus.instance_id for bus in buses],
+                "proposal_region": _json(zone_signature(region)),
             })
+        result.append(proposal)
     return result
 
 
@@ -464,20 +542,24 @@ def add_missing_proposals(netlist: dict, zones: list[dict]) -> list[dict]:
     result = copy.deepcopy(zones)
     seeds = {z["seed"] for z in result}
     used_ids = {z["id"] for z in result}
-    bus_region_signatures = set()
-    for zone in result:
-        if zone["kind"] != "Bus":
-            continue
-        region, _ = _resolve_region(netlist, zone)
-        if region is not None:
-            bus_region_signatures.add(_digest(zone_signature(region)))
+    # A bus region is covered once, even when the saved event uses another bus
+    # as its seed or still carries the shared-bus review warning.
+    footprints = set()
+    for existing in result:
+        region, warnings = _resolve_region(netlist, existing)
+        if region is not None and (existing["kind"] == "Bus" or not warnings):
+            footprints.add((existing["kind"], _digest(zone_signature(region))))
     for proposed in propose_zones(netlist):
-        if proposed["kind"] == "Bus":
-            proposed_signature = _digest(proposed["proposal_region"])
-            if proposed_signature in bus_region_signatures:
-                continue
-        elif proposed["seed"] in seeds:
+        if proposed["seed"] in seeds:
             continue
+        region, warnings = _resolve_region(netlist, proposed)
+        footprint = None
+        if region is not None and (proposed["kind"] == "Bus" or not warnings):
+            footprint = (proposed["kind"], _digest(zone_signature(region)))
+        if footprint is not None and footprint in footprints:
+            continue
+        if footprint is not None:
+            footprints.add(footprint)
         base = proposed["id"]
         suffix = 2
         while proposed["id"] in used_ids:
@@ -485,8 +567,6 @@ def add_missing_proposals(netlist: dict, zones: list[dict]) -> list[dict]:
             suffix += 1
         used_ids.add(proposed["id"])
         seeds.add(proposed["seed"])
-        if proposed["kind"] == "Bus":
-            bus_region_signatures.add(_digest(proposed["proposal_region"]))
         result.append(proposed)
     return result
 
@@ -507,53 +587,53 @@ def _evaluate_actions(zone: dict, graph: _Graph, voltage: float) -> tuple[list[d
     for action in zone["actions"]:
         grouped[action["stage"].strip()].append(action)
     if not grouped:
-        return [], ["No operating loads assigned to this zone."]
+        return [], [messages.PROTECTION_STUDY_NO_OPERATING_LOADS_ASSIGNED_TO_THIS_ZONE]
     results = []
     for stage, actions in sorted(grouped.items(), key=lambda pair: _stage_key(pair[0])):
         if not stage:
-            warnings.append("An operating stage is missing.")
+            warnings.append(messages.PROTECTION_STUDY_AN_OPERATING_STAGE_IS_MISSING)
         seen = {}
         scenario = Scenario(f"{zone['name']} / {stage}", voltage)
         by_supply: dict[str, Scenario] = {}
         metadata = []
         for action in actions:
             if "_resolution_error" in action:
-                warnings.append(f"{action['component']}: {action['_resolution_error']}")
+                warnings.append(messages.DIAGNOSTIC_WITH_CONTEXT.format(action['component'], action['_resolution_error']))
                 continue
             ident, key, units = action["component"], action["load"], action["units"]
             supply = action["supply"].strip()
             if not supply:
-                warnings.append(f"{ident}: DC supply assignment is missing.")
+                warnings.append(messages.PROTECTION_STUDY_DC_SUPPLY_ASSIGNMENT_IS_MISSING.format(ident))
                 continue
             physical = _physical_key(action)
             assignment = (key, supply, units)
             if physical in seen:
                 if assignment != seen[physical]:
                     if physical[1] == "motor" and key != seen[physical][0]:
-                        warnings.append(f"{ident}: motor inrush and running current overlap in stage {stage!r}.")
+                        warnings.append(messages.PROTECTION_STUDY_MOTOR_INRUSH_AND_RUNNING_CURRENT_OVERLAP_IN_STAGE.format(ident, stage))
                     else:
-                        warnings.append(f"{ident}: duplicate physical load has inconsistent units or DC supply in {stage!r}.")
+                        warnings.append(messages.PROTECTION_STUDY_DUPLICATE_PHYSICAL_LOAD_HAS_INCONSISTENT_UNITS_OR_DC_SUPPLY.format(ident, stage))
                 else:
-                    warnings.append(f"{ident}: duplicate physical load is assigned more than once in stage {stage!r}.")
+                    warnings.append(messages.PROTECTION_STUDY_DUPLICATE_PHYSICAL_LOAD_IS_ASSIGNED_MORE_THAN_ONCE_IN_STAGE.format(ident, stage))
                 continue
             seen[physical] = assignment
             component = graph.records.get(ident)
             if component is None:
-                warnings.append(f"Operating equipment {ident!r} is missing.")
+                warnings.append(messages.PROTECTION_STUDY_OPERATING_EQUIPMENT_IS_MISSING.format(ident))
                 continue
             if kind(component) in _PASSIVE:
-                warnings.append(f"{ident}: passive equipment cannot supply an operating coil/motor load.")
+                warnings.append(messages.PROTECTION_STUDY_PASSIVE_EQUIPMENT_CANNOT_SUPPLY_AN_OPERATING_COIL_MOTOR_LOAD.format(ident))
                 continue
             value = component.get("properties", {}).get(key)
             if isinstance(value, bool) or not isinstance(value, (int, float)):
-                warnings.append(f"{ident}: {LOADS[key]} current is missing or not numeric.")
+                warnings.append(messages.PROTECTION_STUDY_CURRENT_IS_MISSING_OR_NOT_NUMERIC.format(ident, LOADS[key]))
                 continue
             try:
                 valid = math.isfinite(value) and value > 0 and math.isfinite(value * units)
             except OverflowError:
                 valid = False
             if not valid:
-                warnings.append(f"{ident}: {LOADS[key]} current must be finite and greater than zero.")
+                warnings.append(messages.PROTECTION_STUDY_CURRENT_MUST_BE_FINITE_AND_GREATER_THAN_ZERO.format(ident, LOADS[key]))
                 continue
             load = Load(f"{component.get('label') or ident} - {LOADS[key]}", value, units,
                         note=f"{ident}; {stage}; {supply}")
@@ -566,7 +646,7 @@ def _evaluate_actions(zone: dict, graph: _Graph, voltage: float) -> tuple[list[d
         except OverflowError:
             finite_total = False
         if not finite_total:
-            warnings.append(f"Stage {stage!r}: total current exceeds the supported numeric range.")
+            warnings.append(messages.PROTECTION_STUDY_STAGE_TOTAL_CURRENT_EXCEEDS_THE_SUPPORTED_NUMERIC_RANGE.format(stage))
             continue
         calculated = scenario.calculate()
         for detail, source in zip(calculated["loads"], metadata):
@@ -603,7 +683,7 @@ def evaluate_zones(netlist: dict, zones: list[dict]) -> dict:
                 action.setdefault("supply", "")
                 action["units"] = 1
                 if action["operation"] not in ("device", "all_poles"):
-                    action["_resolution_error"] = "Review this device's operating action."
+                    action["_resolution_error"] = messages.PROTECTION_STUDY_REVIEW_THIS_DEVICE_S_OPERATING_ACTION
     zones = resolved
     voltage = netlist.get("voltage_V", 125.0)
     try:
@@ -612,7 +692,7 @@ def evaluate_zones(netlist: dict, zones: list[dict]) -> dict:
     except OverflowError:
         valid_voltage = False
     if not valid_voltage:
-        raise ValueError("DC voltage must be a finite positive number.")
+        raise ValueError(messages.PROTECTION_STUDY_DC_VOLTAGE_MUST_BE_A_FINITE_POSITIVE_NUMBER)
     current_signature = topology_signature(netlist)
     report = {"complete": False, "zones": [], "warnings": [], "supply_peaks": {},
               "topology_regions": topology_records(graph.primary())}
@@ -625,20 +705,19 @@ def evaluate_zones(netlist: dict, zones: list[dict]) -> dict:
     conflicts = defaultdict(list)
     for physical, supplies in assignments.items():
         if len(supplies) > 1:
-            message = f"{physical[0]} / {physical[1]} has inconsistent DC supply assignments across the study."
+            message = messages.PROTECTION_STUDY_HAS_INCONSISTENT_DC_SUPPLY_ASSIGNMENTS_ACROSS_THE_STUDY.format(physical[0], physical[1])
             for owners in supplies.values():
                 for ident in owners:
                     conflicts[ident].append(message)
     for zone in zones:
         region, warnings = _resolve_region(netlist, zone)
         if not zone["confirmed"]:
-            warnings.append("Confirm this zone's CT boundaries, operating loads, stages, DC supplies and units.")
+            warnings.append(messages.PROTECTION_STUDY_CONFIRM_THIS_ZONE_S_CT_BOUNDARIES_OPERATING_LOADS_STAGES)
         elif zone.get("topology_signature") != current_signature:
-            warnings.append("Reconfirm this zone: connectivity, switching state or breaker settings changed, or its approval predates this detector.")
+            warnings.append(messages.PROTECTION_STUDY_RECONFIRM_THIS_ZONE_CONNECTIVITY_SWITCHING_STATE_OR_BREAKER_SETTINGS)
         original = original_zones[zone["id"]]
         if zone["confirmed"] and zone.get("configuration_signature") != configuration_signature(original):
-            warnings.append("Reconfirm this zone: its saved operating assignments or CT settings changed, "
-                            "or its configuration approval signature is missing.")
+            warnings.append(messages.PROTECTION_STUDY_RECONFIRM_THIS_ZONE_ITS_SAVED_OPERATING_ASSIGNMENTS_OR_CT)
         scenarios, action_warnings = _evaluate_actions(zone, graph, voltage)
         warnings.extend(action_warnings)
         warnings.extend(conflicts[zone["id"]])
@@ -672,9 +751,9 @@ def evaluate_zones(netlist: dict, zones: list[dict]) -> dict:
     uncovered = sorted(i for i, c in graph.records.items()
                        if kind(c) in {"bus", "xfmr_2w", "xfmr_3w"} and i not in covered)
     if uncovered:
-        report["warnings"].append("Protected equipment not covered by a configured zone: " + ", ".join(uncovered))
+        report["warnings"].append(messages.PROTECTION_STUDY_PROTECTED_EQUIPMENT_NOT_COVERED_BY_A_CONFIGURED_ZONE.format(", ".join(uncovered)))
     if not zones:
-        report["warnings"].append("No operating zones configured. Detected topology regions are display-only.")
+        report["warnings"].append(messages.PROTECTION_STUDY_NO_OPERATING_ZONES_CONFIGURED_DETECTED_TOPOLOGY_REGIONS_ARE_DISPLAY)
     report["complete"] = bool(zones) and not report["warnings"] and all(r["complete"] for r in report["zones"])
     if report["complete"]:
         for row in report["zones"]:

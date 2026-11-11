@@ -13,8 +13,13 @@ This main functionalities of this app are as follows:
 
 ## Layouts and properties
 
-Use the header buttons **New Layout**, **Open Layout** (`Ctrl+O`), **Save Layout**
-(`Ctrl+S`), or **Save Layout As** (`Ctrl+Shift+S`). The Project field names
+The top command bar groups controls into **File**, **Edit**, **View**, and
+**Analysis** tabs. File contains **New**, **Open** (`Ctrl+O`), **Save**
+(`Ctrl+S`), **Save As** (`Ctrl+Shift+S`), **Import PDF**, and **Export Results**.
+Edit contains undo/redo, copy/paste, delete, rotate, and component creation.
+View contains the drawing-layer visibility controls, grid snapping, and opacity.
+Analysis contains validation, zone configuration, evaluation, and the expanded
+results view. The Project field names
 the current layout. Layout JSON files preserve equipment definitions, component
 properties, positions, sizes, rotations, bus taps, connections, and grid settings.
 Unsaved changes are checked before closing or replacing a layout.
@@ -33,7 +38,7 @@ nonnegative; bus voltage must be positive or blank. Select one component at a
 time to edit its properties.
 
 Select components in the workspace and press **Ctrl+C**, then **Ctrl+V** to
-duplicate them, or use **Copy** and **Paste** under Quick Actions. Ctrl-click
+duplicate them, or use **Copy** and **Paste** on the Edit tab. Ctrl-click
 to select multiple components. Copies retain electrical properties, breaker
 settings, bus taps, sizes, rotations, and connections between selected components.
 Connections to unselected components are excluded. Each paste is offset and
@@ -46,13 +51,25 @@ be reviewed after pasting. Copy/paste inside text fields still edits text normal
 
 1. Import the one-line PDF and rebuild it with connected equipment. Enter
    the relevant coil and motor currents in the properties panel.
-2. Click **Run Evaluation**. Bus and transformer zone proposals are traced
+2. Click **Run Evaluation**. Bus, transformer, and eligible line/feeder proposals are traced
    through actual wires and junctions, stopping at candidate CT boundaries.
-   Visually crossing wires without a junction are not connected. Line/manual
-   zones can be added explicitly. The selector also shows primary/composite
+   An unbranched path through one closed breaker can extend a proposal to CTs
+   on the opposite side, allowing neighboring schemes to overlap at the breaker.
+   A line terminal must have a CT-bounded region containing a closed breaker
+   after this expansion; metering taps reaching remote bays through branches
+   do not create line events. Separate transformer proposals require separating
+   CT topology, rather than a shared bus/transformer region.
+   Visually crossing wires without a junction are not connected. Additional
+   line/manual zones can be added explicitly. The selector also shows primary/composite
    topology regions, including CT-to-CT conductors. These are display candidates,
    not extra fault events or automatically assigned operating loads.
-3. Click **Configure Protection Zones** above the analysis output. Review each
+   Explicitly open breakers, disconnects, and motor-operated switches separate
+   the regions at their terminals; normally open bypasses do not join bus sections.
+   Missing or unrecognized status values retain the connected behavior. Trip
+   suggestions stop at open switches and omit open breakers. Existing operating
+   assignments remain available for explicit review. Proposals of the same kind
+   covering the same equipment and conductors are shown once.
+3. Click **Configure Zones** on the Analysis tab. Review each
    zone's protected equipment, CT boundaries, and operating-load rows. Only CTs
    checked for that zone act as its boundaries; metering/other CTs can be left
    unchecked. Shared equipment and overlapping zones are allowed. Choose a
@@ -74,6 +91,7 @@ be reviewed after pasting. Copy/paste inside text fields still edits text normal
 6. Check the verification box for each zone after reviewing its assignments,
    then Save. Editing zone settings clears that zone's verification. Wiring,
    equipment, and switch-status changes require reconfirmation. Older layouts
+   approved before the switch-aware detector also require reconfirmation. They
    still open; compatible legacy supply/multiplier settings are carried into
    breaker settings when saving the zone editor. Unsupported legacy multipliers
    are flagged for review rather than silently changed.
@@ -100,9 +118,23 @@ Colored outlines mark the protected equipment and connections; dashed outlines
 indicate zones needing review. **Validate** separately checks drawing connectivity.
 
 Changes to the layout invalidate previous results. Run Evaluation again before
-using **Save Calculation Results** to export a PDF. Draft exports are explicitly
+using **Export Results** on the File tab to export a PDF. Draft exports are explicitly
 marked incomplete. Zone configuration is saved in layout JSON; older layouts
 without zone configuration still open normally.
+
+## Desktop executable
+
+Close the application, then rebuild the Windows executable from the project
+folder. The `package` group installs PyInstaller when needed:
+
+```powershell
+Remove-Item Env:QT_QPA_PLATFORM -ErrorAction SilentlyContinue
+uv run --group package pyinstaller --noconfirm gft-opto.spec
+```
+
+The result is `dist/gft-opto.exe`. A desktop shortcut pointing to that file
+opens the rebuilt version. `uv run gft-opto` runs the source directly and does
+not rebuild the executable.
 
 ## Regression checks
 

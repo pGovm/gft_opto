@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "project": "Ashbottom - PCB13",
+  "pdf": null,
+  "scene_rect": [0,0,3200,2800],
+  "settings": {"grid_visible":true,"grid_opacity":15,"snap":true,"pdf_visible":false},
+  "library": {},
+  "components": [
+    {"id":"breaker_6","symbol":"breaker","name":"PCB13","display_id":"PCB13","properties":{"symbol_type":"breaker"},"position":[1100.0,857.0],"scale":1.0,"rotation":90.0,"ports":{"left":[-32.0,0.0],"right":[32.0,0.0]}},
+    {"id":"bus_1","symbol":"bus","name":"138 kV MAIN BUS SOUTH / BUS 2","display_id":"138 kV MAIN BUS SOUTH / BUS 2","properties":{"symbol_type":"bus"},"position":[1550.0,2450.0],"scale":1.0,"rotation":0.0,"ports":{"left":[-1150.0,0.0],"right":[1150.0,0.0],"tap_2":[-450.0,0.0]}},
+    {"id":"ct_4","symbol":"ct","name":"PCB13 CT-1","display_id":"PCB13 CT-1","properties":{"symbol_type":"ct"},"position":[1100.0,553.0],"scale":1.0,"rotation":90.0,"ports":{"left":[-28.0,0.0],"right":[28.0,0.0]}},
+    {"id":"ct_5","symbol":"ct","name":"PCB13 CT-2","display_id":"PCB13 CT-2","properties":{"symbol_type":"ct"},"position":[1100.0,703.0],"scale":1.0,"rotation":90.0,"ports":{"left":[-28.0,0.0],"right":[28.0,0.0]}},
+    {"id":"ct_7","symbol":"ct","name":"PCB13 CT-3","display_id":"PCB13 CT-3","properties":{"symbol_type":"ct"},"position":[1100.0,1003.0],"scale":1.0,"rotation":90.0,"ports":{"left":[-28.0,0.0],"right":[28.0,0.0]}},
+    {"id":"ct_8","symbol":"ct","name":"PCB13 CT-4","display_id":"PCB13 CT-4","properties":{"symbol_type":"ct"},"position":[1100.0,1153.0],"scale":1.0,"rotation":90.0,"ports":{"left":[-28.0,0.0],"right":[28.0,0.0]}},
+    {"id":"disconnect_3","symbol":"disconnect","name":"PCB13L","display_id":"PCB13L","properties":{"symbol_type":"disconnect"},"position":[1100.0,411.0],"scale":1.0,"rotation":90.0,"ports":{"left":[-36.0,0.0],"right":[36.0,0.0]}},
+    {"id":"disconnect_9","symbol":"disconnect","name":"PCB13B","display_id":"PCB13B","properties":{"symbol_type":"disconnect"},"position":[1100.0,1311.0],"scale":1.0,"rotation":90.0,"ports":{"left":[-36.0,0.0],"right":[36.0,0.0]}},
+    {"id":"incoming_line_2","symbol":"incoming_line","name":"MILL CREEK / VA MANNSLICK","display_id":"MILL CREEK / VA MANNSLICK","properties":{"symbol_type":"incoming_line"},"position":[1100.0,260.0],"scale":1.0,"rotation":0.0,"ports":{"line":[0.0,40.0]}}
+  ],
+  "connections": [
+    ["breaker_6","right","ct_7","left"],
+    ["ct_4","right","ct_5","left"],
+    ["ct_5","right","breaker_6","left"],
+    ["ct_7","right","ct_8","left"],
+    ["ct_8","right","disconnect_9","left"],
+    ["disconnect_3","right","ct_4","left"],
+    ["disconnect_9","right","bus_1","tap_2"],
+    ["incoming_line_2","line","disconnect_3","left"]
+  ],
+  "zones": []
+}

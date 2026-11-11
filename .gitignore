@@ -11,3 +11,6 @@ dist/
 # Python cache folders and compiled files
 __pycache__/
 *.py[cod]
+# Misc folders
+.zone-integration-backups/
+zone-verification-*
