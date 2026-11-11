@@ -14,6 +14,12 @@ from test_protection_study import example
 
 
 def approve(net, zone):
+    if not zone['actions']:
+        zone['actions'] = [
+            {'component': ident, 'load': 'trip_coil_1_a', 'stage': 'Primary trip',
+             'supply': 'DC 1', 'units': 1}
+            for ident in zone.get('candidate_breakers', [])
+        ]
     zone['confirmed'] = True
     zone['topology_signature'] = study.topology_signature(net)
     zone['configuration_signature'] = study.configuration_signature(zone)
@@ -162,11 +168,15 @@ class TeammateMerge(unittest.TestCase):
                 self.assertFalse(result['complete'])
                 self.assertEqual(result['supply_peaks'], {})
 
-    def test_modern_duplicate_rows_count_once_per_stage(self):
+    def test_modern_duplicate_rows_count_once_but_require_review(self):
         net, cb, zone = modern_case()
         zone['actions'].append(copy.deepcopy(zone['actions'][0]))
         approve(net, zone)
-        self.assertEqual(study.evaluate_zones(net, [zone])['supply_peaks']['Battery A']['peak_current_A'], 30)
+        result = study.evaluate_zones(net, [zone])
+        self.assertFalse(result['complete'])
+        self.assertEqual(result['supply_peaks'], {})
+        self.assertEqual(result['zones'][0]['scenarios'][0]['peak_current_A'], 30)
+        self.assertIn('duplicate physical load', ' '.join(result['zones'][0]['warnings']))
 
     def test_new_operations_stay_separate_across_stages(self):
         net, cb, zone = modern_case()

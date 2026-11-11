@@ -64,18 +64,20 @@ class ZoneDialog(QDialog):
                     if value != ""
                 })
         outer = QVBoxLayout(self)
-        guidance = QLabel(
+        self.guidance = QLabel(
             "Detected zones are proposals. Confirm CTs used by each protection scheme and its actual trip actions.\n"
             "Rows with the same stage operate simultaneously; different stages are evaluated separately.\n"
             "Set current basis, mechanisms, pole count and coil DC supplies in the selected breaker's properties.\n"
             "Choose one-pole or all-pole operation here; supply and multiplier are calculated from the breaker.\n"
-            "Detected regions include wire-only and overlapping candidates; selecting one does not assign or confirm operating loads."
+            "Nearby breakers are suggestions only and are not assigned as operating loads.\n"
+            "Detected regions include wire-only and overlapping candidates; selecting one does not confirm operating loads."
         )
-        guidance.setWordWrap(True)
+        self.guidance.setWordWrap(True)
         if conflicts:
-            guidance.setText(guidance.text() + "\nLegacy supply conflicts: " + ", ".join(sorted(conflicts))
+            self.guidance.setText(self.guidance.text() + "\nLegacy supply conflicts: " + ", ".join(sorted(conflicts))
                 + ". Review these breaker's supply settings before confirming.")
-        outer.addWidget(guidance)
+        self._base_guidance = self.guidance.text()
+        outer.addWidget(self.guidance)
         body = QHBoxLayout()
         outer.addLayout(body, 1)
         left = QVBoxLayout()
@@ -218,6 +220,23 @@ class ZoneDialog(QDialog):
         self.loading = True
         try:
             self.zones[self.active]["topology_region"] = copy.deepcopy(region["signature"])
+            self.zones[self.active]["candidate_buses"] = [
+                ident for ident in region["core"]
+                if ident in self.components and kind(self.components[ident]) == "bus"
+            ]
+            proposal = next(
+                (
+                    candidate for candidate in propose_zones(self.netlist)
+                    if candidate.get("proposal_region") == region["signature"]
+                ),
+                None,
+            )
+            if proposal is not None:
+                self.zones[self.active]["candidate_breakers"] = list(
+                    proposal["candidate_breakers"]
+                )
+            else:
+                self.zones[self.active].pop("candidate_breakers", None)
             eligible = [i for i in region["core"] if i in self.components
                         and kind(self.components[i]) not in ("ct", "pt", "ground", "junction")]
             eligible.sort(key=lambda i: (kind(self.components[i]) != "bus", i))
@@ -284,10 +303,46 @@ class ZoneDialog(QDialog):
         self.loading = True
         zone = self.zones[index]
         self.name.setText(zone["name"])
-        self.zone_kind.setCurrentText(zone["kind"])
+        region_signature = zone.get("topology_region") or zone.get("proposal_region")
         match = next((r for r in self.detected_regions
-                      if r["signature"] == zone.get("topology_region")), None)
+                      if r["signature"] == region_signature), None)
         self.region_combo.setCurrentIndex(self.region_combo.findData(match["id"]) if match else 0)
+        candidates = [
+            f"{self.components[ident].get('label') or ident} [{ident}]"
+            for ident in zone.get("candidate_breakers", [])
+            if ident in self.components
+        ]
+        messages = []
+        buses = [
+            f"{self.components[ident].get('label') or ident} [{ident}]"
+            for ident in zone.get("candidate_buses", [])
+            if ident in self.components
+        ]
+        if not buses:
+            selected_region = next(
+                (region for region in self.detected_regions
+                 if region["id"] == self.region_combo.currentData()),
+                None,
+            )
+            if selected_region is not None:
+                buses = [
+                    f"{self.components[ident].get('label') or ident} [{ident}]"
+                    for ident in selected_region["core"]
+                    if ident in self.components and kind(self.components[ident]) == "bus"
+                ]
+        if zone["kind"] == "Bus" and len(buses) > 1:
+            messages.append(
+                "Review required: multiple buses share this detected region "
+                f"({', '.join(buses)}). Topology alone does not determine whether "
+                "they share a protection zone; configure separate fault events if needed."
+            )
+        if candidates:
+            messages.append(
+                "Suggested nearby breakers (not assigned): " + ", ".join(candidates)
+                + ". Add only the operating loads verified for this protection scheme."
+            )
+        self.guidance.setText("\n".join(messages) if messages else self._base_guidance)
+        self.zone_kind.setCurrentText(zone["kind"])
         if zone["seed"] and self.seed.findData(zone["seed"]) < 0:
             self.seed.addItem(f"Missing: {zone['seed']}", zone["seed"])
         self.seed.setCurrentIndex(self.seed.findData(zone["seed"]))

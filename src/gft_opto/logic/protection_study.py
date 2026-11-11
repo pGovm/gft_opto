@@ -149,7 +149,7 @@ def topology_signature(netlist: dict) -> str:
 def configuration_signature(zone: dict) -> str:
     """Prevent a stored confirmation from surviving later assignment edits."""
     return _digest({key: zone.get(key) for key in
-                    ("kind", "seed", "boundary_cts", "actions", "topology_region")})
+                    ("kind", "seed", "boundary_cts", "actions", "topology_region", "candidate_buses")})
 
 
 def _validate_region(signature: Any) -> None:
@@ -330,7 +330,18 @@ def _resolve_region(netlist: dict, zone: dict) -> tuple[Zone | None, list[str]]:
         if len(matches) != 1:
             return None, ["Protected equipment must be inside the region, not an assigned boundary CT."]
         region = matches[0]
-    return region, _geometry_warnings(graph, region, zone)
+    warnings = _geometry_warnings(graph, region, zone)
+    buses = sorted(
+        (item for item in region.core_items if kind(item.record) == "bus"),
+        key=lambda item: item.instance_id,
+    )
+    if zone["kind"] == "Bus" and len(buses) > 1 and not zone["confirmed"]:
+        labels = ", ".join(_label(item) for item in buses)
+        warnings.append(
+            f"Multiple buses share this detected region ({labels}). "
+            "Review whether they share one protection zone or need separate fault events."
+        )
+    return region, warnings
 
 
 def zone_members(netlist: dict, zone: dict) -> tuple[list[str], list[str]]:
@@ -371,33 +382,74 @@ def _trip_candidates(graph: _Graph, region: Zone) -> list[str]:
 
 
 def propose_zones(netlist: dict) -> list[dict]:
-    """Preserve bus/transformer proposals, using the real terminal-aware detector.
+    """Propose one bus zone per detected region and retain breaker candidates.
 
-    A breaker-only drawing gets Line proposals. No proposal is confirmed and no
-    coil current is invented. Users can select any primary/composite conductor
-    region from the dialog and explicitly choose its operating loads.
+    Nearby breakers are suggestions only; proposals never assign operating
+    loads. Users can configure multiple fault events for a shared region.
     """
     graph = _Graph(netlist)
     primary = graph.primary()
-    seeds = [i for i in graph.items.values() if kind(i.record) in {"bus", "xfmr_2w", "xfmr_3w"}]
-    if not seeds:
-        seeds = [i for i in graph.items.values() if kind(i.record) == "breaker"]
     result = []
-    for seed in sorted(seeds, key=lambda i: (kind(i.record) != "bus", i.instance_id)):
+    bus_regions = []
+    for region in primary:
+        buses = sorted(
+            (item for item in region.core_items if kind(item.record) == "bus"),
+            key=lambda item: item.instance_id,
+        )
+        if buses:
+            bus_regions.append((region, buses))
+    for region, buses in bus_regions:
+        seed = buses[0]
+        labels = ", ".join(_label(bus) for bus in buses)
+        result.append({
+            "id": "study-" + _digest(zone_signature(region))[:20],
+            "name": f"{labels} Bus Zone", "kind": "Bus",
+            "seed": seed.instance_id,
+            "candidate_buses": [bus.instance_id for bus in buses],
+            "boundary_cts": sorted(i.instance_id for i in region.boundary_items),
+            "proposal_region": _json(zone_signature(region)),
+            "candidate_breakers": _trip_candidates(graph, region),
+            "actions": [],
+            "confirmed": False,
+        })
+    transformers = sorted(
+        (
+            item for item in graph.items.values()
+            if kind(item.record) in {"xfmr_2w", "xfmr_3w"}
+        ),
+        key=lambda item: item.instance_id,
+    )
+    for seed in transformers:
         region = next((r for r in primary if seed in r.core_items), None)
         if region is None:
             continue
-        category = "Bus" if kind(seed.record) == "bus" else (
-            "Transformer" if kind(seed.record).startswith("xfmr") else "Line")
         result.append({
             "id": "study-" + _digest(seed.instance_id)[:20],
-            "name": f"{_label(seed)} {category} Zone", "kind": category,
+            "name": f"{_label(seed)} Transformer Zone", "kind": "Transformer",
             "seed": seed.instance_id,
             "boundary_cts": sorted(i.instance_id for i in region.boundary_items),
-            "actions": [{"component": ident, "load": "trip_coil_1_a", "stage": "Primary trip",
-                         "supply": "DC 1", "units": 1} for ident in _trip_candidates(graph, region)],
+            "candidate_breakers": _trip_candidates(graph, region),
+            "actions": [],
             "confirmed": False,
         })
+    if not bus_regions and not transformers:
+        breakers = sorted(
+            (item for item in graph.items.values() if kind(item.record) == "breaker"),
+            key=lambda item: item.instance_id,
+        )
+        for seed in breakers:
+            region = next((r for r in primary if seed in r.core_items), None)
+            if region is None:
+                continue
+            result.append({
+                "id": "study-" + _digest(seed.instance_id)[:20],
+                "name": f"{_label(seed)} Line Zone", "kind": "Line",
+                "seed": seed.instance_id,
+                "boundary_cts": sorted(i.instance_id for i in region.boundary_items),
+                "candidate_breakers": _trip_candidates(graph, region),
+                "actions": [],
+                "confirmed": False,
+            })
     return result
 
 
@@ -412,8 +464,19 @@ def add_missing_proposals(netlist: dict, zones: list[dict]) -> list[dict]:
     result = copy.deepcopy(zones)
     seeds = {z["seed"] for z in result}
     used_ids = {z["id"] for z in result}
+    bus_region_signatures = set()
+    for zone in result:
+        if zone["kind"] != "Bus":
+            continue
+        region, _ = _resolve_region(netlist, zone)
+        if region is not None:
+            bus_region_signatures.add(_digest(zone_signature(region)))
     for proposed in propose_zones(netlist):
-        if proposed["seed"] in seeds:
+        if proposed["kind"] == "Bus":
+            proposed_signature = _digest(proposed["proposal_region"])
+            if proposed_signature in bus_region_signatures:
+                continue
+        elif proposed["seed"] in seeds:
             continue
         base = proposed["id"]
         suffix = 2
@@ -422,6 +485,8 @@ def add_missing_proposals(netlist: dict, zones: list[dict]) -> list[dict]:
             suffix += 1
         used_ids.add(proposed["id"])
         seeds.add(proposed["seed"])
+        if proposed["kind"] == "Bus":
+            bus_region_signatures.add(_digest(proposed["proposal_region"]))
         result.append(proposed)
     return result
 
@@ -468,6 +533,8 @@ def _evaluate_actions(zone: dict, graph: _Graph, voltage: float) -> tuple[list[d
                         warnings.append(f"{ident}: motor inrush and running current overlap in stage {stage!r}.")
                     else:
                         warnings.append(f"{ident}: duplicate physical load has inconsistent units or DC supply in {stage!r}.")
+                else:
+                    warnings.append(f"{ident}: duplicate physical load is assigned more than once in stage {stage!r}.")
                 continue
             seen[physical] = assignment
             component = graph.records.get(ident)
@@ -516,8 +583,8 @@ def evaluate_zones(netlist: dict, zones: list[dict]) -> dict:
 
     Each stage is simultaneous within that zone. Different stages and zone
     faults remain separate; each DC supply gets its maximum event current.
-    Exact duplicate load rows count once. Ambiguous, stale or incomplete studies
-    have provisional rows, but no final supply_peaks.
+    Duplicate load rows count once but require review. Ambiguous, stale or
+    incomplete studies have provisional rows, but no final supply_peaks.
     """
     validate_zones(zones)
     graph = _Graph(netlist)

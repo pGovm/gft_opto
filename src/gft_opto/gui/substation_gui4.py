@@ -1344,7 +1344,14 @@ class SubstationGuiMockup(QMainWindow):
                         lines.append(f"    {supply}: {current:g} A")
                     for load in scenario["loads"]:
                         lines.append(f"    {load['name']}: {load['amps_per_unit']:g} A × {load['quantity']} = {load['total_amps']:g} A ({load['supply']})")
-                    all_loads.extend(scenario["loads"])
+                    all_loads.extend(
+                        {
+                            **load,
+                            "zone_id": zone["id"],
+                            "zone_name": zone["name"],
+                        }
+                        for load in scenario["loads"]
+                    )
                 lines.append("")
             lines.append("Detected topology regions (not automatically added to the calculation):")
             for region in report["topology_regions"]:
@@ -1390,11 +1397,14 @@ class SubstationGuiMockup(QMainWindow):
         result = self.last_result
         peak = result.get("peak_current_A", "Not available")
         peak_display = f"{peak:g} A" if isinstance(peak, (int, float)) else str(peak)
-        study_status = "COMPLETE" if result.get("protection_analysis", {}).get("complete") else "INCOMPLETE — provisional study"
+        report = result.get("protection_analysis") or {}
+        study_status = "COMPLETE" if report.get("complete") else "INCOMPLETE — provisional study"
 
         loads = result.get("loads") or []
         load_rows = "".join(
             "<tr>"
+            f"<td>{escape(str(load.get('zone_name', 'Unknown zone')))} "
+            f"({escape(str(load.get('zone_id', 'unknown')))})</td>"
             f"<td>{escape(str(load.get('name', 'Load')))}</td>"
             f"<td>{escape(str(load.get('quantity', 1)))}</td>"
             f"<td>{escape(str(load.get('amps_per_unit', 'N/A')))} A</td>"
@@ -1402,7 +1412,74 @@ class SubstationGuiMockup(QMainWindow):
             f"<td>{escape(str(load.get('note', '')))}</td>"
             "</tr>"
             for load in loads
-        ) or "<tr><td colspan='5'>No loads returned.</td></tr>"
+        ) or "<tr><td colspan='6'>No loads returned.</td></tr>"
+
+        zone_summary_rows = []
+        missing_current_items = []
+        review_zone_items = []
+        for zone in report.get("zones", []):
+            status = "COMPLETE" if zone.get("complete") else "REVIEW REQUIRED — PROVISIONAL"
+            status_class = "complete" if zone.get("complete") else "incomplete"
+            stage_totals = []
+            for scenario in zone.get("scenarios", []):
+                if not scenario.get("loads"):
+                    stage_totals.append(
+                        "<div><b class='incomplete'>Not calculated — no valid loads</b></div>"
+                    )
+                    continue
+                qualifier = "Confirmed" if zone.get("complete") else "PROVISIONAL"
+                stage_totals.append(
+                    f"<div>{escape(str(scenario.get('stage', 'Unspecified stage')))}: "
+                    f"<b class='{status_class}'>{qualifier} "
+                    f"{escape(str(scenario.get('peak_current_A', 'N/A')))} A</b></div>"
+                )
+            total_html = "".join(stage_totals) or "No calculated stage totals"
+            zone_summary_rows.append(
+                "<tr>"
+                f"<td>{escape(str(zone.get('name', 'Unnamed zone')))} "
+                f"({escape(str(zone.get('id', 'unknown')))})</td>"
+                f"<td>{total_html}</td>"
+                f"<td class='{status_class}'><b>{status}</b></td>"
+                "</tr>"
+            )
+            zone_warnings = [str(warning) for warning in zone.get("warnings", [])]
+            if not zone.get("complete"):
+                details = "; ".join(zone_warnings) or "No completion details were returned."
+                review_zone_items.append(
+                    f"<li><b>{escape(str(zone.get('name', 'Unnamed zone')))} "
+                    f"({escape(str(zone.get('id', 'unknown')))}):</b> "
+                    f"{escape(details)}</li>"
+                )
+            for warning in zone_warnings:
+                lowered = warning.lower()
+                if "current" in lowered and (
+                    "missing" in lowered or "not numeric" in lowered or "must be finite" in lowered
+                ):
+                    missing_current_items.append(
+                        f"<li><b>{escape(str(zone.get('name', 'Unnamed zone')))}:</b> "
+                        f"{escape(warning)}</li>"
+                    )
+        zone_summary_html = "".join(zone_summary_rows) or (
+            "<tr><td colspan='3'>No configured zones.</td></tr>"
+        )
+        missing_current_html = "".join(dict.fromkeys(missing_current_items)) or (
+            "<li>None reported.</li>"
+        )
+        review_zone_html = "".join(review_zone_items) or "<li>None.</li>"
+        other_warnings = [str(warning) for warning in report.get("warnings", [])]
+        other_warning_html = "".join(
+            f"<li>{escape(warning)}</li>" for warning in other_warnings
+        ) or "<li>None.</li>"
+
+        topology_regions = report.get("topology_regions", [])
+        topology_rows = "".join(
+            "<tr>"
+            f"<td>{escape(str(region.get('name', 'Unnamed region')))}</td>"
+            f"<td>{'Enclosed' if region.get('enclosed_by') else 'Outermost'}</td>"
+            f"<td>{len(region.get('connections', []))}</td>"
+            "</tr>"
+            for region in topology_regions
+        ) or "<tr><td colspan='3'>No topology regions detected.</td></tr>"
 
         steps = result.get("calculation_steps") or []
 
@@ -1418,7 +1495,16 @@ class SubstationGuiMockup(QMainWindow):
             else "<li>The evaluator did not return individual calculation steps.</li>"
         )
 
-        output_html = escape(self.output_box.toPlainText())
+        output_text = self.output_box.toPlainText()
+        topology_marker = "Detected topology regions (not automatically added to the calculation):"
+        peak_marker = "Peak per supply among confirmed, complete configured zones:"
+        before_topology, topology_separator, after_topology = output_text.partition(topology_marker)
+        if topology_separator:
+            _, peak_separator, after_peak = after_topology.partition(peak_marker)
+            output_text = before_topology + (
+                f"\n\n{peak_marker}{after_peak}" if peak_separator else ""
+            )
+        output_html = escape(output_text)
 
         html = f"""
         <html>
@@ -1427,6 +1513,7 @@ class SubstationGuiMockup(QMainWindow):
             body {{ font-family: sans-serif; font-size: 10pt; }}
             h1, h2 {{ color: #006A4E; }}
             table {{ border-collapse: collapse; width: 100%; }}
+            .summary {{ font-size: 9pt; }}
             th, td {{
                 border: 1px solid #cbd2d9;
                 padding: 6px;
@@ -1435,6 +1522,9 @@ class SubstationGuiMockup(QMainWindow):
             }}
             th {{ background: #e8f1ed; }}
             tr {{ page-break-inside: avoid; }}
+            .complete {{ color: #176b3a; }}
+            .incomplete {{ color: #9a4f00; background: #fff3cd; }}
+            .appendix {{ page-break-before: always; }}
             pre {{ white-space: pre-wrap; }}
           </style>
         </head>
@@ -1459,10 +1549,27 @@ class SubstationGuiMockup(QMainWindow):
             ({escape(str(result.get('worst_case_supply') or 'not available'))})
           </p>
 
+          <h2>Zone Summary</h2>
+          <p>Stage totals are shown separately; stages and separate zone faults are not added together.</p>
+          <table class="summary">
+            <tr><th>Zone</th><th>Per-stage total across assigned supplies</th><th>Status</th></tr>
+            {zone_summary_html}
+          </table>
+
+          <h2>Warnings Summary</h2>
+          <h3>Zones requiring review</h3>
+          <ul>{review_zone_html}</ul>
+          <h3>Missing or invalid currents</h3>
+          <ul>{missing_current_html}</ul>
+          <h3>Other study warnings</h3>
+          <ul>{other_warning_html}</ul>
+
+          <div style="page-break-before: always;">
           <h2>Loads</h2>
 
           <table>
             <tr>
+                <th>Zone</th>
                 <th>Load</th>
                 <th>Quantity</th>
                 <th>Current per unit</th>
@@ -1482,6 +1589,16 @@ class SubstationGuiMockup(QMainWindow):
           <h2>Evaluation Output</h2>
 
           <pre>{output_html}</pre>
+          </div>
+
+          <div class="appendix">
+            <h1>Appendix: Detected Topology Regions</h1>
+            <p>Topology detection is retained for reference and is not automatically added to the protection calculation.</p>
+            <table>
+              <tr><th>Region</th><th>Relationship</th><th>Conductors</th></tr>
+              {topology_rows}
+            </table>
+          </div>
         </body>
         </html>
         """

@@ -62,6 +62,12 @@ def fixture():
 
 def confirmed(net, zone):
     value = copy.deepcopy(zone)
+    if not value["actions"]:
+        value["actions"] = [
+            {"component": ident, "load": "trip_coil_1_a", "stage": "Primary trip",
+             "supply": "DC 1", "units": 1}
+            for ident in value.get("candidate_breakers", [])
+        ]
     value['confirmed'] = True
     value['topology_signature'] = study.topology_signature(net)
     value['configuration_signature'] = study.configuration_signature(value)
@@ -207,6 +213,11 @@ class CrossModuleContracts(unittest.TestCase):
         scene, _, _ = fixture()
         net = calculator.netlist_from_scene(scene)
         zone = study.propose_zones(net)[0]
+        zone['actions'] = [
+            {'component': ident, 'load': 'trip_coil_1_a', 'stage': 'Primary trip',
+             'supply': 'DC 1', 'units': 1}
+            for ident in zone['candidate_breakers']
+        ]
         zone['actions'][1]['supply'] = 'DC 2'
         zone['actions'].append({'component': 'cb1', 'load': 'close_coil_a', 'stage': 'Reclose', 'supply': 'DC 1', 'units': 3})
         report = study.evaluate_zones(net, [confirmed(net, zone)])
@@ -224,6 +235,11 @@ class CrossModuleContracts(unittest.TestCase):
         net = calculator.netlist_from_scene(scene)
         zone = study.propose_zones(net)[0]
         zone['user_note'] = 'Do not lose this note'
+        zone['actions'] = [
+            {'component': ident, 'load': 'trip_coil_1_a', 'stage': 'Primary trip',
+             'supply': 'DC 1', 'units': 1}
+            for ident in zone['candidate_breakers']
+        ]
         zone['actions'][0]['note'] = 'Operator note'
         data = json.loads(json.dumps([confirmed(net, zone)]))
         study.validate_zones(data)

@@ -195,13 +195,35 @@ class GuiWorkflows(unittest.TestCase):
             w._on_save_results_clicked()
         self.assertGreater(path.stat().st_size, 0)
         with pymupdf.open(path) as document:
-            text = "".join(page.get_text() for page in document)
+            pages = [page.get_text() for page in document]
+        text = "".join(pages)
         self.assertIn("18", text)
+        self.assertIn("Zone Summary", pages[0])
+        self.assertIn("Warnings Summary", pages[0])
+        self.assertIn("bus_zone", text)
+        self.assertIn("Primary trip: Confirmed 18.0 A", text)
+        self.assertIn("Appendix: Detected Topology Regions", pages[-1])
         self.assertIn("Results saved:", w.footer_status_label.text())
         bad_path = Path(self.temp.name) / "missing" / "results.pdf"
         with patch("gft_opto.gui.substation_gui4.QFileDialog.getSaveFileName", return_value=(str(bad_path), "")), patch.object(QMessageBox, "critical") as error:
             w._on_save_results_clicked()
             error.assert_called_once()
+
+    def test_incomplete_zone_pdf_calls_out_provisional_values_and_missing_currents(self):
+        w = self.window
+        breaker = self.add_breaker()
+        self.assign_test_zone(breaker)
+        w._on_run_evaluation_clicked()
+        path = Path(self.temp.name) / "incomplete-results.pdf"
+        with patch("gft_opto.gui.substation_gui4.QFileDialog.getSaveFileName", return_value=(str(path), "")):
+            w._on_save_results_clicked()
+        with pymupdf.open(path) as document:
+            pages = [page.get_text() for page in document]
+        self.assertIn("REVIEW REQUIRED", pages[0])
+        self.assertIn("Missing or invalid currents", pages[0])
+        self.assertIn("current is missing", pages[0])
+        self.assertIn("Test Bus Zone", pages[0])
+        self.assertIn("Not calculated", pages[0])
 
     def test_netlist_pdf_export(self):
         w = self.window

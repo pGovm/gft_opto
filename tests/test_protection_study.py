@@ -22,6 +22,30 @@ def example():
             wire("ct2", "right", "cb2", "left"), wire("cb2", "right", "g2", "node")]}
 
 
+def shared_bus_region():
+    return {
+        "components": [
+            {"id": "bus_a", "type": "bus", "label": "Bus A", "properties": {}},
+            {"id": "bus_b", "type": "bus", "label": "Bus B", "properties": {}},
+            {"id": "ct_a", "type": "ct", "properties": {}},
+            {"id": "ct_b", "type": "ct", "properties": {}},
+            {"id": "cb_a", "type": "breaker", "properties": {"trip_coil_1_a": 10}},
+            {"id": "cb_b", "type": "breaker", "properties": {"trip_coil_1_a": 20}},
+            {"id": "g_a", "type": "ground", "properties": {}},
+            {"id": "g_b", "type": "ground", "properties": {}},
+        ],
+        "connections": [
+            ["bus_a", "right", "bus_b", "left"],
+            ["bus_a", "left", "ct_a", "left"],
+            ["ct_a", "right", "cb_a", "right"],
+            ["cb_a", "left", "g_a", "node"],
+            ["bus_b", "right", "ct_b", "left"],
+            ["ct_b", "right", "cb_b", "right"],
+            ["cb_b", "left", "g_b", "node"],
+        ],
+    }
+
+
 def approve(netlist, zone):
     """Model explicit user review after intentional setup changes."""
     zone["confirmed"] = True
@@ -31,7 +55,13 @@ def approve(netlist, zone):
 
 
 def confirmed(netlist):
-    return approve(netlist, propose_zones(netlist)[0])
+    zone = propose_zones(netlist)[0]
+    zone["actions"] = [
+        {"component": ident, "load": "trip_coil_1_a", "stage": "Primary trip",
+         "supply": "DC 1", "units": 1}
+        for ident in zone["candidate_breakers"]
+    ]
+    return approve(netlist, zone)
 
 
 class ProtectionZones(unittest.TestCase):
@@ -39,7 +69,8 @@ class ProtectionZones(unittest.TestCase):
         netlist = example()
         zone = propose_zones(netlist)[0]
         self.assertEqual(set(zone["boundary_cts"]), {"ct1", "ct2"})
-        self.assertEqual({a["component"] for a in zone["actions"]}, {"cb1", "cb2"})
+        self.assertEqual(zone["candidate_breakers"], ["cb1", "cb2"])
+        self.assertEqual(zone["actions"], [])
         members, warnings = zone_members(netlist, zone)
         self.assertEqual(set(members), {"bus", "ct1", "ct2"})
         self.assertFalse(warnings)
@@ -67,14 +98,74 @@ class ProtectionZones(unittest.TestCase):
         self.assertEqual(report["supply_peaks"]["DC 1"]["peak_current_A"], 36)
         self.assertEqual(report["supply_peaks"]["DC 2"]["peak_current_A"], 24)
 
-    def test_duplicate_coil_counted_once(self):
+    def test_duplicate_coil_in_same_stage_is_counted_once_and_requires_review(self):
         netlist = example()
         zone = confirmed(netlist)
         zone["actions"].append(copy.deepcopy(zone["actions"][0]))
         approve(netlist, zone)
-        self.assertEqual(evaluate_zones(netlist, [zone])["supply_peaks"]["DC 1"]["peak_current_A"], 30)
+        report = evaluate_zones(netlist, [zone])
+        self.assertFalse(report["complete"])
+        self.assertEqual(report["supply_peaks"], {})
+        self.assertIn("duplicate physical load", " ".join(report["zones"][0]["warnings"]))
+        self.assertEqual(
+            report["zones"][0]["scenarios"][0]["peak_current_A"],
+            30,
+        )
         zone["actions"][-1]["supply"] = "DC 2"
         self.assertFalse(evaluate_zones(netlist, [zone])["complete"])
+
+    def test_same_load_in_separate_stages_is_not_a_duplicate(self):
+        netlist = example()
+        zone = confirmed(netlist)
+        second_stage = copy.deepcopy(zone["actions"][0])
+        second_stage["stage"] = "Breaker failure"
+        zone["actions"].append(second_stage)
+        approve(netlist, zone)
+        report = evaluate_zones(netlist, [zone])
+        self.assertTrue(report["complete"])
+        self.assertEqual(len(report["zones"][0]["scenarios"]), 2)
+
+    def test_multiple_buses_in_one_region_get_one_unconfirmed_proposal(self):
+        netlist = shared_bus_region()
+        proposals = propose_zones(netlist)
+        self.assertEqual(len(proposals), 1)
+        self.assertEqual(proposals[0]["seed"], "bus_a")
+        self.assertEqual(proposals[0]["name"], "Bus A, Bus B Bus Zone")
+        self.assertEqual(proposals[0]["actions"], [])
+        self.assertEqual(proposals[0]["candidate_breakers"], ["cb_a", "cb_b"])
+        self.assertIn("Multiple buses share this detected region", " ".join(
+            zone_members(netlist, proposals[0])[1]
+        ))
+        proposals[0]["actions"] = [
+            {"component": ident, "load": "trip_coil_1_a", "stage": "Primary trip",
+             "supply": "DC 1", "units": 1}
+            for ident in proposals[0]["candidate_breakers"]
+        ]
+        report = evaluate_zones(netlist, proposals)
+        self.assertFalse(report["complete"])
+        self.assertEqual(report["zones"][0]["scenarios"][0]["peak_current_A"], 30)
+        self.assertIn("Multiple buses share this detected region", " ".join(
+            report["zones"][0]["warnings"]
+        ))
+
+    def test_multiple_confirmed_fault_events_can_share_a_bus_region(self):
+        netlist = shared_bus_region()
+        proposal = propose_zones(netlist)[0]
+        events = []
+        for ident, seed, breaker in (
+            ("event_a", "bus_a", "cb_a"),
+            ("event_b", "bus_b", "cb_b"),
+        ):
+            event = copy.deepcopy(proposal)
+            event.update(id=ident, name=f"{seed} fault", seed=seed, kind="Manual")
+            event["actions"] = [
+                {"component": breaker, "load": "trip_coil_1_a", "stage": "Primary trip",
+                 "supply": "DC 1", "units": 1}
+            ]
+            events.append(approve(netlist, event))
+        report = evaluate_zones(netlist, events)
+        self.assertEqual(len(report["zones"]), 2)
+        self.assertTrue(all(row["complete"] for row in report["zones"]))
 
     def test_overlapping_zone_faults_not_added(self):
         netlist = example()

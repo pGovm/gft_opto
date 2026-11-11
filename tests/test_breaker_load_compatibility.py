@@ -33,10 +33,11 @@ def approve(netlist, zone):
 
 def confirmed(netlist):
     zone = propose_zones(netlist)[0]
-    # Keep these legacy fixtures as backwards-compatibility coverage.
-    for action in zone["actions"]:
-        action.pop("operation", None)
-        action.update(supply="DC 1", units=1)
+    zone["actions"] = [
+        {"component": ident, "load": "trip_coil_1_a", "stage": "Primary trip",
+         "supply": "DC 1", "units": 1}
+        for ident in zone["candidate_breakers"]
+    ]
     zone["confirmed"] = True
     zone["topology_signature"] = topology_signature(netlist)
     zone["configuration_signature"] = configuration_signature(zone)
@@ -48,7 +49,8 @@ class ProtectionZones(unittest.TestCase):
         netlist = example()
         zone = propose_zones(netlist)[0]
         self.assertEqual(set(zone["boundary_cts"]), {"ct1", "ct2"})
-        self.assertEqual({a["component"] for a in zone["actions"]}, {"cb1", "cb2"})
+        self.assertEqual(zone["candidate_breakers"], ["cb1", "cb2"])
+        self.assertEqual(zone["actions"], [])
         members, warnings = zone_members(netlist, zone)
         self.assertEqual(set(members), {"bus", "ct1", "ct2"})
         self.assertFalse(warnings)
@@ -81,7 +83,11 @@ class ProtectionZones(unittest.TestCase):
         zone = confirmed(netlist)
         zone["actions"].append(copy.deepcopy(zone["actions"][0]))
         approve(netlist, zone)
-        self.assertEqual(evaluate_zones(netlist, [zone])["supply_peaks"]["DC 1"]["peak_current_A"], 30)
+        report = evaluate_zones(netlist, [zone])
+        self.assertFalse(report["complete"])
+        self.assertEqual(report["supply_peaks"], {})
+        self.assertEqual(report["zones"][0]["scenarios"][0]["peak_current_A"], 30)
+        self.assertIn("duplicate physical load", " ".join(report["zones"][0]["warnings"]))
         zone["actions"][-1]["supply"] = "DC 2"
         self.assertFalse(evaluate_zones(netlist, [zone])["complete"])
 
