@@ -32,6 +32,7 @@ from gft_opto.gui.symbols import (
 from gft_opto.logic.protection_study import topology_signature, configuration_signature
 from gft_opto.gui.zone_dialog import ZoneDialog
 from gft_opto.gui.workspace import COMPONENT_CLIPBOARD_MIME
+from gft_opto.logic.netlist_manager import build_netlist, export_netlist_json
 
 
 class GuiWorkflows(unittest.TestCase):
@@ -238,13 +239,123 @@ class GuiWorkflows(unittest.TestCase):
             w._on_save_results_clicked()
         self.assertGreater(path.stat().st_size, 0)
         with pymupdf.open(path) as document:
-            text = "".join(page.get_text() for page in document)
+            pages = [page.get_text() for page in document]
+        text = "".join(pages)
         self.assertIn("18", text)
+        self.assertIn("Zone Summary", pages[0])
+        self.assertIn("Warnings Summary", pages[0])
+        self.assertIn("bus_zone", text)
+        self.assertIn("Primary trip: Confirmed 18.0 A", text)
+        self.assertIn("Appendix: Detected Topology Regions", pages[-1])
         self.assertIn("Results saved:", w.footer_status_label.text())
         bad_path = Path(self.temp.name) / "missing" / "results.pdf"
         with patch("gft_opto.gui.substation_gui4.QFileDialog.getSaveFileName", return_value=(str(bad_path), "")), patch.object(QMessageBox, "critical") as error:
             w._on_save_results_clicked()
             error.assert_called_once()
+
+    def test_incomplete_zone_pdf_calls_out_provisional_values_and_missing_currents(self):
+        w = self.window
+        breaker = self.add_breaker()
+        self.assign_test_zone(breaker)
+        w._on_run_evaluation_clicked()
+        path = Path(self.temp.name) / "incomplete-results.pdf"
+        with patch("gft_opto.gui.substation_gui4.QFileDialog.getSaveFileName", return_value=(str(path), "")):
+            w._on_save_results_clicked()
+        with pymupdf.open(path) as document:
+            pages = [page.get_text() for page in document]
+        self.assertIn("REVIEW REQUIRED", pages[0])
+        self.assertIn("Missing or invalid currents", pages[0])
+        self.assertIn("current is missing", pages[0])
+        self.assertIn("Test Bus Zone", pages[0])
+        self.assertIn("Not calculated", pages[0])
+
+    def test_netlist_pdf_export(self):
+        w = self.window
+        self.add_breaker()
+        path = Path(self.temp.name) / "netlist.pdf"
+        with patch("gft_opto.gui.substation_gui4.QFileDialog.getSaveFileName", return_value=(str(path), "")):
+            w._on_save_netlist_pdf()
+        self.assertGreater(path.stat().st_size, 0)
+        with pymupdf.open(path) as document:
+            text = "".join(page.get_text() for page in document)
+        self.assertIn("Netlist:", text)
+        self.assertIn("Components", text)
+        self.assertIn("Netlist PDF saved:", w.footer_status_label.text())
+
+    def test_netlist_json_import_rebuilds_diagram(self):
+        w = self.window
+        breaker = self.add_breaker()
+        breaker.setPos(320, 460)
+        breaker.set_rotation_deg(90)
+        breaker.properties["trip_coil_1_a"] = 12
+        expected_position = breaker.pos()
+        bus = BusItem()
+        tap, _ = bus.add_tap(0)
+        bus.setPos(700, 500)
+        w.workspace_scene.addItem(bus)
+        w.workspace_scene.addItem(
+            ConnectionItem(breaker, "left", bus, tap)
+        )
+        w.project_box.setText("Imported Project")
+        path = Path(self.temp.name) / "netlist.json"
+        export_netlist_json(build_netlist(w.workspace_scene, "Imported Project"), path)
+
+        with patch.object(w, "_confirm_discard", return_value=True), patch.object(
+            QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes
+        ):
+            self.assertTrue(w.import_netlist_json(str(path)))
+
+        imported = next(
+            item for item in w.workspace_scene.items()
+            if isinstance(item, CircuitBreakerItem)
+        )
+        self.assertEqual(w.project_box.text(), "Imported Project")
+        self.assertIn("*", w.windowTitle())
+        self.assertEqual(imported.pos(), expected_position)
+        self.assertEqual(imported.rotation_deg, 90)
+        self.assertEqual(imported.properties["trip_coil_1_a"], 12)
+        imported_bus = next(
+            item for item in w.workspace_scene.items() if isinstance(item, BusItem)
+        )
+        self.assertIn(tap, imported_bus.ports())
+        self.assertEqual(
+            sum(isinstance(item, ConnectionItem) for item in w.workspace_scene.items()),
+            1,
+        )
+
+    def test_invalid_netlist_json_keeps_current_diagram(self):
+        w = self.window
+        breaker = self.add_breaker()
+        original_scene = w.workspace_scene
+        netlist = build_netlist(original_scene, "Invalid Project")
+        netlist["connections"] = [{
+            "id": "connection_1",
+            "from": {"component": netlist["components"][0]["id"], "port": "left"},
+            "to": {"component": netlist["components"][0]["id"], "port": "unknown"},
+        }]
+        path = Path(self.temp.name) / "invalid_netlist.json"
+        export_netlist_json(netlist, path)
+
+        with patch.object(QMessageBox, "critical") as error:
+            self.assertFalse(w.import_netlist_json(str(path)))
+        error.assert_called_once()
+        self.assertIs(w.workspace_scene, original_scene)
+        self.assertIn(breaker, w.workspace_scene.items())
+
+    def test_unknown_netlist_component_type_is_rejected(self):
+        w = self.window
+        breaker = self.add_breaker()
+        original_scene = w.workspace_scene
+        netlist = build_netlist(original_scene, "Unsupported Project")
+        netlist["components"][0]["type"] = "unknown_equipment"
+        path = Path(self.temp.name) / "unsupported_netlist.json"
+        export_netlist_json(netlist, path)
+
+        with patch.object(QMessageBox, "critical") as error:
+            self.assertFalse(w.import_netlist_json(str(path)))
+        self.assertIn("unsupported type", error.call_args.args[2])
+        self.assertIs(w.workspace_scene, original_scene)
+        self.assertIn(breaker, w.workspace_scene.items())
 
     def test_multi_selection_and_initial_grid(self):
         w = self.window
@@ -263,7 +374,7 @@ class GuiWorkflows(unittest.TestCase):
         self.assertEqual([w.ribbon.tabText(i).replace("&", "") for i in range(w.ribbon.count())],
                          ["File", "Edit", "View", "Analysis"])
         pages = ((w.new_layout_btn, w.open_layout_btn, w.save_layout_btn, w.save_as_btn,
-                  w.load_btn, w.save_results_btn),
+                  w.load_btn, w.import_netlist_btn, w.save_results_btn),
                  (w.undo_btn, w.redo_btn, w.copy_btn, w.paste_btn, w.delete_btn, w.rotate_btn,
                   w.create_component_btn),
                  (w.grid_show_cb, w.pdf_show_cb, w.circuit_show_cb, w.zones_show_cb,

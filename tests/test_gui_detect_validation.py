@@ -37,5 +37,42 @@ class GuiDetectValidation(unittest.TestCase):
             dialog.deleteLater()
             self.app.processEvents()
 
+    def test_shared_bus_region_is_explicitly_flagged_in_zone_editor(self):
+        netlist = {
+            'components': [
+                {'id': 'bus1', 'type': 'bus', 'label': 'Bus 1', 'properties': {}},
+                {'id': 'bus2', 'type': 'bus', 'label': 'Bus 2', 'properties': {}},
+                {'id': 'ct1', 'type': 'ct', 'properties': {}},
+                {'id': 'ct2', 'type': 'ct', 'properties': {}},
+                {'id': 'cb1', 'type': 'breaker', 'properties': {'trip_coil_1_a': 10}},
+                {'id': 'cb2', 'type': 'breaker', 'properties': {'trip_coil_1_a': 20}},
+                {'id': 'g1', 'type': 'ground', 'properties': {}},
+                {'id': 'g2', 'type': 'ground', 'properties': {}},
+            ],
+            'connections': [
+                ['bus1', 'right', 'bus2', 'left'],
+                ['bus1', 'left', 'ct1', 'left'],
+                ['ct1', 'right', 'cb1', 'right'],
+                ['cb1', 'left', 'g1', 'node'],
+                ['bus2', 'right', 'ct2', 'left'],
+                ['ct2', 'right', 'cb2', 'right'],
+                ['cb2', 'left', 'g2', 'node'],
+            ],
+        }
+        dialog=ZoneDialog(netlist, propose_zones(netlist))
+        try:
+            self.assertEqual(dialog.zone_list.count(), 1)
+            self.assertIn('multiple buses share this detected region',
+                          dialog.guidance.text().lower())
+            self.assertIn('Bus 1', dialog.guidance.text())
+            self.assertIn('Bus 2', dialog.guidance.text())
+            self.assertIn('suggested nearby breakers (not assigned)',
+                          dialog.guidance.text().lower())
+            self.assertEqual(dialog.actions.rowCount(), 0)
+        finally:
+            dialog.reject()
+            dialog.deleteLater()
+            self.app.processEvents()
+
 if __name__=='__main__':
     unittest.main(verbosity=2)

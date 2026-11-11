@@ -16,6 +16,13 @@ def wire(a, b, ap="right", bp="left"):
     return {"from_id": a, "from_port": ap, "to_id": b, "to_port": bp}
 
 
+def assign_candidates(zone):
+    """Proposals only suggest breakers; assign them as the reviewed trip loads."""
+    zone["actions"] = [{"component": ident, "load": "trip_coil_1_a", "stage": "Primary trip",
+                        "supply": "DC 1", "units": 1} for ident in zone["candidate_breakers"]]
+    return zone
+
+
 def station():
     net = {"components": [component("bus", "bus")], "connections": []}
     for index, current in ((1, 10), (2, 20)):
@@ -47,13 +54,15 @@ class SchemeProposals(unittest.TestCase):
             self.assertIn(f"cb-{index}", members)
             self.assertNotIn("bus", members)
             self.assertNotIn(f"cb-{3-index}", members)
-            self.assertEqual([a["component"] for a in line["actions"]], [f"cb-{index}"])
+            self.assertEqual(line["candidate_breakers"], [f"cb-{index}"])
+            self.assertEqual(line["actions"], [])
         self.assertTrue(all(not z["confirmed"] for z in zones))
 
     def test_separate_faults_keep_correct_momentary_peaks(self):
         net = station()
         zones = propose_zones(net)
         for zone in zones:
+            assign_candidates(zone)
             zone["confirmed"] = True
             zone["topology_signature"] = topology_signature(net)
             zone["configuration_signature"] = configuration_signature(zone)
@@ -75,8 +84,8 @@ class SchemeProposals(unittest.TestCase):
             net["connections"].extend(wire(a, b) for a, b in zip(chain, chain[1:]))
         zones = propose_zones(net)
         self.assertEqual(len(zones), 3)
-        actions = {z["seed"]: {a["component"] for a in z["actions"]} for z in zones}
-        self.assertEqual(actions, {"bus": {"cb-1", "cb-3"}, "line-a": {"cb-1", "cb-2"},
+        candidates = {z["seed"]: set(z["candidate_breakers"]) for z in zones}
+        self.assertEqual(candidates, {"bus": {"cb-1", "cb-3"}, "line-a": {"cb-1", "cb-2"},
                                    "line-b": {"cb-2", "cb-3"}})
 
     def test_bus_tie_schemes_overlap_at_closed_breaker(self):
@@ -119,7 +128,7 @@ class SchemeProposals(unittest.TestCase):
         bus = next(z for z in zones if z["kind"] == "Bus")
         self.assertIn("bus-ct-1", bus["boundary_cts"])
         self.assertNotIn("line-ct-1", bus["boundary_cts"])
-        self.assertEqual([a["component"] for a in bus["actions"]], ["cb-2"])
+        self.assertEqual(bus["candidate_breakers"], ["cb-2"])
         self.assertFalse(any(z["seed"] == "line-1" for z in zones))
 
     def test_no_line_proposal_for_a_terminal_already_in_a_bus_region(self):

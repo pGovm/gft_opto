@@ -20,7 +20,7 @@ import copy
 from html import escape
 
 import pymupdf
-from PySide6.QtCore import Qt, QByteArray, QMimeData, QRectF
+from PySide6.QtCore import Qt, QByteArray, QMimeData, QPointF, QRectF
 from PySide6.QtGui import (
     QAction, QColor, QPen, QBrush, QPalette, QPainterPath, QPainterPathStroker,
     QDrag, QImage, QKeySequence, QPixmap, QTextDocument, QUndoStack,
@@ -53,6 +53,7 @@ from gft_opto.gui.symbols import (
     ConnectionItem,
     CurrentTransformerItem,
     CustomComponentItem,
+    JunctionItem,
     OneLineSymbolItem,
     make_user_equipment,
 )
@@ -69,6 +70,11 @@ from gft_opto.logic.breaker_settings import breaker_settings, SETTING_KEYS
 from pathlib import Path
 from collections import defaultdict
 
+from gft_opto.logic.netlist_manager import (
+    build_netlist,
+    export_netlist_json,
+    load_netlist_json,
+)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -411,7 +417,9 @@ class SubstationGuiMockup(QMainWindow):
             ("save_layout", "Save Layout", "Save", "Ctrl+S", self.save_layout),
             ("save_as", "Save Layout As…", "Save As", "Ctrl+Shift+S", lambda: self.save_layout(save_as=True)),
             ("import_pdf", "Import PDF", "Import PDF", None, self.on_import_pdf_clicked),
-            ("export_results", "Save Calculation Results", "Export Results", None, self._on_save_results_clicked),
+            ("import_netlist", "Import Netlist JSON", "Import Netlist", None, self.import_netlist_json),
+            ("export_results", "Save Calculation PDF", "Export Results", None, self._on_save_results_clicked),
+            ("save_netlist_pdf", "Save Netlist PDF", "Netlist PDF", None, self._on_save_netlist_pdf),
             ("copy", "Copy Selected Components", "Copy", None, self.workspace_view.copy_selected),
             ("paste", "Paste Components", "Paste", None, self.workspace_view.paste_components),
             ("delete", "Delete Selected", "Delete", None, self.workspace_view.delete_selected),
@@ -431,6 +439,9 @@ class SubstationGuiMockup(QMainWindow):
             setattr(self, name + "_action", action)
             self.addAction(action)
         self.export_results_action.setEnabled(False)
+        self.import_netlist_action.setToolTip(
+            "Replace the current drawing with a validated netlist JSON file"
+        )
         self.copy_action.setToolTip("Copy selected components (Ctrl+C in workspace)")
         self.paste_action.setToolTip("Paste components (Ctrl+V in workspace)")
 
@@ -551,6 +562,126 @@ class SubstationGuiMockup(QMainWindow):
         except Exception as error:
             QMessageBox.critical(self, messages.SUBSTATION_GUI4_OPEN_FAILED, messages.SUBSTATION_GUI4_COULD_NOT_OPEN_THE_LAYOUT.format(error))
             return False
+        
+# import JSON netlist file function 
+    def import_netlist_json(self, path=None):
+        if not path:
+            path, _ = QFileDialog.getOpenFileName(
+                self, "Import Netlist JSON", "", "Netlist JSON Files (*.json)"
+            )
+        if not path:
+            return False
+
+        try:
+            netlist = load_netlist_json(path)
+            layout_data = self._layout_data_from_netlist(netlist)
+            staged_scene = build_scene(layout_data)
+        except (
+            OSError, UnicodeError, json.JSONDecodeError, KeyError, TypeError, ValueError
+        ) as error:
+            QMessageBox.critical(
+                self, "Netlist Import Failed", f"Could not import the netlist:\n{error}"
+            )
+            return False
+
+        answer = QMessageBox.question(
+            self,
+            "Replace Current Drawing",
+            "Importing this netlist replaces the current drawing and removes its "
+            "background PDF, protection zones, and saved layout settings. Continue?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes or not self._confirm_discard():
+            staged_scene.clear()
+            return False
+
+        self._install_layout(layout_data, staged_scene, None, None)
+        self._saved_snapshot = None
+        self._mark_modified()
+        self.footer_status_label.setText(
+            f"Netlist imported: {layout_data['project']}"
+        )
+        return True
+
+    def _layout_data_from_netlist(self, netlist):
+        project_name = netlist.get("project_name", "Untitled Project")
+        components = []
+        for index, component in enumerate(netlist["components"], start=1):
+            component_type = component["type"]
+            properties = component["properties"]
+            if component_type in BUILTIN_SYMBOLS or component_type == "junction":
+                symbol = component_type
+            else:
+                declared_symbol = properties.get("symbol_type")
+                if declared_symbol in (*BUILTIN_SYMBOLS, "custom"):
+                    symbol = declared_symbol
+                elif component_type.startswith("custom_"):
+                    symbol = "custom"
+                else:
+                    raise ValueError(
+                        f"Component {component['id']!r} has unsupported type "
+                        f"{component_type!r}."
+                    )
+
+            ports = component.get("port_positions") or {}
+            if set(ports) != set(component["ports"]):
+                raise ValueError(
+                    f"Component {component['id']!r} must include a position "
+                    "for every port to be imported."
+                )
+            name = component.get("name") or component_type
+            display_id = component.get("display_id") or component["id"]
+            if not isinstance(name, str) or not isinstance(display_id, str):
+                raise ValueError(
+                    f"Component {index} must have a valid name and display ID."
+                )
+
+            components.append({
+                "id": component["id"],
+                "symbol": symbol,
+                "name": name,
+                "display_id": display_id,
+                "properties": properties,
+                "position": [
+                    component["position"]["x"],
+                    component["position"]["y"],
+                ],
+                "scale": component["scale_factor"],
+                "rotation": component["rotation_deg"],
+                "ports": {
+                    port: [point["x"], point["y"]]
+                    for port, point in ports.items()
+                },
+            })
+
+        connections = [
+            [
+                connection["from"]["component"],
+                connection["from"]["port"],
+                connection["to"]["component"],
+                connection["to"]["port"],
+            ]
+            for connection in netlist["connections"]
+        ]
+        return {
+            "version": 1,
+            "project": project_name,
+            "pdf": None,
+            "scene_rect": [
+                0, 0, DEFAULT_WORKSPACE_WIDTH, DEFAULT_WORKSPACE_HEIGHT
+            ],
+            "components": components,
+            "connections": connections,
+            "zones": [],
+            "library": {},
+            "settings": {
+                "grid_visible": True,
+                "grid_opacity": round(DEFAULT_GRID_OPACITY * 100),
+                "snap": True,
+                "pdf_visible": True,
+            },
+        }
 
     @staticmethod
     def _read_pdf_pixmap(path):
@@ -1033,6 +1164,12 @@ class SubstationGuiMockup(QMainWindow):
             component["label"] = labels[component["id"]]
         return netlist
 
+    def _build_current_netlist(self):
+        return build_netlist(
+            self.workspace_scene,
+            project_name=self.project_box.text().strip() or "Untitled Project",
+        )
+
     def _scene_topology(self):
         """Detect real scene components and conductors; never save live Zone objects."""
         items = [item for item in self.workspace_scene.items()
@@ -1253,7 +1390,14 @@ class SubstationGuiMockup(QMainWindow):
                         lines.append(f"    {supply}: {current:g} A")
                     for load in scenario["loads"]:
                         lines.append(f"    {load['name']}: {load['amps_per_unit']:g} A × {load['quantity']} = {load['total_amps']:g} A ({load['supply']})")
-                    all_loads.extend(scenario["loads"])
+                    all_loads.extend(
+                        {
+                            **load,
+                            "zone_id": zone["id"],
+                            "zone_name": zone["name"],
+                        }
+                        for load in scenario["loads"]
+                    )
                 lines.append("")
             lines.append("Detected topology regions (not automatically added to the calculation):")
             for region in report["topology_regions"]:
@@ -1292,37 +1436,96 @@ class SubstationGuiMockup(QMainWindow):
             self._invalidate_results()
         if self.last_result is None or self.last_netlist is None:
             QMessageBox.information(
-                self, "Save Calculation Results", "Run an evaluation first."
+                self, "Save Calculation PDF", "Run an evaluation first."
             )
             return
-
-        file_path, _ = QFileDialog.getSaveFileName(
-            self,
-            "Save Calculation Results",
-            "calculation_results.pdf",
-            "PDF Files (*.pdf)",
-        )
-
-        if not file_path:
-            return
-
-        if not file_path.lower().endswith(".pdf"):
-            file_path += ".pdf"
 
         result = self.last_result
         peak = result.get("peak_current_A", "Not available")
         peak_display = f"{peak:g} A" if isinstance(peak, (int, float)) else str(peak)
-        study_status = "COMPLETE" if result.get("protection_analysis", {}).get("complete") else messages.SUBSTATION_GUI4_INCOMPLETE_PROVISIONAL_STUDY
+        report = result.get("protection_analysis") or {}
+        study_status = "COMPLETE" if report.get("complete") else messages.SUBSTATION_GUI4_INCOMPLETE_PROVISIONAL_STUDY
 
         loads = result.get("loads") or []
         load_rows = "".join(
             "<tr>"
+            f"<td>{escape(str(load.get('zone_name', 'Unknown zone')))} "
+            f"({escape(str(load.get('zone_id', 'unknown')))})</td>"
             f"<td>{escape(str(load.get('name', 'Load')))}</td>"
+            f"<td>{escape(str(load.get('quantity', 1)))}</td>"
+            f"<td>{escape(str(load.get('amps_per_unit', 'N/A')))} A</td>"
             f"<td>{escape(str(load.get('total_amps', 'N/A')))} A</td>"
             f"<td>{escape(str(load.get('note', '')))}</td>"
             "</tr>"
             for load in loads
-        ) or messages.SUBSTATION_GUI4_TR_TD_COLSPAN_3_NO_LOADS_RETURNED_TD_TR
+        ) or "<tr><td colspan='6'>No loads returned.</td></tr>"
+
+        zone_summary_rows = []
+        missing_current_items = []
+        review_zone_items = []
+        for zone in report.get("zones", []):
+            status = "COMPLETE" if zone.get("complete") else "REVIEW REQUIRED — PROVISIONAL"
+            status_class = "complete" if zone.get("complete") else "incomplete"
+            stage_totals = []
+            for scenario in zone.get("scenarios", []):
+                if not scenario.get("loads"):
+                    stage_totals.append(
+                        "<div><b class='incomplete'>Not calculated — no valid loads</b></div>"
+                    )
+                    continue
+                qualifier = "Confirmed" if zone.get("complete") else "PROVISIONAL"
+                stage_totals.append(
+                    f"<div>{escape(str(scenario.get('stage', 'Unspecified stage')))}: "
+                    f"<b class='{status_class}'>{qualifier} "
+                    f"{escape(str(scenario.get('peak_current_A', 'N/A')))} A</b></div>"
+                )
+            total_html = "".join(stage_totals) or "No calculated stage totals"
+            zone_summary_rows.append(
+                "<tr>"
+                f"<td>{escape(str(zone.get('name', 'Unnamed zone')))} "
+                f"({escape(str(zone.get('id', 'unknown')))})</td>"
+                f"<td>{total_html}</td>"
+                f"<td class='{status_class}'><b>{status}</b></td>"
+                "</tr>"
+            )
+            zone_warnings = [str(warning) for warning in zone.get("warnings", [])]
+            if not zone.get("complete"):
+                details = "; ".join(zone_warnings) or "No completion details were returned."
+                review_zone_items.append(
+                    f"<li><b>{escape(str(zone.get('name', 'Unnamed zone')))} "
+                    f"({escape(str(zone.get('id', 'unknown')))}):</b> "
+                    f"{escape(details)}</li>"
+                )
+            for warning in zone_warnings:
+                lowered = warning.lower()
+                if "current" in lowered and (
+                    "missing" in lowered or "not numeric" in lowered or "must be finite" in lowered
+                ):
+                    missing_current_items.append(
+                        f"<li><b>{escape(str(zone.get('name', 'Unnamed zone')))}:</b> "
+                        f"{escape(warning)}</li>"
+                    )
+        zone_summary_html = "".join(zone_summary_rows) or (
+            "<tr><td colspan='3'>No configured zones.</td></tr>"
+        )
+        missing_current_html = "".join(dict.fromkeys(missing_current_items)) or (
+            "<li>None reported.</li>"
+        )
+        review_zone_html = "".join(review_zone_items) or "<li>None.</li>"
+        other_warnings = [str(warning) for warning in report.get("warnings", [])]
+        other_warning_html = "".join(
+            f"<li>{escape(warning)}</li>" for warning in other_warnings
+        ) or "<li>None.</li>"
+
+        topology_regions = report.get("topology_regions", [])
+        topology_rows = "".join(
+            "<tr>"
+            f"<td>{escape(str(region.get('name', 'Unnamed region')))}</td>"
+            f"<td>{'Enclosed' if region.get('enclosed_by') else 'Outermost'}</td>"
+            f"<td>{len(region.get('connections', []))}</td>"
+            "</tr>"
+            for region in topology_regions
+        ) or "<tr><td colspan='3'>No topology regions detected.</td></tr>"
 
         steps = result.get("calculation_steps") or []
 
@@ -1338,18 +1541,16 @@ class SubstationGuiMockup(QMainWindow):
             else "<li>The evaluator did not return individual calculation steps.</li>"
         )
 
-        output_html = escape(self.output_box.toPlainText())
-
-        raw_data = escape(
-            json.dumps(
-                {
-                    "netlist": self.last_netlist,
-                    "result": result,
-                },
-                indent=2,
-                default=str,
+        output_text = self.output_box.toPlainText()
+        topology_marker = "Detected topology regions (not automatically added to the calculation):"
+        peak_marker = "Peak per supply among confirmed, complete configured zones:"
+        before_topology, topology_separator, after_topology = output_text.partition(topology_marker)
+        if topology_separator:
+            _, peak_separator, after_peak = after_topology.partition(peak_marker)
+            output_text = before_topology + (
+                f"\n\n{peak_marker}{after_peak}" if peak_separator else ""
             )
-        )
+        output_html = escape(output_text)
 
         html = f"""
         <html>
@@ -1358,11 +1559,18 @@ class SubstationGuiMockup(QMainWindow):
             body {{ font-family: sans-serif; font-size: 10pt; }}
             h1, h2 {{ color: #006A4E; }}
             table {{ border-collapse: collapse; width: 100%; }}
+            .summary {{ font-size: 9pt; }}
             th, td {{
                 border: 1px solid #cbd2d9;
                 padding: 6px;
                 text-align: left;
+                vertical-align: top;
             }}
+            th {{ background: #e8f1ed; }}
+            tr {{ page-break-inside: avoid; }}
+            .complete {{ color: #176b3a; }}
+            .incomplete {{ color: #9a4f00; background: #fff3cd; }}
+            .appendix {{ page-break-before: always; }}
             pre {{ white-space: pre-wrap; }}
           </style>
         </head>
@@ -1387,11 +1595,30 @@ class SubstationGuiMockup(QMainWindow):
             ({escape(str(result.get('worst_case_supply') or 'not available'))})
           </p>
 
+          <h2>Zone Summary</h2>
+          <p>Stage totals are shown separately; stages and separate zone faults are not added together.</p>
+          <table class="summary">
+            <tr><th>Zone</th><th>Per-stage total across assigned supplies</th><th>Status</th></tr>
+            {zone_summary_html}
+          </table>
+
+          <h2>Warnings Summary</h2>
+          <h3>Zones requiring review</h3>
+          <ul>{review_zone_html}</ul>
+          <h3>Missing or invalid currents</h3>
+          <ul>{missing_current_html}</ul>
+          <h3>Other study warnings</h3>
+          <ul>{other_warning_html}</ul>
+
+          <div style="page-break-before: always;">
           <h2>Loads</h2>
 
           <table>
             <tr>
+                <th>Zone</th>
                 <th>Load</th>
+                <th>Quantity</th>
+                <th>Current per unit</th>
                 <th>Total current</th>
                 <th>Note</th>
             </tr>
@@ -1408,20 +1635,43 @@ class SubstationGuiMockup(QMainWindow):
           <h2>Evaluation Output</h2>
 
           <pre>{output_html}</pre>
+          </div>
 
-          <h2>Netlist and Result Data</h2>
-
-          <pre>{raw_data}</pre>
+          <div class="appendix">
+            <h1>Appendix: Detected Topology Regions</h1>
+            <p>Topology detection is retained for reference and is not automatically added to the protection calculation.</p>
+            <table>
+              <tr><th>Region</th><th>Relationship</th><th>Conductors</th></tr>
+              {topology_rows}
+            </table>
+          </div>
         </body>
         </html>
         """
 
+        self._save_html_as_pdf(
+            "Save Calculation PDF", "calculation_results.pdf", html, "Results saved"
+        )
+
+    def _save_html_as_pdf(
+        self, title: str, default_filename: str, html: str, success_message: str
+    ):
+        file_path, _ = QFileDialog.getSaveFileName(
+            self, title, default_filename, "PDF Files (*.pdf)"
+        )
+        if not file_path:
+            return
+
+        if not Path(file_path).suffix:
+            file_path += ".pdf"
+
         document = QTextDocument()
         document.setHtml(html)
-
         temporary = None
         try:
-            with tempfile.NamedTemporaryFile(dir=Path(file_path).parent, suffix=".pdf", delete=False) as stream:
+            with tempfile.NamedTemporaryFile(
+                dir=Path(file_path).parent, suffix=".pdf", delete=False
+            ) as stream:
                 temporary = stream.name
             printer = QPrinter()
             printer.setOutputFormat(QPrinter.OutputFormat.PdfFormat)
@@ -1430,7 +1680,7 @@ class SubstationGuiMockup(QMainWindow):
             if printer.printerState() == QPrinter.PrinterState.Error or Path(temporary).stat().st_size == 0:
                 raise OSError(messages.SUBSTATION_GUI4_THE_PDF_FILE_WAS_NOT_CREATED_OR_IS_EMPTY)
             os.replace(temporary, file_path)
-        except Exception as error:
+        except OSError as error:
             QMessageBox.critical(
                 self, messages.SUBSTATION_GUI4_SAVE_FAILED, messages.SUBSTATION_GUI4_COULD_NOT_CREATE_THE_PDF.format(error)
             )
@@ -1439,8 +1689,93 @@ class SubstationGuiMockup(QMainWindow):
             if temporary and Path(temporary).exists():
                 Path(temporary).unlink()
 
-        self.footer_status_label.setText(
-            f"Results saved: {file_path}"
+        self.footer_status_label.setText(f"{success_message}: {file_path}")
+
+    def _on_save_netlist_pdf(self):
+        netlist = self._build_current_netlist()
+        self.last_netlist = netlist
+        component_rows = []
+        for component in netlist.get("components", []):
+            properties = component.get("properties") or {}
+            property_list = "".join(
+                "<li>"
+                f"<b>{escape(str(key))}:</b> "
+                f"{escape(str(value))}"
+                "</li>"
+                for key, value in properties.items()
+            ) or "<li>None</li>"
+            ports = ", ".join(str(port) for port in component.get("ports", []))
+            component_rows.append(
+                "<tr>"
+                f"<td>{escape(str(component.get('display_id', component.get('id', ''))))}</td>"
+                f"<td>{escape(str(component.get('name', '')))}</td>"
+                f"<td>{escape(str(component.get('type', '')))}</td>"
+                f"<td><ul>{property_list}</ul></td>"
+                f"<td>{escape(ports or 'None')}</td>"
+                "</tr>"
+            )
+        component_table = "".join(component_rows) or (
+            "<tr><td colspan='5'>No components in this netlist.</td></tr>"
+        )
+
+        connection_rows = []
+        for connection in netlist.get("connections", []):
+            source = connection.get("from", {})
+            target = connection.get("to", {})
+            source_label = (
+                f"{source.get('component', '')} ({source.get('port', '')})"
+            )
+            target_label = (
+                f"{target.get('component', '')} ({target.get('port', '')})"
+            )
+            connection_rows.append(
+                "<tr>"
+                f"<td>{escape(str(connection.get('id', '')))}</td>"
+                f"<td>{escape(str(source_label))}</td>"
+                f"<td>{escape(str(target_label))}</td>"
+                "</tr>"
+            )
+        connection_table = "".join(connection_rows) or (
+            "<tr><td colspan='3'>No connections in this netlist.</td></tr>"
+        )
+        html = f"""
+        <html>
+        <head>
+          <style>
+            body {{ font-family: sans-serif; font-size: 9pt; color: #1f2933; }}
+            h1, h2 {{ color: #006A4E; }}
+            table {{ border-collapse: collapse; width: 100%; margin-bottom: 16px; }}
+            th, td {{ border: 1px solid #cbd2d9; padding: 6px; text-align: left; vertical-align: top; }}
+            th {{ background: #e8f1ed; }}
+            ul {{ margin: 0; padding-left: 16px; }}
+            tr {{ page-break-inside: avoid; }}
+          </style>
+        </head>
+        <body>
+          <h1>Netlist: {escape(str(netlist.get('project_name', 'Untitled Project')))}</h1>
+          <p>
+            <b>Schema version:</b> {escape(str(netlist.get('schema_version', 'N/A')))}
+            &nbsp; <b>Components:</b> {len(netlist.get('components', []))}
+            &nbsp; <b>Connections:</b> {len(netlist.get('connections', []))}
+          </p>
+          <h2>Components</h2>
+          <table>
+            <thead><tr>
+              <th>ID</th><th>Name</th><th>Type</th><th>Properties</th><th>Ports</th>
+            </tr></thead>
+            <tbody>{component_table}</tbody>
+          </table>
+          <h2>Connections</h2>
+          <table>
+            <thead><tr><th>ID</th><th>From</th><th>To</th></tr></thead>
+            <tbody>{connection_table}</tbody>
+          </table>
+        </body>
+        </html>
+        """
+
+        self._save_html_as_pdf(
+            "Save Netlist PDF", "netlist.pdf", html, "Netlist PDF saved"
         )
 
     def _on_create_component_clicked(self):
