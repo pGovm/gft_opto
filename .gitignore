@@ -14,3 +14,4 @@ src/gft_opto/__pycache__/*
 **/*.out
 **/*.synctex.gz
 **/*.glo
+**/*.toc
