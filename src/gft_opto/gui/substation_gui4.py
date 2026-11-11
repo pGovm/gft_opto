@@ -1376,8 +1376,12 @@ class SubstationGuiMockup(QMainWindow):
             all_loads, warnings = [], list(report["warnings"])
             lines.extend(messages.SUBSTATION_GUI4_REVIEW_WARNING.format(warning) for warning in warnings)
             for zone in report["zones"]:
-                lines.extend([f"{zone['name']} ({zone['kind']})", "  CT boundaries: " + ", ".join(zone["boundaries"]),
-                              "  Equipment: " + ", ".join(zone["members"])])
+                members = ", ".join(zone.get("members", [])) or "No members"
+                lines.extend([
+                    f"{zone['name']} ({members}) ({zone['kind']})",
+                    "  CT boundaries: " + ", ".join(zone["boundaries"]),
+                    "  Equipment: " + members,
+                ])
                 for warning in zone["warnings"]:
                     lines.append(messages.SUBSTATION_GUI4_INDENTED_REVIEW_WARNING.format(warning))
                     warnings.append(messages.DIAGNOSTIC_WITH_CONTEXT.format(zone['name'], warning))
@@ -1449,8 +1453,6 @@ class SubstationGuiMockup(QMainWindow):
         loads = result.get("loads") or []
         load_rows = "".join(
             "<tr>"
-            f"<td>{escape(str(load.get('zone_name', 'Unknown zone')))} "
-            f"({escape(str(load.get('zone_id', 'unknown')))})</td>"
             f"<td>{escape(str(load.get('name', 'Load')))}</td>"
             f"<td>{escape(str(load.get('quantity', 1)))}</td>"
             f"<td>{escape(str(load.get('amps_per_unit', 'N/A')))} A</td>"
@@ -1458,7 +1460,7 @@ class SubstationGuiMockup(QMainWindow):
             f"<td>{escape(str(load.get('note', '')))}</td>"
             "</tr>"
             for load in loads
-        ) or "<tr><td colspan='6'>No loads returned.</td></tr>"
+        ) or "<tr><td colspan='5'>No loads returned.</td></tr>"
 
         zone_summary_rows = []
         missing_current_items = []
@@ -1551,6 +1553,13 @@ class SubstationGuiMockup(QMainWindow):
                 f"\n\n{peak_marker}{after_peak}" if peak_separator else ""
             )
         output_html = escape(output_text)
+        zone_names = [
+            str(zone.get('name', '')) for zone in report.get('zones', [])
+            if str(zone.get('name', '')).strip()
+        ]
+        for zone_name in sorted(set(zone_names), key=len, reverse=True):
+            escaped_name = escape(zone_name)
+            output_html = output_html.replace(escaped_name, f"<b>{escaped_name}</b>")
 
         html = f"""
         <html>
@@ -1615,7 +1624,6 @@ class SubstationGuiMockup(QMainWindow):
 
           <table>
             <tr>
-                <th>Zone</th>
                 <th>Load</th>
                 <th>Quantity</th>
                 <th>Current per unit</th>
@@ -1626,10 +1634,6 @@ class SubstationGuiMockup(QMainWindow):
             {load_rows}
           </table>
 
-          <h2>Calculation Steps</h2>
-
-          <ol>
-            {steps_html}
           </ol>
 
           <h2>Evaluation Output</h2>
