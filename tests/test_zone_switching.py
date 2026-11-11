@@ -16,6 +16,13 @@ def wire(a, b, ap="right", bp="left"):
     return {"from_id": a, "from_port": ap, "to_id": b, "to_port": bp}
 
 
+def assign_candidates(zone):
+    """Proposals only suggest breakers; assign them as the reviewed trip loads."""
+    zone["actions"] = [{"component": ident, "load": "trip_coil_1_a", "stage": "Primary trip",
+                        "supply": "DC 1", "units": 1} for ident in zone["candidate_breakers"]]
+    return zone
+
+
 def bus_sections(status="Normally open", switch_type="disconnect"):
     return {
         "components": [component("a", "bus"), component("b", "bus"),
@@ -42,8 +49,7 @@ class SwitchingRegions(unittest.TestCase):
                         self.assertFalse(warnings)
                         self.assertIn("tie", members)
                         self.assertFalse({"a", "b"} <= set(members))
-                        self.assertEqual([a["component"] for a in zone["actions"]],
-                                         ["cb-" + zone["seed"]])
+                        self.assertEqual(zone["candidate_breakers"], ["cb-" + zone["seed"]])
 
     def test_closed_or_unspecified_switch_joins_sections_without_duplicates(self):
         for status in ("Closed", "Normally closed", "Maintenance", ""):
@@ -54,7 +60,7 @@ class SwitchingRegions(unittest.TestCase):
                 zones = propose_zones(net)
                 self.assertEqual(len(zones), 1)
                 self.assertTrue({"a", "b"} <= set(zone_members(net, zones[0])[0]))
-                self.assertEqual({a["component"] for a in zones[0]["actions"]}, {"cb-a", "cb-b"})
+                self.assertEqual(set(zones[0]["candidate_breakers"]), {"cb-a", "cb-b"})
 
     def test_open_bypass_does_not_bypass_ct_but_closed_bypass_is_flagged(self):
         net = {"components": [component("bus", "bus"), component("ct", "ct"),
@@ -66,7 +72,7 @@ class SwitchingRegions(unittest.TestCase):
         members, warnings = zone_members(net, zone)
         self.assertNotIn("cb", members)
         self.assertFalse(warnings)
-        self.assertEqual([a["component"] for a in zone["actions"]], ["cb"])
+        self.assertEqual(zone["candidate_breakers"], ["cb"])
         net["components"][-1]["properties"]["status"] = "Closed"
         zone = propose_zones(net)[0]
         members, warnings = zone_members(net, zone)
@@ -78,9 +84,9 @@ class SwitchingRegions(unittest.TestCase):
                               component("isolator", "disconnect", status="Open"),
                               component("cb", "breaker", trip_coil_1_a=10)],
                "connections": [wire("bus", "ct"), wire("ct", "isolator"), wire("isolator", "cb")]}
-        self.assertEqual(propose_zones(net)[0]["actions"], [])
+        self.assertEqual(propose_zones(net)[0]["candidate_breakers"], [])
         net["components"][2]["properties"]["status"] = "Closed"
-        self.assertEqual([a["component"] for a in propose_zones(net)[0]["actions"]], ["cb"])
+        self.assertEqual(propose_zones(net)[0]["candidate_breakers"], ["cb"])
 
     def test_ct_status_is_not_a_switch_cut_and_open_isolated_devices_survive(self):
         net = {"components": [component("bus", "bus"), component("ct", "ct", status="Open"),
@@ -120,7 +126,7 @@ class SwitchingRegions(unittest.TestCase):
 
     def test_old_detector_approval_requires_review_even_with_unchanged_wires(self):
         net = bus_sections("Closed")
-        zone = propose_zones(net)[0]
+        zone = assign_candidates(propose_zones(net)[0])
         zone["confirmed"] = True
         zone["topology_signature"] = topology_signature(net).replace("ct-study-v3:", "ct-study-v2:")
         zone["configuration_signature"] = configuration_signature(zone)

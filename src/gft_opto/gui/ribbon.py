@@ -2,7 +2,7 @@
 from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
-    QFrame, QGridLayout, QHBoxLayout, QLabel, QStyle, QTabWidget,
+    QFrame, QGridLayout, QHBoxLayout, QLabel, QMenu, QStyle, QTabWidget,
     QSizePolicy, QToolButton, QVBoxLayout, QWidget,
 )
 
@@ -130,8 +130,16 @@ def populate_ribbon(window):
     window.save_as_btn = layout.add_action(window.save_as_action, 3, icon.SP_DialogSaveButton)
     pdf = RibbonGroup(file, "Background")
     window.load_btn = pdf.add_action(window.import_pdf_action, 0, icon.SP_FileDialogContentsView)
+    netlist = RibbonGroup(file, "Netlist")
+    window.import_netlist_btn = netlist.add_action(window.import_netlist_action, 0, icon.SP_ArrowDown)
     export = RibbonGroup(file, "Export")
     window.save_results_btn = export.add_action(window.export_results_action, 0, icon.SP_DialogSaveButton)
+    # One button offers both PDFs; it stays disabled until results exist.
+    export_menu = QMenu(window.save_results_btn)
+    export_menu.addAction(window.export_results_action)
+    export_menu.addAction(window.save_netlist_pdf_action)
+    window.save_results_btn.setMenu(export_menu)
+    window.save_results_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
 
     edit = ribbon.add_page("&Edit")
     history = RibbonGroup(edit, "History")

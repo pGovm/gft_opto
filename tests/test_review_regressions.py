@@ -13,6 +13,12 @@ from test_protection_study import example
 
 
 def approve(net, zone):
+    if not zone['actions']:
+        zone['actions'] = [
+            {'component': ident, 'load': 'trip_coil_1_a', 'stage': 'Primary trip',
+             'supply': 'DC 1', 'units': 1}
+            for ident in zone.get('candidate_breakers', [])
+        ]
     zone['confirmed'] = True
     zone['topology_signature'] = study.topology_signature(net)
     zone['configuration_signature'] = study.configuration_signature(zone)

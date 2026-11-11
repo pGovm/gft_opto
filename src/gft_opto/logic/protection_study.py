@@ -151,7 +151,7 @@ def topology_signature(netlist: dict) -> str:
 def configuration_signature(zone: dict) -> str:
     """Prevent a stored confirmation from surviving later assignment edits."""
     return _digest({key: zone.get(key) for key in
-                    ("kind", "seed", "boundary_cts", "actions", "topology_region")})
+                    ("kind", "seed", "boundary_cts", "actions", "topology_region", "candidate_buses")})
 
 
 def _validate_region(signature: Any) -> None:
@@ -332,7 +332,18 @@ def _resolve_region(netlist: dict, zone: dict) -> tuple[Zone | None, list[str]]:
         if len(matches) != 1:
             return None, [messages.PROTECTION_STUDY_PROTECTED_EQUIPMENT_MUST_BE_INSIDE_THE_REGION_NOT_AN]
         region = matches[0]
-    return region, _geometry_warnings(graph, region, zone)
+    warnings = _geometry_warnings(graph, region, zone)
+    buses = sorted(
+        (item for item in region.core_items if kind(item.record) == "bus"),
+        key=lambda item: item.instance_id,
+    )
+    if zone["kind"] == "Bus" and len(buses) > 1 and not zone["confirmed"]:
+        labels = ", ".join(_label(item) for item in buses)
+        warnings.append(
+            f"Multiple buses share this detected region ({labels}). "
+            "Review whether they share one protection zone or need separate fault events."
+        )
+    return region, warnings
 
 
 def zone_members(netlist: dict, zone: dict) -> tuple[list[str], list[str]]:
@@ -434,6 +445,8 @@ def propose_zones(netlist: dict) -> list[dict]:
     includes a closed breaker. This avoids suggesting a new line event solely
     because a metering tap can reach a remote bay through a branched bus.
     A breaker-only drawing retains its fallback proposals.
+    Buses sharing a region get one proposal. Nearby breakers are suggestions
+    only ("candidate_breakers"); proposals never assign operating loads.
     No proposal is confirmed, no coil current or relay assignment is invented.
     """
     graph = _Graph(netlist)
@@ -494,15 +507,27 @@ def propose_zones(netlist: dict) -> list[dict]:
         if footprint in footprints:
             continue
         footprints.add(footprint)
-        result.append({
+        proposal = {
             "id": "study-" + _digest(seed.instance_id)[:20],
             "name": f"{_label(seed)} {category} Zone", "kind": category,
             "seed": seed.instance_id,
             "boundary_cts": sorted(i.instance_id for i in region.boundary_items),
-            "actions": [{"component": ident, "load": "trip_coil_1_a", "stage": "Primary trip",
-                         "supply": "DC 1", "units": 1} for ident in trip_candidates],
+            "candidate_breakers": trip_candidates,
+            "actions": [],
             "confirmed": False,
-        })
+        }
+        if category == "Bus":
+            # One proposal covers every bus sharing the region; the user decides
+            # whether they form one scheme or need separate fault events.
+            buses = sorted((i for i in region.core_items if kind(i.record) == "bus"),
+                           key=lambda item: item.instance_id)
+            proposal.update({
+                "id": "study-" + _digest(zone_signature(region))[:20],
+                "name": ", ".join(_label(bus) for bus in buses) + " Bus Zone",
+                "candidate_buses": [bus.instance_id for bus in buses],
+                "proposal_region": _json(zone_signature(region)),
+            })
+        result.append(proposal)
     return result
 
 
@@ -517,16 +542,20 @@ def add_missing_proposals(netlist: dict, zones: list[dict]) -> list[dict]:
     result = copy.deepcopy(zones)
     seeds = {z["seed"] for z in result}
     used_ids = {z["id"] for z in result}
+    # A bus region is covered once, even when the saved event uses another bus
+    # as its seed or still carries the shared-bus review warning.
     footprints = set()
     for existing in result:
         region, warnings = _resolve_region(netlist, existing)
-        if region is not None and not warnings:
+        if region is not None and (existing["kind"] == "Bus" or not warnings):
             footprints.add((existing["kind"], _digest(zone_signature(region))))
     for proposed in propose_zones(netlist):
         if proposed["seed"] in seeds:
             continue
         region, warnings = _resolve_region(netlist, proposed)
-        footprint = (proposed["kind"], _digest(zone_signature(region))) if region is not None and not warnings else None
+        footprint = None
+        if region is not None and (proposed["kind"] == "Bus" or not warnings):
+            footprint = (proposed["kind"], _digest(zone_signature(region)))
         if footprint is not None and footprint in footprints:
             continue
         if footprint is not None:
@@ -584,6 +613,8 @@ def _evaluate_actions(zone: dict, graph: _Graph, voltage: float) -> tuple[list[d
                         warnings.append(messages.PROTECTION_STUDY_MOTOR_INRUSH_AND_RUNNING_CURRENT_OVERLAP_IN_STAGE.format(ident, stage))
                     else:
                         warnings.append(messages.PROTECTION_STUDY_DUPLICATE_PHYSICAL_LOAD_HAS_INCONSISTENT_UNITS_OR_DC_SUPPLY.format(ident, stage))
+                else:
+                    warnings.append(messages.PROTECTION_STUDY_DUPLICATE_PHYSICAL_LOAD_IS_ASSIGNED_MORE_THAN_ONCE_IN_STAGE.format(ident, stage))
                 continue
             seen[physical] = assignment
             component = graph.records.get(ident)
@@ -632,8 +663,8 @@ def evaluate_zones(netlist: dict, zones: list[dict]) -> dict:
 
     Each stage is simultaneous within that zone. Different stages and zone
     faults remain separate; each DC supply gets its maximum event current.
-    Exact duplicate load rows count once. Ambiguous, stale or incomplete studies
-    have provisional rows, but no final supply_peaks.
+    Duplicate load rows count once but require review. Ambiguous, stale or
+    incomplete studies have provisional rows, but no final supply_peaks.
     """
     validate_zones(zones)
     graph = _Graph(netlist)

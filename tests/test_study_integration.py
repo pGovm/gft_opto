@@ -196,16 +196,18 @@ class StudyIntegration(unittest.TestCase):
         self.assertEqual(report["supply_peaks"]["DC 1"]["peak_current_A"], 10)
         self.assertEqual(report["supply_peaks"]["DC 2"]["peak_current_A"], 20)
 
-    def test_exact_duplicates_are_deduplicated_per_stage_not_globally(self):
+    def test_exact_duplicates_require_review_and_remain_stage_scoped(self):
         action = copy.deepcopy(self.zone["actions"][0])
         self.zone["actions"].append(copy.deepcopy(action))
         action["stage"] = "Backup trip"
         self.zone["actions"].append(action)
         approve(self.net, self.zone)
         report = study.evaluate_zones(self.net, [self.zone])
+        self.assertFalse(report["complete"])
+        self.assertEqual(report["supply_peaks"], {})
         totals = {r["stage"]: r["peak_current_A"] for r in report["zones"][0]["scenarios"]}
         self.assertEqual(totals, {"Primary trip": 30, "Backup trip": 10})
-        self.assertEqual(report["supply_peaks"]["DC 1"]["peak_current_A"], 30)
+        self.assertIn("duplicate physical load", " ".join(report["zones"][0]["warnings"]))
 
     def test_same_stage_with_outer_whitespace_is_one_stage(self):
         self.zone["actions"][1]["stage"] = " Primary trip "

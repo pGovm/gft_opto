@@ -158,6 +158,7 @@ PROTECTION_STUDY_AN_OPERATING_STAGE_IS_MISSING = 'An operating stage is missing.
 PROTECTION_STUDY_DC_SUPPLY_ASSIGNMENT_IS_MISSING = '{0}: DC supply assignment is missing.'
 PROTECTION_STUDY_MOTOR_INRUSH_AND_RUNNING_CURRENT_OVERLAP_IN_STAGE = '{0}: motor inrush and running current overlap in stage {1!r}.'
 PROTECTION_STUDY_DUPLICATE_PHYSICAL_LOAD_HAS_INCONSISTENT_UNITS_OR_DC_SUPPLY = '{0}: duplicate physical load has inconsistent units or DC supply in {1!r}.'
+PROTECTION_STUDY_DUPLICATE_PHYSICAL_LOAD_IS_ASSIGNED_MORE_THAN_ONCE_IN_STAGE = '{0}: duplicate physical load is assigned more than once in stage {1!r}.'
 PROTECTION_STUDY_OPERATING_EQUIPMENT_IS_MISSING = 'Operating equipment {0!r} is missing.'
 PROTECTION_STUDY_PASSIVE_EQUIPMENT_CANNOT_SUPPLY_AN_OPERATING_COIL_MOTOR_LOAD = '{0}: passive equipment cannot supply an operating coil/motor load.'
 PROTECTION_STUDY_CURRENT_IS_MISSING_OR_NOT_NUMERIC = '{0}: {1} current is missing or not numeric.'

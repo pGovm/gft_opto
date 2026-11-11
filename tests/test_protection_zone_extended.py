@@ -298,8 +298,6 @@ class IndependentStudyChecks(unittest.TestCase):
                         supply = supply_map[(cb, field)]
                         row = action(cb, field, stage, supply, units)
                         rows.append(row)
-                        if r.random() < .4:
-                            rows.append(copy.deepcopy(row))
                         totals[(stage, supply)] += by_id[cb]['properties'][field] * units
                     ident = f'event{e}'
                     zones.append(event(net, ident, rows))
