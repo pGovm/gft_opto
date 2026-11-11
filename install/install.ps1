@@ -40,6 +40,7 @@ $shortcut.TargetPath        = Join-Path $root '.venv\Scripts\pythonw.exe'
 $shortcut.Arguments         = '-m gft_opto.gui.substation_gui'
 $shortcut.WorkingDirectory  = $root
 $shortcut.Description       = 'Substation Momentary DC Load Calculator'
+$shortcut.IconLocation      = Join-Path $root 'src\gft_opto\assets\gft_icon.ico'
 $shortcut.Save()
 
 Write-Host ""
