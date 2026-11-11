@@ -6,7 +6,7 @@
   "settings": {"grid_visible":true,"grid_opacity":15,"snap":true,"pdf_visible":false},
   "library": {},
   "components": [
-    {"id":"breaker_6","symbol":"breaker","name":"PCB13","display_id":"PCB13","properties":{"symbol_type":"breaker"},"position":[1100.0,857.0],"scale":1.0,"rotation":90.0,"ports":{"left":[-32.0,0.0],"right":[32.0,0.0]}},
+    {"id":"breaker_6","symbol":"breaker","name":"PCB13","display_id":"PCB13","properties":{"symbol_type":"breaker","motor_run_a":2.6,"motor_inrush_a":10.3,"trip_coil_1_a":6.7,"trip_coil_2_a":9.5,"close_coil_a":11.0},"position":[1100.0,857.0],"scale":1.0,"rotation":90.0,"ports":{"left":[-32.0,0.0],"right":[32.0,0.0]}},
     {"id":"bus_1","symbol":"bus","name":"138 kV MAIN BUS SOUTH / BUS 2","display_id":"138 kV MAIN BUS SOUTH / BUS 2","properties":{"symbol_type":"bus"},"position":[1550.0,2450.0],"scale":1.0,"rotation":0.0,"ports":{"left":[-1150.0,0.0],"right":[1150.0,0.0],"tap_2":[-450.0,0.0]}},
     {"id":"ct_4","symbol":"ct","name":"PCB13 CT-1","display_id":"PCB13 CT-1","properties":{"symbol_type":"ct"},"position":[1100.0,553.0],"scale":1.0,"rotation":90.0,"ports":{"left":[-28.0,0.0],"right":[28.0,0.0]}},
     {"id":"ct_5","symbol":"ct","name":"PCB13 CT-2","display_id":"PCB13 CT-2","properties":{"symbol_type":"ct"},"position":[1100.0,703.0],"scale":1.0,"rotation":90.0,"ports":{"left":[-28.0,0.0],"right":[28.0,0.0]}},

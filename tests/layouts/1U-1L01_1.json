@@ -6,9 +6,9 @@
   "settings": {"grid_visible":true,"grid_opacity":15,"snap":true,"pdf_visible":false},
   "library": {},
   "components": [
-    {"id":"breaker_10","symbol":"breaker","name":"T023M2","display_id":"T023M2","properties":{"symbol_type":"breaker"},"position":[1000.0,1507.0],"scale":1.0,"rotation":90.0,"ports":{"left":[-32.0,0.0],"right":[32.0,0.0]}},
-    {"id":"breaker_20","symbol":"breaker","name":"T023L2","display_id":"T023L2","properties":{"symbol_type":"breaker"},"position":[3500.0,1507.0],"scale":1.0,"rotation":90.0,"ports":{"left":[-32.0,0.0],"right":[32.0,0.0]}},
-    {"id":"breaker_31","symbol":"breaker","name":"3445","display_id":"3445","properties":{"symbol_type":"breaker"},"position":[4932.0,1200.0],"scale":1.0,"rotation":0.0,"ports":{"left":[-32.0,0.0],"right":[32.0,0.0]}},
+    {"id":"breaker_10","symbol":"breaker","name":"T023M2","display_id":"T023M2","properties":{"symbol_type":"breaker","motor_run_a":4.0,"motor_inrush_a":14.3,"trip_coil_1_a":5.3,"trip_coil_2_a":9.0,"close_coil_a":6.7},"position":[1000.0,1507.0],"scale":1.0,"rotation":90.0,"ports":{"left":[-32.0,0.0],"right":[32.0,0.0]}},
+    {"id":"breaker_20","symbol":"breaker","name":"T023L2","display_id":"T023L2","properties":{"symbol_type":"breaker","motor_run_a":3.6,"motor_inrush_a":17.2,"trip_coil_1_a":4.0,"trip_coil_2_a":5.3,"close_coil_a":6.1},"position":[3500.0,1507.0],"scale":1.0,"rotation":90.0,"ports":{"left":[-32.0,0.0],"right":[32.0,0.0]}},
+    {"id":"breaker_31","symbol":"breaker","name":"3445","display_id":"3445","properties":{"symbol_type":"breaker","motor_run_a":4.4,"motor_inrush_a":14.8,"trip_coil_1_a":7.8,"trip_coil_2_a":7.6,"close_coil_a":10.0},"position":[4932.0,1200.0],"scale":1.0,"rotation":0.0,"ports":{"left":[-32.0,0.0],"right":[32.0,0.0]}},
     {"id":"bus_1","symbol":"bus","name":"138 kV BUS","display_id":"138 kV BUS","properties":{"symbol_type":"bus"},"position":[2400.0,1200.0],"scale":1.0,"rotation":0.0,"ports":{"left":[-1900.0,0.0],"right":[1900.0,0.0],"tap_2":[-1400.0,0.0],"tap_3":[1100.0,0.0],"tap_4":[-1400.0,0.0],"tap_5":[1100.0,0.0]}},
     {"id":"bus_18","symbol":"bus","name":"TO 12 kV BUS 1","display_id":"TO 12 kV BUS 1","properties":{"symbol_type":"bus"},"position":[3500.0,3800.0],"scale":1.0,"rotation":0.0,"ports":{"left":[-150.0,0.0],"right":[150.0,0.0],"tap_2":[0.0,0.0]}},
     {"id":"bus_8","symbol":"bus","name":"TO 12 kV BUS 2","display_id":"TO 12 kV BUS 2","properties":{"symbol_type":"bus"},"position":[1000.0,3800.0],"scale":1.0,"rotation":0.0,"ports":{"left":[-150.0,0.0],"right":[150.0,0.0],"tap_2":[0.0,0.0]}},
@@ -36,8 +36,8 @@
     {"id":"disconnect_9","symbol":"disconnect","name":"T023M3","display_id":"T023M3","properties":{"symbol_type":"disconnect"},"position":[1000.0,1361.0],"scale":1.0,"rotation":90.0,"ports":{"left":[-36.0,0.0],"right":[36.0,0.0]}},
     {"id":"incoming_line_2","symbol":"incoming_line","name":"MVEC CENTRAL AVE","display_id":"MVEC CENTRAL AVE","properties":{"symbol_type":"incoming_line"},"position":[1000.0,210.0],"scale":1.0,"rotation":0.0,"ports":{"line":[0.0,40.0]}},
     {"id":"incoming_line_5","symbol":"incoming_line","name":"MVEC HWY 511","display_id":"MVEC HWY 511","properties":{"symbol_type":"incoming_line"},"position":[3500.0,210.0],"scale":1.0,"rotation":0.0,"ports":{"line":[0.0,40.0]}},
-    {"id":"mos_3","symbol":"mos","name":"1073","display_id":"1073","properties":{"symbol_type":"mos"},"position":[1000.0,361.0],"scale":1.0,"rotation":90.0,"ports":{"left":[-36.0,0.0],"right":[36.0,0.0]}},
-    {"id":"mos_6","symbol":"mos","name":"1077","display_id":"1077","properties":{"symbol_type":"mos"},"position":[3500.0,361.0],"scale":1.0,"rotation":90.0,"ports":{"left":[-36.0,0.0],"right":[36.0,0.0]}},
+    {"id":"mos_3","symbol":"mos","name":"1073","display_id":"1073","properties":{"symbol_type":"mos","motor_run_a":2.4,"motor_inrush_a":9.8},"position":[1000.0,361.0],"scale":1.0,"rotation":90.0,"ports":{"left":[-36.0,0.0],"right":[36.0,0.0]}},
+    {"id":"mos_6","symbol":"mos","name":"1077","display_id":"1077","properties":{"symbol_type":"mos","motor_run_a":2.9,"motor_inrush_a":11.2},"position":[3500.0,361.0],"scale":1.0,"rotation":90.0,"ports":{"left":[-36.0,0.0],"right":[36.0,0.0]}},
     {"id":"xfmr_2w_15","symbol":"xfmr_2w","name":"TR2","display_id":"TR2","properties":{"symbol_type":"xfmr_2w"},"position":[1000.0,2240.0],"scale":1.0,"rotation":90.0,"ports":{"H":[-40.0,0.0],"X":[40.0,0.0]}},
     {"id":"xfmr_2w_25","symbol":"xfmr_2w","name":"TR1","display_id":"TR1","properties":{"symbol_type":"xfmr_2w"},"position":[3500.0,2240.0],"scale":1.0,"rotation":90.0,"ports":{"H":[-40.0,0.0],"X":[40.0,0.0]}}
   ],

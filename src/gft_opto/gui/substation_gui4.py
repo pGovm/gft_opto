@@ -23,7 +23,7 @@ import pymupdf
 from PySide6.QtCore import Qt, QByteArray, QMimeData, QRectF
 from PySide6.QtGui import (
     QAction, QColor, QPen, QBrush, QPalette, QPainterPath, QPainterPathStroker,
-    QDrag, QImage, QKeySequence, QPixmap, QTextDocument, QUndoStack,
+    QDrag, QIcon, QImage, QKeySequence, QPixmap, QTextDocument, QUndoStack,
 )
 from PySide6.QtPrintSupport import QPrinter
 from PySide6.QtWidgets import (
@@ -41,6 +41,7 @@ from gft_opto.gui.routing import (
     DEFAULT_WORKSPACE_WIDTH,
     GFT_LOGO_HEIGHT,
     GFT_LOGO_PATH,
+    GFT_ICON_PATH,
     MIME_EQUIPMENT,
     SCENE_UNITS_PER_INCH,
     SYMBOL_ROTATION_STEP,
@@ -235,6 +236,7 @@ class SubstationGuiMockup(QMainWindow):
         self._zone_report = None
         self._zones_visible = True
         self.setWindowTitle("AI-Assisted Substation Design Tool")
+        self.setWindowIcon(QIcon(str(GFT_ICON_PATH)))
         self.setMinimumSize(1000, 700)
         self._apply_stylesheet()
         self._build_ui()
@@ -1823,6 +1825,7 @@ def main() -> None:
     """Open the substation design window."""
     app = QApplication(sys.argv)
     app.setFont(ui_font())
+    app.setWindowIcon(QIcon(str(GFT_ICON_PATH)))
 
     window = SubstationGuiMockup()
     window.showMaximized()

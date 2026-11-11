@@ -23,6 +23,7 @@ exe = EXE(
     a.datas,
     [],
     name='gft-opto',
+    icon='src/gft_opto/assets/gft_icon.ico',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

@@ -23,6 +23,8 @@ results view. The Project field names
 the current layout. Layout JSON files preserve equipment definitions, component
 properties, positions, sizes, rotations, bus taps, connections, and grid settings.
 Unsaved changes are checked before closing or replacing a layout.
+The 11 provided one-line JSON layouts contain randomized demonstration currents
+for breakers and motor-operated switches. These are sample values, not manufacturer ratings.
 Opening a layout also populates the Equipment Library from the components in
 the drawing, preserving their saved electrical and breaker settings alongside
 any existing templates. Identical definitions are reused; junction dots remain
@@ -135,6 +137,10 @@ uv run --group package pyinstaller --noconfirm gft-opto.spec
 The result is `dist/gft-opto.exe`. A desktop shortcut pointing to that file
 opens the rebuilt version. `uv run gft-opto` runs the source directly and does
 not rebuild the executable.
+
+The executable and app window use the GFT logo from `src/gft_opto/assets/gft_icon.ico`.
+For an existing desktop shortcut with a manually selected icon, open its
+**Properties → Change Icon** and select that icon file or the rebuilt executable.
 
 ## Regression checks
 

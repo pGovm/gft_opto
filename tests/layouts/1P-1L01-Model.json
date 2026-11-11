@@ -7,9 +7,9 @@
   "library": {},
   "settings": {"grid_visible":true,"grid_opacity":15,"snap":true,"pdf_visible":false},
   "components": [
-    {"id":"breaker_15","symbol":"breaker","name":"A009D5","display_id":"A009D5","properties":{"symbol_type":"breaker"},"position":[2107.0,750.0],"scale":1.0,"rotation":0.0,"ports":{"left":[-32.0,0.0],"right":[32.0,0.0]}},
-    {"id":"breaker_22","symbol":"breaker","name":"A009D8","display_id":"A009D8","properties":{"symbol_type":"breaker"},"position":[3407.0,750.0],"scale":1.0,"rotation":0.0,"ports":{"left":[-32.0,0.0],"right":[32.0,0.0]}},
-    {"id":"breaker_8","symbol":"breaker","name":"A009D2","display_id":"A009D2","properties":{"symbol_type":"breaker"},"position":[857.0,750.0],"scale":1.0,"rotation":0.0,"ports":{"left":[-32.0,0.0],"right":[32.0,0.0]}},
+    {"id":"breaker_15","symbol":"breaker","name":"A009D5","display_id":"A009D5","properties":{"symbol_type":"breaker","motor_run_a":3.4,"motor_inrush_a":15.6,"trip_coil_1_a":8.7,"trip_coil_2_a":8.2,"close_coil_a":9.7},"position":[2107.0,750.0],"scale":1.0,"rotation":0.0,"ports":{"left":[-32.0,0.0],"right":[32.0,0.0]}},
+    {"id":"breaker_22","symbol":"breaker","name":"A009D8","display_id":"A009D8","properties":{"symbol_type":"breaker","motor_run_a":4.5,"motor_inrush_a":14.7,"trip_coil_1_a":5.6,"trip_coil_2_a":6.4,"close_coil_a":11.6},"position":[3407.0,750.0],"scale":1.0,"rotation":0.0,"ports":{"left":[-32.0,0.0],"right":[32.0,0.0]}},
+    {"id":"breaker_8","symbol":"breaker","name":"A009D2","display_id":"A009D2","properties":{"symbol_type":"breaker","motor_run_a":2.8,"motor_inrush_a":8.6,"trip_coil_1_a":6.3,"trip_coil_2_a":8.2,"close_coil_a":5.5},"position":[857.0,750.0],"scale":1.0,"rotation":0.0,"ports":{"left":[-32.0,0.0],"right":[32.0,0.0]}},
     {"id":"bus_26","symbol":"bus","name":"230 kV","display_id":"230 kV","properties":{"symbol_type":"bus","rating_kv":230},"position":[2150.0,175.0],"scale":1.0,"rotation":0.0,"ports":{"left":[-1950.0,0.0],"right":[1950.0,0.0]}},
     {"id":"ct_10","symbol":"ct","name":"CT-4","display_id":"CD2-4","properties":{"symbol_type":"ct"},"position":[1103.0,750.0],"scale":1.0,"rotation":0.0,"ports":{"left":[-28.0,0.0],"right":[28.0,0.0]}},
     {"id":"ct_13","symbol":"ct","name":"CT-5","display_id":"CD5-1","properties":{"symbol_type":"ct"},"position":[1828.0,750.0],"scale":1.0,"rotation":0.0,"ports":{"left":[-28.0,0.0],"right":[28.0,0.0]}},
@@ -55,9 +55,9 @@
     {"id":"junction_81","symbol":"junction","name":"Junction","display_id":"","properties":{},"position":[5050.0,750.0],"scale":1.0,"rotation":0.0,"ports":{"node":[0.0,0.0]}},
     {"id":"line_trap_34","symbol":"line_trap","name":"EAST DANVILLE LINE TRAP","display_id":"EAST DANVILLE LINE TRAP","properties":{"symbol_type":"line_trap"},"position":[1500.0,990.0],"scale":1.0,"rotation":90.0,"ports":{"left":[-40.0,0.0],"right":[40.0,0.0]}},
     {"id":"line_trap_47","symbol":"line_trap","name":"ROXBORO LINE TRAP","display_id":"ROXBORO LINE TRAP","properties":{"symbol_type":"line_trap"},"position":[2700.0,990.0],"scale":1.0,"rotation":90.0,"ports":{"left":[-40.0,0.0],"right":[40.0,0.0]}},
-    {"id":"mos_35","symbol":"mos","name":"A00794","display_id":"A00794","properties":{"symbol_type":"mos"},"position":[1500.0,1811.0],"scale":1.0,"rotation":90.0,"ports":{"left":[-36.0,0.0],"right":[36.0,0.0]}},
-    {"id":"mos_48","symbol":"mos","name":"A00790","display_id":"A00790","properties":{"symbol_type":"mos"},"position":[2700.0,1811.0],"scale":1.0,"rotation":90.0,"ports":{"left":[-36.0,0.0],"right":[36.0,0.0]}},
-    {"id":"mos_70","symbol":"mos","name":"A00788","display_id":"A00788","properties":{"symbol_type":"mos"},"position":[4886.0,750.0],"scale":1.0,"rotation":0.0,"ports":{"left":[-36.0,0.0],"right":[36.0,0.0]}}
+    {"id":"mos_35","symbol":"mos","name":"A00794","display_id":"A00794","properties":{"symbol_type":"mos","motor_run_a":4.6,"motor_inrush_a":18.8},"position":[1500.0,1811.0],"scale":1.0,"rotation":90.0,"ports":{"left":[-36.0,0.0],"right":[36.0,0.0]}},
+    {"id":"mos_48","symbol":"mos","name":"A00790","display_id":"A00790","properties":{"symbol_type":"mos","motor_run_a":3.9,"motor_inrush_a":15.6},"position":[2700.0,1811.0],"scale":1.0,"rotation":90.0,"ports":{"left":[-36.0,0.0],"right":[36.0,0.0]}},
+    {"id":"mos_70","symbol":"mos","name":"A00788","display_id":"A00788","properties":{"symbol_type":"mos","motor_run_a":3.3,"motor_inrush_a":13.2},"position":[4886.0,750.0],"scale":1.0,"rotation":0.0,"ports":{"left":[-36.0,0.0],"right":[36.0,0.0]}}
   ],
   "connections": [
     ["breaker_15","right","ct_16","left"],

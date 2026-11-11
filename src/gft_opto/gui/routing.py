@@ -59,6 +59,7 @@ def _resource_root() -> Path:
 
 
 GFT_LOGO_PATH = _resource_root() / "assets" / "gft_logo.png"
+GFT_ICON_PATH = _resource_root() / "assets" / "gft_icon.ico"
 GFT_LOGO_HEIGHT = 34         # px — header wordmark height
 
 
