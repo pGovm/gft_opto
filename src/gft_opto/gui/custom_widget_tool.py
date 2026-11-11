@@ -12,7 +12,7 @@ from __future__ import annotations
 import sys
 
 from PySide6.QtCore import Qt, QRect, Slot
-from PySide6.QtGui import QColor, QFont, QPainter, QPen
+from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -26,6 +26,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+from gft_opto.gui.theme import ui_font
 
 
 # ---------------------------------------------------------------------------
@@ -250,7 +252,7 @@ class ComponentWidget(QWidget):
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setFont(QFont("Sans-Serif", 20))
+        painter.setFont(ui_font(20))
         rect = QRect(30, 30, 350, 350)
 
         if self._state and self._component_data:

@@ -23,14 +23,14 @@ import pymupdf
 from PySide6.QtCore import Qt, QByteArray, QMimeData, QRectF
 from PySide6.QtGui import (
     QAction, QColor, QPen, QBrush, QPalette, QPainterPath, QPainterPathStroker,
-    QDrag, QFont, QImage, QKeySequence, QPixmap, QTextDocument, QUndoStack,
+    QDrag, QImage, QKeySequence, QPixmap, QTextDocument, QUndoStack,
 )
 from PySide6.QtPrintSupport import QPrinter
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFrame, QGraphicsScene,
     QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget,
     QListWidgetItem, QMainWindow, QMessageBox, QPushButton, QSlider, QTextEdit,
-    QVBoxLayout, QWidget, QGraphicsRectItem, QGraphicsPathItem, QSpinBox, QScrollArea,
+    QVBoxLayout, QWidget, QGraphicsRectItem, QGraphicsPathItem, QSpinBox, QScrollArea, QSizePolicy,
 )
 
 from gft_opto.gui.circuit_check import check_circuit
@@ -63,7 +63,8 @@ from gft_opto.logic.momentary_calc2 import netlist_from_scene
 from gft_opto.logic.protection_zones import connection_key, identify_zones
 from gft_opto.logic.protection_study import propose_zones, evaluate_zones, topology_records
 from gft_opto.gui.zone_dialog import ZoneDialog
-from gft_opto.gui.theme import SCROLLBAR_STYLE
+from gft_opto.gui.theme import SCROLLBAR_STYLE, readable_palette, ui_font
+from gft_opto.gui.ribbon import RibbonBar, populate_ribbon
 from gft_opto.logic.breaker_settings import breaker_settings, SETTING_KEYS
 from pathlib import Path
 from collections import defaultdict
@@ -122,7 +123,7 @@ RESIZE_HANDLE_HIT = 12.0
 MIN_SYMBOL_SCALE = 0.5
 MAX_SYMBOL_SCALE = 3.0
 SYMBOL_SCALE_STEP = 0.25     # snap resize to this increment
-SYMBOL_ROTATION_STEP = 90.0  # degrees — R / Shift+R and Quick Actions
+SYMBOL_ROTATION_STEP = 90.0  # degrees — R / Shift+R and the Edit tab
 ROTATE_HANDLE_OFFSET = 28.0  # px above symbol AABB top edge
 ROTATE_HANDLE_RADIUS = 8.0
 ROTATE_HANDLE_HIT = 14.0
@@ -238,7 +239,8 @@ class SubstationGuiMockup(QMainWindow):
         self._apply_stylesheet()
         self._build_ui()
         self._setup_undo_redo()
-        self._setup_file_shortcuts()
+        self._setup_actions()
+        populate_ribbon(self)
         self._loading = False
         self._saved_snapshot = self._layout_data()
         self.project_box.editingFinished.connect(self._mark_modified)
@@ -248,14 +250,17 @@ class SubstationGuiMockup(QMainWindow):
         self._on_selection_changed()
 
     def _apply_stylesheet(self):
+        self.setFont(ui_font())
+        self.setPalette(readable_palette(self.palette()))
         self.setStyleSheet("""
+    QWidget { font-size: 10pt; font-weight: normal; }
     QMainWindow { background-color: #f4f6f8; }
+    QLabel#appTitle { font-size: 11pt; font-weight: 600; }
 
     QMenuBar, QMenu {
         background-color: #ffffff;
         color: #1f2933;
-        font-family: "Segoe UI";
-        font-size: 11pt;
+        font-size: 10pt;
     }
     QMenuBar::item { background: transparent; padding: 6px 12px; }
     QMenuBar::item:selected, QMenu::item:selected {
@@ -270,7 +275,7 @@ class SubstationGuiMockup(QMainWindow):
     QCheckBox {
         color: #1f2933;
         spacing: 8px;
-        font-size: 11pt;
+        font-size: 10pt;
         font-weight: normal;
     }
 
@@ -286,6 +291,7 @@ class SubstationGuiMockup(QMainWindow):
         background: #006A4E;
         border-color: #006A4E;
     }
+    QCheckBox:disabled { color: #64748b; }
 
     QSlider::groove:horizontal {
         height: 6px;
@@ -306,7 +312,7 @@ class SubstationGuiMockup(QMainWindow):
         border-radius: 12px;
         margin-top: 20px;
         font-weight: bold;
-        font-size: 12pt;
+        font-size: 11pt;
         padding-top: 25px;
     }
 
@@ -330,14 +336,15 @@ class SubstationGuiMockup(QMainWindow):
     QLineEdit, QTextEdit, QComboBox, QListWidget, QSpinBox {
         background: white; border: 1px solid #cbd2d9;
         border-radius: 8px; padding: 8px; color: #1f2933;
+        selection-background-color: #006a4e; selection-color: #ffffff;
     }
     QComboBox QAbstractItemView {
         background-color: #ffffff; color: #1f2933;
         selection-background-color: #006a4e; selection-color: #ffffff;
-        font-family: "Segoe UI"; font-size: 10pt; font-weight: normal;
+        font-size: 10pt; font-weight: normal;
     }
     QGroupBox#selectedProperties QWidget {
-        color: #1f2933; font-family: "Segoe UI";
+        color: #1f2933;
         font-size: 10pt; font-weight: normal;
     }
     QGroupBox#selectedProperties QLabel { background-color: transparent; }
@@ -352,10 +359,9 @@ class SubstationGuiMockup(QMainWindow):
         background-color: #f4f6f8; color: #52606d;
     }
     QScrollArea#propertiesScroll { border: none; background-color: #f4f6f8; }
-    QGroupBox#quickActions { padding-top: 16px; }
-    QGroupBox#quickActions QPushButton { padding: 5px 12px; }
     QFrame#canvasFrame { background: white; border: 2px dashed #9fb3c8; border-radius: 14px; }
     QFrame#toolbarFrame { background: white; border: 1px solid #d9e2ec; border-radius: 12px; }
+    QToolTip { background: #ffffff; color: #1f2933; border: 1px solid #cbd2d9; padding: 4px; }
 
     QMessageBox {
         background-color: #ffffff;
@@ -363,7 +369,7 @@ class SubstationGuiMockup(QMainWindow):
     QMessageBox QLabel {
         color: #1f2933;
         background-color: transparent;
-        font-size: 11pt;
+        font-size: 10pt;
     }
 """ + SCROLLBAR_STYLE)
 
@@ -381,13 +387,8 @@ class SubstationGuiMockup(QMainWindow):
         self.addAction(self.undo_action)
         self.addAction(self.redo_action)
 
-        if hasattr(self, "undo_btn"):
-            self.undo_btn.clicked.connect(self.undo_stack.undo)
-            self.redo_btn.clicked.connect(self.undo_stack.redo)
-            self.undo_stack.canUndoChanged.connect(self.undo_btn.setEnabled)
-            self.undo_stack.canRedoChanged.connect(self.redo_btn.setEnabled)
-            self.undo_btn.setEnabled(self.undo_stack.canUndo())
-            self.redo_btn.setEnabled(self.undo_stack.canRedo())
+        self.undo_action.setIconText("Undo")
+        self.redo_action.setIconText("Redo")
 
         self.undo_stack.indexChanged.connect(self._on_undo_index_changed)
 
@@ -400,17 +401,38 @@ class SubstationGuiMockup(QMainWindow):
             f"Ready — last action: {text}" if text else "Ready"
         )
 
-    def _setup_file_shortcuts(self):
-        for title, shortcut, callback in (
-            ("New Layout", "Ctrl+N", self.new_layout),
-            ("Open Layout…", "Ctrl+O", self.open_layout),
-            ("Save Layout", "Ctrl+S", lambda: self.save_layout()),
-            ("Save Layout As…", "Ctrl+Shift+S", lambda: self.save_layout(save_as=True)),
+    def _setup_actions(self):
+        # All command buttons use these actions, including shortcut and enabled
+        # state. Clipboard/delete/rotate shortcuts remain local to the workspace
+        # so that text fields retain their normal editing behavior.
+        for name, title, caption, shortcut, callback in (
+            ("new_layout", "New Layout", "New", "Ctrl+N", self.new_layout),
+            ("open_layout", "Open Layout…", "Open", "Ctrl+O", self.open_layout),
+            ("save_layout", "Save Layout", "Save", "Ctrl+S", self.save_layout),
+            ("save_as", "Save Layout As…", "Save As", "Ctrl+Shift+S", lambda: self.save_layout(save_as=True)),
+            ("import_pdf", "Import PDF", "Import PDF", None, self.on_import_pdf_clicked),
+            ("export_results", "Save Calculation Results", "Export Results", None, self._on_save_results_clicked),
+            ("copy", "Copy Selected Components", "Copy", None, self.workspace_view.copy_selected),
+            ("paste", "Paste Components", "Paste", None, self.workspace_view.paste_components),
+            ("delete", "Delete Selected", "Delete", None, self.workspace_view.delete_selected),
+            ("rotate", "Rotate Selected 90°", "Rotate 90°", None, self.workspace_view.rotate_selected),
+            ("create_component", "Create Component", "Create Component", None, self._on_create_component_clicked),
+            ("validate", "Validate Circuit", "Validate", None, self._on_check_circuit_clicked),
+            ("configure_zones", "Configure Protection Zones", "Configure Zones", None, self._configure_protection_zones),
+            ("evaluate", "Run Evaluation", "Run Evaluation", None, self._on_run_evaluation_clicked),
+            ("expand_analysis", "Expand Analysis", "Expand Analysis", None, self._expand_zone_analysis),
         ):
             action = QAction(title, self)
-            action.setShortcut(QKeySequence(shortcut))
-            action.triggered.connect(callback)
+            action.setIconText(caption)
+            action.setToolTip(f"{title} ({shortcut})" if shortcut else title)
+            if shortcut:
+                action.setShortcut(QKeySequence(shortcut))
+            action.triggered.connect(lambda checked=False, callback=callback: callback())
+            setattr(self, name + "_action", action)
             self.addAction(action)
+        self.export_results_action.setEnabled(False)
+        self.copy_action.setToolTip("Copy selected components (Ctrl+C in workspace)")
+        self.paste_action.setToolTip("Paste components (Ctrl+V in workspace)")
 
     def _layout_data(self):
         rect = self.workspace_scene.sceneRect()
@@ -437,7 +459,7 @@ class SubstationGuiMockup(QMainWindow):
         if self.last_result is not None:
             self.output_box.append("\nResults are outdated. Run Evaluation again before exporting.")
         self.last_result = self.last_netlist = None
-        self.save_results_btn.setEnabled(False)
+        self.export_results_action.setEnabled(False)
 
     def _mark_modified(self, *_args):
         if self._loading:
@@ -595,7 +617,7 @@ class SubstationGuiMockup(QMainWindow):
         reserve_ids(staged_scene)
         self.last_result = self.last_netlist = None
         self.output_box.clear()
-        self.save_results_btn.setEnabled(False)
+        self.export_results_action.setEnabled(False)
         self.zone_view.blockSignals(True)
         self.zone_view.clear()
         self.zone_view.addItem("Run Evaluation to display zones")
@@ -619,8 +641,8 @@ class SubstationGuiMockup(QMainWindow):
         self.setCentralWidget(central)
 
         main_layout = QVBoxLayout(central)
-        main_layout.setContentsMargins(22, 22, 22, 22)
-        main_layout.setSpacing(18)
+        main_layout.setContentsMargins(16, 12, 16, 12)
+        main_layout.setSpacing(12)
 
         main_layout.addWidget(self._build_header())
         main_layout.addLayout(self._build_content())
@@ -655,10 +677,15 @@ class SubstationGuiMockup(QMainWindow):
         self.grid_snap_cb.setChecked(True)
         self.grid_snap_cb.toggled.connect(self.workspace_view.set_snap_to_grid)
 
-        opacity_row = QHBoxLayout()
+        self.grid_opacity_controls = QWidget()
+        opacity_row = QHBoxLayout(self.grid_opacity_controls)
+        opacity_row.setContentsMargins(0, 0, 0, 0)
         opacity_row.addWidget(QLabel("Grid Opacity:"))
         self.grid_opacity_slider = QSlider(Qt.Orientation.Horizontal)
         self.grid_opacity_slider.setRange(0, 100)
+        self.grid_opacity_slider.setMinimumWidth(100)
+        self.grid_opacity_slider.setMaximumWidth(180)
+        self.grid_opacity_slider.setAccessibleName("Grid opacity")
         self.grid_opacity_label = QLabel(f"{self.grid_opacity_slider.value()}%")
         opacity_row.addWidget(self.grid_opacity_slider, 1)
         opacity_row.addWidget(self.grid_opacity_label)
@@ -669,13 +696,6 @@ class SubstationGuiMockup(QMainWindow):
 
         self.grid_opacity_slider.valueChanged.connect(_on_opacity_changed)
         self.grid_opacity_slider.setValue(round(DEFAULT_GRID_OPACITY * 100))
-
-        self.controls_layout.addWidget(self.grid_show_cb)
-        self.controls_layout.addWidget(self.pdf_show_cb)
-        self.controls_layout.addWidget(self.circuit_show_cb)
-        self.controls_layout.addWidget(self.zones_show_cb)
-        self.controls_layout.addWidget(self.grid_snap_cb)
-        self.controls_layout.addLayout(opacity_row)
 
     def _build_footer(self):
         footer = QFrame()
@@ -697,12 +717,22 @@ class SubstationGuiMockup(QMainWindow):
     def _build_header(self):
         frame = QFrame()
         frame.setObjectName("toolbarFrame")
-        layout = QVBoxLayout(frame)
-        layout.setContentsMargins(20, 14, 20, 14)
-        layout.setSpacing(12)
+        layout = QHBoxLayout(frame)
+        layout.setContentsMargins(12, 8, 12, 8)
+        layout.setSpacing(16)
+
+        identity = QWidget()
+        identity.setObjectName("headerIdentity")
+        identity.setMinimumWidth(225)
+        identity.setMaximumWidth(480)
+        identity.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+        identity_layout = QVBoxLayout(identity)
+        identity_layout.setContentsMargins(0, 0, 0, 0)
+        identity_layout.setSpacing(6)
+        identity_layout.addStretch(1)
 
         logo = QLabel()
-        logo_pix = load_gft_logo_pixmap()
+        logo_pix = load_gft_logo_pixmap(height=28)
         if not logo_pix.isNull():
             logo.setPixmap(logo_pix)
             logo.setFixedSize(logo_pix.size())
@@ -710,49 +740,31 @@ class SubstationGuiMockup(QMainWindow):
         logo.setStyleSheet("background: transparent; border: none;")
 
         title = QLabel("AI-Assisted Substation Protection & Control Design")
-        title.setFont(QFont("Arial", 12, QFont.Weight.Bold))
+        title.setObjectName("appTitle")
         title.setWordWrap(True)
+        title.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
 
         project_box = QLineEdit("Untitled Project")
-        project_box.setMinimumWidth(160)
+        project_box.setMinimumWidth(120)
+        project_box.setMaximumWidth(280)
+        project_box.setAccessibleName("Project name")
         self.project_box = project_box
 
-        save_btn = QPushButton("Save Layout")
-        save_btn.clicked.connect(lambda: self.save_layout())
-        self.save_as_btn = QPushButton("Save Layout As")
-        self.save_as_btn.clicked.connect(lambda: self.save_layout(save_as=True))
-        self.open_layout_btn = QPushButton("Open Layout")
-        self.open_layout_btn.clicked.connect(lambda: self.open_layout())
-        self.new_layout_btn = QPushButton("New Layout")
-        self.new_layout_btn.clicked.connect(self.new_layout)
-        self.load_btn = QPushButton("Import PDF")
-        self.load_btn.clicked.connect(self.on_import_pdf_clicked)
-        self.check_btn = QPushButton("Validate")
-        self.check_btn.clicked.connect(self._on_check_circuit_clicked)
-        self.run_btn = QPushButton("Run Evaluation")
-        self.run_btn.clicked.connect(self._on_run_evaluation_clicked)
-
-        self.save_results_btn = QPushButton("Save Calculation Results")
-        self.save_results_btn.clicked.connect(self._on_save_results_clicked)
-        self.save_results_btn.setEnabled(False)
-
         identity_row = QHBoxLayout()
+        identity_row.setSpacing(8)
         identity_row.addWidget(logo)
         identity_row.addWidget(title, 1)
-        identity_row.addWidget(QLabel("Project:"))
-        identity_row.addWidget(project_box)
-        layout.addLayout(identity_row)
+        identity_layout.addLayout(identity_row)
+        project_row = QHBoxLayout()
+        project_row.setSpacing(6)
+        project_row.addWidget(QLabel("Project:"))
+        project_row.addWidget(project_box, 1)
+        identity_layout.addLayout(project_row)
+        identity_layout.addStretch(1)
+        layout.addWidget(identity)
 
-        actions_grid = QGridLayout()
-        actions_grid.setHorizontalSpacing(12)
-        actions_grid.setVerticalSpacing(10)
-        buttons = (self.new_layout_btn, self.open_layout_btn, save_btn, self.save_as_btn,
-                   self.load_btn, self.check_btn, self.run_btn, self.save_results_btn)
-        for index, button in enumerate(buttons):
-            actions_grid.addWidget(button, index // 4, index % 4)
-        for column in range(4):
-            actions_grid.setColumnStretch(column, 1)
-        layout.addLayout(actions_grid)
+        self.ribbon = RibbonBar()
+        layout.addWidget(self.ribbon, 1)
         return frame
 
     def _build_content(self):
@@ -768,11 +780,6 @@ class SubstationGuiMockup(QMainWindow):
         layout = QVBoxLayout(container)
         layout.setSpacing(16)
         layout.setContentsMargins(0, 0, 0, 0)
-
-        # Create Component button (sits above the Equipment Library)
-        self.create_component_btn = QPushButton("Create Component")
-        self.create_component_btn.clicked.connect(self._on_create_component_clicked)
-        layout.addWidget(self.create_component_btn)
 
         # Equipment palette
         palette_group = QGroupBox("Equipment Library")
@@ -798,44 +805,7 @@ class SubstationGuiMockup(QMainWindow):
 
         search.textChanged.connect(_filter_equipment)
 
-        # Quick actions
-        self.controls_group = QGroupBox("Quick Actions")
-        self.controls_group.setObjectName("quickActions")
-        self.controls_layout = QVBoxLayout(self.controls_group)
-        self.controls_layout.setContentsMargins(10, 8, 10, 10)
-        self.controls_layout.setSpacing(4)
-
-        self.undo_btn = QPushButton("Undo")
-        self.redo_btn = QPushButton("Redo")
-        self.controls_layout.addWidget(self.undo_btn)
-        self.controls_layout.addWidget(self.redo_btn)
-
-        clipboard_row = QHBoxLayout()
-        self.copy_btn = QPushButton("Copy")
-        self.copy_btn.setToolTip("Copy selected components (Ctrl+C in workspace)")
-        self.copy_btn.clicked.connect(lambda: self.workspace_view.copy_selected())
-        self.paste_btn = QPushButton("Paste")
-        self.paste_btn.setToolTip("Paste components (Ctrl+V in workspace)")
-        self.paste_btn.clicked.connect(lambda: self.workspace_view.paste_components())
-        clipboard_row.addWidget(self.copy_btn)
-        clipboard_row.addWidget(self.paste_btn)
-        self.controls_layout.addLayout(clipboard_row)
-
-        delete_btn = QPushButton("Delete Selected")
-        delete_btn.clicked.connect(
-            lambda: self.workspace_view.delete_selected() if hasattr(self, "workspace_view") else None
-        )
-        self.controls_layout.addWidget(delete_btn)
-
-        rotate_btn = QPushButton("Rotate 90°")
-        rotate_btn.clicked.connect(
-            lambda: self.workspace_view.rotate_selected() if hasattr(self, "workspace_view") else None
-        )
-        self.controls_layout.addWidget(rotate_btn)
-
-
         layout.addWidget(palette_group, 1)
-        layout.addWidget(self.controls_group, 0)
         return container
 
     def _build_center_panel(self):
@@ -995,12 +965,6 @@ class SubstationGuiMockup(QMainWindow):
 
         analysis_group = QGroupBox("Analysis Output")
         analysis_layout = QVBoxLayout(analysis_group)
-        self.zone_setup_btn = QPushButton("Configure Protection Zones")
-        self.zone_setup_btn.clicked.connect(self._configure_protection_zones)
-        analysis_layout.addWidget(self.zone_setup_btn)
-        self.expand_analysis_btn = QPushButton("Expand Analysis")
-        self.expand_analysis_btn.clicked.connect(self._expand_zone_analysis)
-        analysis_layout.addWidget(self.expand_analysis_btn)
         self.zone_view = QComboBox()
         self.zone_view.addItem("Run Evaluation to display zones")
         self.zone_view.currentIndexChanged.connect(self._show_zone_highlights)
@@ -1314,7 +1278,7 @@ class SubstationGuiMockup(QMainWindow):
             netlist["zones"] = copy.deepcopy(self.protection_zones)
             self.last_netlist = netlist
             self._evaluated_snapshot = self._layout_data()
-            self.save_results_btn.setEnabled(True)
+            self.export_results_action.setEnabled(True)
             self.output_box.setPlainText("\n".join(lines))
             self.footer_status_label.setText("Zone evaluation complete" if report["complete"] else messages.SUBSTATION_GUI4_ZONE_EVALUATION_NEEDS_REVIEW_CONFIGURE_PROTECTION_ZONES)
         except Exception as error:
@@ -1858,7 +1822,7 @@ class SubstationGuiMockup(QMainWindow):
 def main() -> None:
     """Open the substation design window."""
     app = QApplication(sys.argv)
-    app.setFont(QFont("Segoe UI", 11))
+    app.setFont(ui_font())
 
     window = SubstationGuiMockup()
     window.showMaximized()

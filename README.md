@@ -13,8 +13,13 @@ This main functionalities of this app are as follows:
 
 ## Layouts and properties
 
-Use the header buttons **New Layout**, **Open Layout** (`Ctrl+O`), **Save Layout**
-(`Ctrl+S`), or **Save Layout As** (`Ctrl+Shift+S`). The Project field names
+The top command bar groups controls into **File**, **Edit**, **View**, and
+**Analysis** tabs. File contains **New**, **Open** (`Ctrl+O`), **Save**
+(`Ctrl+S`), **Save As** (`Ctrl+Shift+S`), **Import PDF**, and **Export Results**.
+Edit contains undo/redo, copy/paste, delete, rotate, and component creation.
+View contains the drawing-layer visibility controls, grid snapping, and opacity.
+Analysis contains validation, zone configuration, evaluation, and the expanded
+results view. The Project field names
 the current layout. Layout JSON files preserve equipment definitions, component
 properties, positions, sizes, rotations, bus taps, connections, and grid settings.
 Unsaved changes are checked before closing or replacing a layout.
@@ -33,7 +38,7 @@ nonnegative; bus voltage must be positive or blank. Select one component at a
 time to edit its properties.
 
 Select components in the workspace and press **Ctrl+C**, then **Ctrl+V** to
-duplicate them, or use **Copy** and **Paste** under Quick Actions. Ctrl-click
+duplicate them, or use **Copy** and **Paste** on the Edit tab. Ctrl-click
 to select multiple components. Copies retain electrical properties, breaker
 settings, bus taps, sizes, rotations, and connections between selected components.
 Connections to unselected components are excluded. Each paste is offset and
@@ -64,7 +69,7 @@ be reviewed after pasting. Copy/paste inside text fields still edits text normal
    suggestions stop at open switches and omit open breakers. Existing operating
    assignments remain available for explicit review. Proposals of the same kind
    covering the same equipment and conductors are shown once.
-3. Click **Configure Protection Zones** above the analysis output. Review each
+3. Click **Configure Zones** on the Analysis tab. Review each
    zone's protected equipment, CT boundaries, and operating-load rows. Only CTs
    checked for that zone act as its boundaries; metering/other CTs can be left
    unchecked. Shared equipment and overlapping zones are allowed. Choose a
@@ -113,7 +118,7 @@ Colored outlines mark the protected equipment and connections; dashed outlines
 indicate zones needing review. **Validate** separately checks drawing connectivity.
 
 Changes to the layout invalidate previous results. Run Evaluation again before
-using **Save Calculation Results** to export a PDF. Draft exports are explicitly
+using **Export Results** on the File tab to export a PDF. Draft exports are explicitly
 marked incomplete. Zone configuration is saved in layout JSON; older layouts
 without zone configuration still open normally.
 

@@ -11,6 +11,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import QGraphicsItem, QGraphicsPathItem, QGraphicsScene
 
+from gft_opto.gui.theme import ui_font
 from gft_opto.gui.routing import (
     MAX_SYMBOL_SCALE,
     MIN_BUS_LENGTH,
@@ -245,8 +246,7 @@ class OneLineSymbolItem(QGraphicsItem):
 
     def _label_font(self) -> QFont:
         """Keep the name the same visual size when the symbol is scaled."""
-        font = QFont("Sans-Serif", 11)
-        font.setWeight(QFont.Weight.Bold)
+        font = ui_font(11, QFont.Weight.Bold)
         font.setPointSizeF(11.0 / max(self.scale_factor, 1e-6))
         return font
 
@@ -551,7 +551,7 @@ class MotorOperatedSwitchItem(OneLineSymbolItem):
         # Circled M (motor operator), AEP style
         painter.setBrush(QBrush(Qt.GlobalColor.white))
         painter.drawEllipse(QRectF(-8, 8, 16, 16))
-        painter.setFont(QFont("Sans-Serif", 7, QFont.Weight.Bold))
+        painter.setFont(ui_font(7, QFont.Weight.Bold))
         painter.drawText(QRectF(-8, 8, 16, 16), Qt.AlignmentFlag.AlignCenter, "M")
         self._end_paint(painter)
 
