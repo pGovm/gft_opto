@@ -83,6 +83,12 @@ class ZoneDialog(QDialog):
         body = QHBoxLayout()
         outer.addLayout(body, 1)
         left = QVBoxLayout()
+        self.verify_all = QCheckBox("Verify all zones")
+        self.verify_all.setToolTip(
+            "Confirm every zone's CT boundaries and operating actions. "
+            "Saving still checks each zone for missing or invalid settings."
+        )
+        left.addWidget(self.verify_all)
         self.zone_list = QListWidget()
         left.addWidget(self.zone_list)
         for label, callback in ((messages.ZONE_DIALOG_DETECT_MISSING_ZONES, self.detect), ("Add Zone", self.add_zone), ("Delete Zone", self.delete_zone)):
@@ -148,6 +154,8 @@ class ZoneDialog(QDialog):
         self.cts.itemChanged.connect(self._custom_boundary_changed)
         self.region_combo.currentIndexChanged.connect(self._use_detected_region)
         self.zone_list.currentRowChanged.connect(self.select_zone)
+        self.verify_all.toggled.connect(self._verify_all_zones)
+        self.confirmed.toggled.connect(self._sync_verify_all)
         self.refresh_list()
 
     def _apply_readable_theme(self):
@@ -200,6 +208,25 @@ class ZoneDialog(QDialog):
     def unconfirm(self, *_):
         if not self.loading:
             self.confirmed.setChecked(False)
+
+    def _sync_verify_all(self, *_):
+        if self.loading:
+            return
+        verified = [self.confirmed.isChecked() if index == self.active
+                    else zone["confirmed"] for index, zone in enumerate(self.zones)]
+        self.verify_all.blockSignals(True)
+        self.verify_all.setEnabled(bool(verified))
+        self.verify_all.setChecked(bool(verified) and all(verified))
+        self.verify_all.blockSignals(False)
+
+    def _verify_all_zones(self, checked):
+        self.capture()
+        for zone in self.zones:
+            zone["confirmed"] = checked
+        self.confirmed.blockSignals(True)
+        self.confirmed.setChecked(checked if self.zones else False)
+        self.confirmed.blockSignals(False)
+        self._sync_verify_all()
 
     def _custom_boundary_changed(self, *_):
         if self.loading:
@@ -281,6 +308,7 @@ class ZoneDialog(QDialog):
             boundary_cts=[self.cts.item(i).data(Qt.ItemDataRole.UserRole) for i in range(self.cts.count())
                           if self.cts.item(i).checkState() == Qt.CheckState.Checked])
         self.zone_list.item(self.active).setText(self.zones[self.active]["name"] or "Unnamed Zone")
+        self._sync_verify_all()
 
     def refresh_list(self, selected=0):
         self.zone_list.blockSignals(True)
@@ -297,6 +325,7 @@ class ZoneDialog(QDialog):
             self.actions.setRowCount(0)
             self.confirmed.setChecked(False)
             self.loading = False
+            self._sync_verify_all()
 
     def select_zone(self, index):
         self.capture()
@@ -365,6 +394,7 @@ class ZoneDialog(QDialog):
             self.add_action(action)
         self.confirmed.setChecked(zone["confirmed"])
         self.loading = False
+        self._sync_verify_all()
 
     def add_action(self, action=None):
         if self.active < 0:

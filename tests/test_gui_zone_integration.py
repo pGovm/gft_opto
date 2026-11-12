@@ -20,7 +20,7 @@ from PySide6.QtGui import QFontDatabase
 from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 
 from gft_opto.gui.layout_io import build_scene, scene_data, library_from_layout
-from gft_opto.gui.substation_gui4 import SubstationGuiMockup
+from gft_opto.gui.substation_gui import SubstationGuiMockup
 from gft_opto.gui.symbols import (
     BusItem, CircuitBreakerItem, CurrentTransformerItem, GroundItem, IncomingLineItem,
     ConnectionItem, EQUIPMENT_DEFS, OneLineSymbolItem,
@@ -108,6 +108,44 @@ class GuiZoneIntegration(unittest.TestCase):
     def test_live_scene_catalog_matches_netlist_catalog(self):
         self.example()
         self.assertEqual(self.window._scene_topology(), analyze_topology(self.window._protection_netlist()))
+
+    def test_verify_all_zones_preserves_edits_and_tracks_individual_changes(self):
+        *_, zone = self.example()
+        second = copy.deepcopy(zone)
+        second.update(id="second-event", name="Second event", confirmed=False)
+        dialog = self.dialog([zone, second])
+        self.assertFalse(dialog.verify_all.isChecked())
+        dialog.name.setText("Edited event")
+        dialog.verify_all.click()
+        self.assertTrue(all(z["confirmed"] for z in dialog.zones))
+        self.assertEqual(dialog.zones[0]["name"], "Edited event")
+        self.assertTrue(dialog.verify_all.isChecked())
+        dialog.zone_list.setCurrentRow(1)
+        self.assertTrue(dialog.confirmed.isChecked())
+        self.assertTrue(dialog.verify_all.isChecked())
+        dialog.unconfirm()
+        self.assertFalse(dialog.verify_all.isChecked())
+        dialog.verify_all.click()
+        dialog.verify_all.click()
+        self.assertFalse(any(z["confirmed"] for z in dialog.zones))
+        self.assertFalse(dialog.confirmed.isChecked())
+
+    def test_verify_all_zones_still_validates_on_save(self):
+        *_, zone = self.example()
+        zone.update(actions=[], confirmed=False)
+        dialog = self.dialog([zone])
+        dialog.verify_all.click()
+        with patch.object(QMessageBox, "warning") as warning:
+            dialog.accept()
+        warning.assert_called_once()
+        self.assertNotEqual(dialog.result(), QDialog.DialogCode.Accepted)
+
+    def test_verify_all_zones_is_disabled_until_a_zone_exists(self):
+        dialog = self.dialog([])
+        self.assertFalse(dialog.verify_all.isEnabled())
+        dialog.add_zone()
+        self.assertTrue(dialog.verify_all.isEnabled())
+        self.assertFalse(dialog.verify_all.isChecked())
 
     def test_open_breaker_scene_and_netlist_partition_the_same_terminals(self):
         bus, ct, breaker, ground, _, _ = self.example()
@@ -509,7 +547,7 @@ class GuiZoneIntegration(unittest.TestCase):
         self.assertEqual({a["supply"] for a in dialog.zones[0]["actions"]}, {"A", "B"})
         dialog.accept()  # A draft may be saved without inventing a supply.
         self.assertEqual(dialog.result(), QDialog.DialogCode.Accepted)
-        with patch("gft_opto.gui.substation_gui4.ZoneDialog", return_value=dialog), \
+        with patch("gft_opto.gui.substation_gui.ZoneDialog", return_value=dialog), \
              patch.object(dialog, "exec", return_value=QDialog.DialogCode.Accepted):
             self.window._configure_protection_zones()
         self.assertNotIn("trip_coil_1_supply", breaker.properties)

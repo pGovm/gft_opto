@@ -2,7 +2,7 @@
 
 
 a = Analysis(
-    ['src/gft_opto/gui/substation_gui4.py'],
+    ['src/gft_opto/gui/substation_gui.py'],
     pathex=['src'],
     binaries=[],
     datas=[('src/gft_opto/assets', 'assets')],

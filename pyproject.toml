@@ -37,7 +37,7 @@ classifiers = [
 Repository = "https://github.com/pGovm/gft_opto.git"
 
 [project.scripts]
-gft-opto = "gft_opto.gui.substation_gui4:main"
+gft-opto = "gft_opto.gui.substation_gui:main"
 
 [dependency-groups]
 

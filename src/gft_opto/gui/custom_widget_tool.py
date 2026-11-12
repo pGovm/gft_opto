@@ -3,7 +3,7 @@
 """
 Create-Component dialog and a small standalone demo widget.
 
-Used by substation_gui4.py when the user clicks "Create Component".
+Used by substation_gui.py when the user clicks "Create Component".
 Symbol type keys must stay in sync with EQUIPMENT_DEFS there.
 """
 
@@ -32,7 +32,7 @@ from gft_opto.gui.theme import ui_font
 
 # ---------------------------------------------------------------------------
 # Symbol types offered in the Create Component dialog
-# (keys match BUILTIN_SYMBOLS in substation_gui4.py)
+# (keys match BUILTIN_SYMBOLS in substation_gui.py)
 # ---------------------------------------------------------------------------
 
 SYMBOL_TYPE_CHOICES: list[tuple[str, str]] = [

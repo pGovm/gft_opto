@@ -24,7 +24,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 
 from gft_opto.gui.commands import AddEquipmentCommand, AddConnectionCommand, SplitWireCommand
 from gft_opto.gui.layout_io import build_scene, scene_data, library_from_layout
-from gft_opto.gui.substation_gui4 import SubstationGuiMockup
+from gft_opto.gui.substation_gui import SubstationGuiMockup
 from gft_opto.gui.symbols import (
     BusItem, CircuitBreakerItem, ConnectionItem, EQUIPMENT_DEFS, OneLineSymbolItem,
     make_user_equipment, CurrentTransformerItem, GroundItem,
@@ -235,7 +235,7 @@ class GuiWorkflows(unittest.TestCase):
         self.assign_test_zone(breaker)
         w._on_run_evaluation_clicked()
         path = Path(self.temp.name) / "results.pdf"
-        with patch("gft_opto.gui.substation_gui4.QFileDialog.getSaveFileName", return_value=(str(path), "")):
+        with patch("gft_opto.gui.substation_gui.QFileDialog.getSaveFileName", return_value=(str(path), "")):
             w._on_save_results_clicked()
         self.assertGreater(path.stat().st_size, 0)
         with pymupdf.open(path) as document:
@@ -244,12 +244,13 @@ class GuiWorkflows(unittest.TestCase):
         self.assertIn("18", text)
         self.assertIn("Zone Summary", pages[0])
         self.assertIn("Warnings Summary", pages[0])
-        self.assertIn("bus_zone", text)
+        self.assertIn("Test Bus Zone", text)
+        self.assertNotIn("bus_zone", text)
         self.assertIn("Primary trip: Confirmed 18.0 A", text)
         self.assertIn("Appendix: Detected Topology Regions", pages[-1])
         self.assertIn("Results saved:", w.footer_status_label.text())
         bad_path = Path(self.temp.name) / "missing" / "results.pdf"
-        with patch("gft_opto.gui.substation_gui4.QFileDialog.getSaveFileName", return_value=(str(bad_path), "")), patch.object(QMessageBox, "critical") as error:
+        with patch("gft_opto.gui.substation_gui.QFileDialog.getSaveFileName", return_value=(str(bad_path), "")), patch.object(QMessageBox, "critical") as error:
             w._on_save_results_clicked()
             error.assert_called_once()
 
@@ -259,7 +260,7 @@ class GuiWorkflows(unittest.TestCase):
         self.assign_test_zone(breaker)
         w._on_run_evaluation_clicked()
         path = Path(self.temp.name) / "incomplete-results.pdf"
-        with patch("gft_opto.gui.substation_gui4.QFileDialog.getSaveFileName", return_value=(str(path), "")):
+        with patch("gft_opto.gui.substation_gui.QFileDialog.getSaveFileName", return_value=(str(path), "")):
             w._on_save_results_clicked()
         with pymupdf.open(path) as document:
             pages = [page.get_text() for page in document]
@@ -267,13 +268,14 @@ class GuiWorkflows(unittest.TestCase):
         self.assertIn("Missing or invalid currents", pages[0])
         self.assertIn("current is missing", pages[0])
         self.assertIn("Test Bus Zone", pages[0])
+        self.assertNotIn("bus_zone", "".join(pages))
         self.assertIn("Not calculated", pages[0])
 
     def test_netlist_pdf_export(self):
         w = self.window
         self.add_breaker()
         path = Path(self.temp.name) / "netlist.pdf"
-        with patch("gft_opto.gui.substation_gui4.QFileDialog.getSaveFileName", return_value=(str(path), "")):
+        with patch("gft_opto.gui.substation_gui.QFileDialog.getSaveFileName", return_value=(str(path), "")):
             w._on_save_netlist_pdf()
         self.assertGreater(path.stat().st_size, 0)
         with pymupdf.open(path) as document:
@@ -392,7 +394,7 @@ class GuiWorkflows(unittest.TestCase):
                     self.assertLessEqual(origin.x() + control.width(), w.width())
         self.assertTrue(any(action.shortcut().toString() == "Ctrl+O" for action in w.actions()))
         w.ribbon.setCurrentIndex(0)
-        with patch("gft_opto.gui.substation_gui4.QFileDialog.getOpenFileName", return_value=("", "")) as dialog:
+        with patch("gft_opto.gui.substation_gui.QFileDialog.getOpenFileName", return_value=("", "")) as dialog:
             w.open_layout_btn.click()
             dialog.assert_called_once()
 
@@ -449,7 +451,7 @@ class GuiWorkflows(unittest.TestCase):
         with pymupdf.open() as document:
             document.new_page(width=720, height=360)
             document.save(pdf_path)
-        with patch("gft_opto.gui.substation_gui4.QFileDialog.getOpenFileName", return_value=(str(pdf_path), "")):
+        with patch("gft_opto.gui.substation_gui.QFileDialog.getOpenFileName", return_value=(str(pdf_path), "")):
             w.on_import_pdf_clicked()
         w.pdf_show_cb.setChecked(False)
         w.grid_snap_cb.setChecked(False)
@@ -468,7 +470,7 @@ class GuiWorkflows(unittest.TestCase):
         with patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.Cancel):
             self.assertFalse(w._confirm_discard())
         path = Path(self.temp.name) / "save.json"
-        with patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.Save), patch("gft_opto.gui.substation_gui4.QFileDialog.getSaveFileName", return_value=(str(path), "")):
+        with patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.Save), patch("gft_opto.gui.substation_gui.QFileDialog.getSaveFileName", return_value=(str(path), "")):
             self.assertTrue(w._confirm_discard())
         w.new_layout()
         self.assertEqual(scene_data(w.workspace_scene)["components"], [])
@@ -581,7 +583,7 @@ class GuiWorkflows(unittest.TestCase):
         self.assertEqual(dialog.actions.cellWidget(0, 3).text(), "Legacy DC 2")
         dialog.confirmed.setChecked(True)
         dialog.accept()
-        with patch("gft_opto.gui.substation_gui4.ZoneDialog", return_value=dialog), patch.object(dialog, "exec", return_value=dialog.DialogCode.Accepted):
+        with patch("gft_opto.gui.substation_gui.ZoneDialog", return_value=dialog), patch.object(dialog, "exec", return_value=dialog.DialogCode.Accepted):
             w._configure_protection_zones()
         self.assertEqual(breaker.properties["trip_coil_1_supply"], "Legacy DC 2")
         self.assertEqual(w.last_result["protection_analysis"]["supply_peaks"]["Legacy DC 2"]["peak_current_A"], 10)

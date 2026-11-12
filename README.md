@@ -25,6 +25,16 @@ properties, positions, sizes, rotations, bus taps, connections, and grid setting
 Unsaved changes are checked before closing or replacing a layout.
 The 11 provided one-line JSON layouts contain randomized demonstration currents
 for breakers and motor-operated switches. These are sample values, not manufacturer ratings.
+For a demonstration, open one of these layouts, click **Run Evaluation**, then
+**Export Results**. Saved `DEMO` scenarios include the random currents and
+per-stage totals in the calculation PDF. Both trip coils operate together in
+the demonstration's Primary trip stage on DC 1; closing, motor inrush, and
+motor running are separate stages. Nearby breakers use automatically proposed
+zone boundaries. Devices without a suggested zone action have separate Manual
+independent-operation scenarios, which do not assert additional protection zones.
+All demonstration scenarios remain unconfirmed and their totals provisional;
+they do not establish an approved worst-case DC supply load. No relay wiring or
+actual trip sequence is inferred from the drawings.
 Opening a layout also populates the Equipment Library from the components in
 the drawing, preserving their saved electrical and breaker settings alongside
 any existing templates. Identical definitions are reused; junction dots remain

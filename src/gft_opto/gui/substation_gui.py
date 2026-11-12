@@ -1451,6 +1451,15 @@ class SubstationGuiMockup(QMainWindow):
         peak_display = f"{peak:g} A" if isinstance(peak, (int, float)) else str(peak)
         report = result.get("protection_analysis") or {}
         study_status = "COMPLETE" if report.get("complete") else messages.SUBSTATION_GUI4_INCOMPLETE_PROVISIONAL_STUDY
+        demo_notice = (
+            "<p><b>DEMONSTRATION — sample currents and assumed operating actions.</b> "
+            "DEMO scenarios use both trip coils together on DC 1. Closing, motor "
+            "inrush, and motor running are separate stages. Independent-operation "
+            "scenarios are switching examples, not additional protection schemes. "
+            "These provisional totals are not an approved DC supply sizing result.</p>"
+            if any(str(zone.get("name", "")).startswith("DEMO - ")
+                   for zone in report.get("zones", [])) else ""
+        )
 
         loads = result.get("loads") or []
         load_rows = "".join(
@@ -1486,8 +1495,7 @@ class SubstationGuiMockup(QMainWindow):
             total_html = "".join(stage_totals) or "No calculated stage totals"
             zone_summary_rows.append(
                 "<tr>"
-                f"<td>{escape(str(zone.get('name', 'Unnamed zone')))} "
-                f"({escape(str(zone.get('id', 'unknown')))})</td>"
+                f"<td>{escape(str(zone.get('name', 'Unnamed zone')))}</td>"
                 f"<td>{total_html}</td>"
                 f"<td class='{status_class}'><b>{status}</b></td>"
                 "</tr>"
@@ -1496,8 +1504,7 @@ class SubstationGuiMockup(QMainWindow):
             if not zone.get("complete"):
                 details = "; ".join(zone_warnings) or "No completion details were returned."
                 review_zone_items.append(
-                    f"<li><b>{escape(str(zone.get('name', 'Unnamed zone')))} "
-                    f"({escape(str(zone.get('id', 'unknown')))}):</b> "
+                    f"<li><b>{escape(str(zone.get('name', 'Unnamed zone')))}:</b> "
                     f"{escape(details)}</li>"
                 )
             for warning in zone_warnings:
@@ -1589,6 +1596,7 @@ class SubstationGuiMockup(QMainWindow):
         <body>
           <h1>Calculation Results</h1>
           <p><b>{escape(study_status)}</b></p>
+          {demo_notice}
 
           <p>
             <b>System:</b>

@@ -104,7 +104,7 @@ class CrossModuleContracts(unittest.TestCase):
         self.assertGreater(count, 10)
 
     def test_gui_uses_study_evaluator_not_all_loads_scene_calculator(self):
-        tree = function(read_tree('gui/substation_gui4.py'), '_on_run_evaluation_clicked')
+        tree = function(read_tree('gui/substation_gui.py'), '_on_run_evaluation_clicked')
         calls = {n.func.id for n in ast.walk(tree) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
         self.assertIn('evaluate_zones', calls)
         self.assertFalse(calls & {'evaluate_scene', 'scenario_from_netlist', 'calculator_from_netlist'})
@@ -133,7 +133,7 @@ class CrossModuleContracts(unittest.TestCase):
         scene, _, _ = fixture()
         net = calculator.netlist_from_scene(scene)
         report = study.evaluate_zones(net, [confirmed(net, study.propose_zones(net)[0])])
-        handler = function(read_tree('gui/substation_gui4.py'), '_on_run_evaluation_clicked')
+        handler = function(read_tree('gui/substation_gui.py'), '_on_run_evaluation_clicked')
         samples = {'report': report, 'netlist': net, 'zone': report['zones'][0],
                    'scenario': report['zones'][0]['scenarios'][0],
                    'load': report['zones'][0]['scenarios'][0]['loads'][0],
@@ -251,7 +251,7 @@ class CrossModuleContracts(unittest.TestCase):
         scene, _, _ = fixture()
         net = calculator.netlist_from_scene(scene)
         report = study.evaluate_zones(net, [confirmed(net, study.propose_zones(net)[0])])
-        handler = function(read_tree('gui/substation_gui4.py'), '_show_zone_highlights')
+        handler = function(read_tree('gui/substation_gui.py'), '_show_zone_highlights')
         self.assertTrue(keys_used(handler, 'report') <= report.keys())
         expected = keys_used(handler, 'zone')
         for row in report['zones']:
