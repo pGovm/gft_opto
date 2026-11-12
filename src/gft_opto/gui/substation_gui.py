@@ -1477,7 +1477,8 @@ class SubstationGuiMockup(QMainWindow):
         missing_current_items = []
         review_zone_items = []
         for zone in report.get("zones", []):
-            status = "COMPLETE" if zone.get("complete") else "REVIEW REQUIRED — PROVISIONAL"
+            status = ("COMPLETE (DEMO)" if zone.get("demonstration_complete") else
+                      "COMPLETE" if zone.get("complete") else "REVIEW REQUIRED — PROVISIONAL")
             status_class = "complete" if zone.get("complete") else "incomplete"
             stage_totals = []
             for scenario in zone.get("scenarios", []):
@@ -1486,7 +1487,8 @@ class SubstationGuiMockup(QMainWindow):
                         "<div><b class='incomplete'>Not calculated — no valid loads</b></div>"
                     )
                     continue
-                qualifier = "Confirmed" if zone.get("complete") else "PROVISIONAL"
+                qualifier = ("Demo" if zone.get("demonstration_complete") else
+                             "Confirmed" if zone.get("complete") else "PROVISIONAL")
                 stage_totals.append(
                     f"<div>{escape(str(scenario.get('stage', 'Unspecified stage')))}: "
                     f"<b class='{status_class}'>{qualifier} "

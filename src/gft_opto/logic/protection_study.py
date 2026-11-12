@@ -722,6 +722,12 @@ def evaluate_zones(netlist: dict, zones: list[dict]) -> dict:
         warnings.extend(action_warnings)
         warnings.extend(conflicts[zone["id"]])
         warnings = list(dict.fromkeys(warnings))
+        demonstration_complete = bool(
+            zone.get("demonstration_complete") and zone["name"].startswith("DEMO - ")
+            and zone["confirmed"]
+            and zone.get("topology_signature") == current_signature
+            and zone.get("configuration_signature") == configuration_signature(original)
+        )
         report["zones"].append({
             "id": zone["id"], "name": zone["name"], "kind": zone["kind"],
             "members": sorted(i.instance_id for i in region.all_items) if region else [],
@@ -729,7 +735,9 @@ def evaluate_zones(netlist: dict, zones: list[dict]) -> dict:
             "boundaries": sorted(zone["boundary_cts"]),
             "connections": _json(zone_signature(region)["connections"]) if region else [],
             "wire_only": region.is_wire_only if region else False,
-            "complete": not warnings, "warnings": warnings, "scenarios": scenarios,
+            "complete": not warnings or demonstration_complete,
+            "demonstration_complete": demonstration_complete,
+            "warnings": warnings, "scenarios": scenarios,
             "enclosed_by": [],
         })
     # Each adapted graph uses different Python objects. Use stable item IDs for

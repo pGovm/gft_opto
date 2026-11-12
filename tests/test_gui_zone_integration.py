@@ -135,10 +135,49 @@ class GuiZoneIntegration(unittest.TestCase):
         zone.update(actions=[], confirmed=False)
         dialog = self.dialog([zone])
         dialog.verify_all.click()
+        self.assertFalse(dialog.confirmed.isChecked())
+        self.assertIn("remain drafts", dialog.verification_summary.text())
+        # Bulk verification skips invalid zones; manually forcing confirmation
+        # still cannot bypass the save-time validation.
+        dialog.confirmed.setChecked(True)
         with patch.object(QMessageBox, "warning") as warning:
             dialog.accept()
         warning.assert_called_once()
         self.assertNotEqual(dialog.result(), QDialog.DialogCode.Accepted)
+
+    def test_verify_all_zones_can_save_valid_zones_with_incomplete_drafts(self):
+        *_, zone = self.example()
+        incomplete = copy.deepcopy(zone)
+        incomplete.update(id="incomplete", name="Incomplete bus", actions=[],
+                          boundary_cts=[], confirmed=False)
+        dialog = self.dialog([zone, incomplete])
+        dialog.verify_all.click()
+        self.assertTrue(dialog.zones[0]["confirmed"])
+        self.assertFalse(dialog.zones[1]["confirmed"])
+        self.assertIn("Verified 1 of 2", dialog.verification_summary.text())
+        self.assertIn("boundary CTs", dialog.verification_summary.toolTip())
+        with patch.object(QMessageBox, "warning") as warning:
+            dialog.accept()
+        warning.assert_not_called()
+        self.assertEqual(dialog.result(), QDialog.DialogCode.Accepted)
+
+    def test_verify_all_can_complete_demo_drafts_without_inventing_loads_or_cts(self):
+        *_, zone = self.example()
+        zone.update(name="DEMO - incomplete bus", actions=[], boundary_cts=[], confirmed=False)
+        dialog = self.dialog([zone])
+        dialog.verify_all.click()
+        self.assertTrue(dialog.verify_all.isChecked())
+        with patch.object(QMessageBox, "warning") as warning:
+            dialog.accept()
+        warning.assert_not_called()
+        self.assertEqual(dialog.result(), QDialog.DialogCode.Accepted)
+        from gft_opto.logic.protection_study import evaluate_zones
+        row = evaluate_zones(dialog.netlist, dialog.zones)["zones"][0]
+        self.assertTrue(row["complete"])
+        self.assertTrue(row["demonstration_complete"])
+        self.assertTrue(row["warnings"])
+        self.assertEqual(row["scenarios"], [])
+        self.assertEqual(row["boundaries"], [])
 
     def test_verify_all_zones_is_disabled_until_a_zone_exists(self):
         dialog = self.dialog([])

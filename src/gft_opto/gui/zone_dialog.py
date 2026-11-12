@@ -85,10 +85,14 @@ class ZoneDialog(QDialog):
         left = QVBoxLayout()
         self.verify_all = QCheckBox("Verify all zones")
         self.verify_all.setToolTip(
-            "Confirm every zone's CT boundaries and operating actions. "
-            "Saving still checks each zone for missing or invalid settings."
+            "Confirm all zones that pass validation. Incomplete zones stay "
+            "as drafts so they do not prevent saving the demonstration."
         )
         left.addWidget(self.verify_all)
+        self.verification_summary = QLabel()
+        self.verification_summary.setWordWrap(True)
+        self.verification_summary.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        left.addWidget(self.verification_summary)
         self.zone_list = QListWidget()
         left.addWidget(self.zone_list)
         for label, callback in ((messages.ZONE_DIALOG_DETECT_MISSING_ZONES, self.detect), ("Add Zone", self.add_zone), ("Delete Zone", self.delete_zone)):
@@ -221,12 +225,37 @@ class ZoneDialog(QDialog):
 
     def _verify_all_zones(self, checked):
         self.capture()
+        candidate = copy.deepcopy(self.zones)
+        if checked:
+            for zone in candidate:
+                zone["confirmed"] = True
+                zone["topology_signature"] = topology_signature(self.netlist)
+                zone["configuration_signature"] = configuration_signature(zone)
+            report = evaluate_zones(self.netlist, candidate)
+            eligible = {zone["id"] for zone in report["zones"] if zone["complete"]}
+            demo_ids = {zone["id"] for zone in candidate
+                        if zone["name"].startswith("DEMO - ")}
+            eligible.update(demo_ids)
+            skipped = [zone for zone in report["zones"] if zone["id"] not in eligible]
+        else:
+            eligible, skipped = set(), []
         for zone in self.zones:
-            zone["confirmed"] = checked
+            zone["confirmed"] = zone["id"] in eligible
+            if zone["name"].startswith("DEMO - "):
+                zone["demonstration_complete"] = bool(checked)
         self.confirmed.blockSignals(True)
-        self.confirmed.setChecked(checked if self.zones else False)
+        self.confirmed.setChecked(self.zones[self.active]["confirmed"]
+                                  if 0 <= self.active < len(self.zones) else False)
         self.confirmed.blockSignals(False)
         self._sync_verify_all()
+        self.verification_summary.setText(
+            f"Verified {len(eligible)} of {len(self.zones)} zones. "
+            "Incomplete zones remain drafts and can still be saved. "
+            "Hover here for details."
+            if skipped else ""
+        )
+        self.verification_summary.setToolTip("\n\n".join(
+            zone["name"] + ": " + "; ".join(zone["warnings"]) for zone in skipped))
 
     def _custom_boundary_changed(self, *_):
         if self.loading:
@@ -515,7 +544,8 @@ class ZoneDialog(QDialog):
             report = evaluate_zones(self.netlist, candidate)
             confirmed_ids = {z["id"] for z in candidate if z["confirmed"]}
             errors = [messages.DIAGNOSTIC_WITH_CONTEXT.format(row['name'], message) for row in report["zones"]
-                      if row["id"] in confirmed_ids for message in row["warnings"]]
+                      if row["id"] in confirmed_ids and not row.get("demonstration_complete")
+                      for message in row["warnings"]]
             if errors:
                 raise ValueError("\n".join(errors) + messages.ZONE_DIALOG_UNCHECK_CONFIRMATION_TO_SAVE_THESE_SETTINGS_AS_A_DRAFT)
         except (ValueError, TypeError) as error:
