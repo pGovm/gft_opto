@@ -6,12 +6,13 @@ from gft_opto.gui import messages
 import copy
 import uuid
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QEvent, QPoint, QItemSelectionModel, Signal
 from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QHBoxLayout,
     QLabel, QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPushButton,
-    QSpinBox, QTableWidget, QVBoxLayout, QWidget, QHeaderView,
+    QSpinBox, QTableWidget, QVBoxLayout, QWidget, QHeaderView, QAbstractItemView, QDoubleSpinBox,
+    QTableWidgetSelectionRange,
 )
 
 from gft_opto.logic.protection_study import (
@@ -20,6 +21,58 @@ from gft_opto.logic.protection_study import (
 )
 from gft_opto.logic.breaker_settings import breaker_settings, resolve_breaker_action, SUPPLY_KEYS
 from gft_opto.gui.theme import SCROLLBAR_STYLE
+
+
+class _LoadRowHeader(QHeaderView):
+    delete_requested = Signal(int)
+
+    def __init__(self, parent):
+        super().__init__(Qt.Orientation.Vertical, parent)
+        self.hovered_row = -1
+        self.setMouseTracking(True)
+        self.setToolTip("Click the minus sign to delete this load")
+
+    def mouseMoveEvent(self, event):
+        self.hovered_row = self.logicalIndexAt(event.position().toPoint())
+        self.viewport().update()
+        super().mouseMoveEvent(event)
+
+    def leaveEvent(self, event):
+        self.hovered_row = -1
+        self.viewport().update()
+        super().leaveEvent(event)
+
+    def paintSection(self, painter, rect, logical_index):
+        super().paintSection(painter, rect, logical_index)
+        if logical_index == self.hovered_row:
+            painter.save()
+            painter.fillRect(rect.adjusted(1, 1, -1, -1), QColor("#fde8e8"))
+            painter.setPen(QColor("#9b1c1c"))
+            painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, "âˆ’")
+            painter.restore()
+
+    def mousePressEvent(self, event):
+        row = self.logicalIndexAt(event.position().toPoint())
+        if event.button() == Qt.MouseButton.LeftButton and row >= 0:
+            self.hovered_row = -1
+            self.delete_requested.emit(row)
+            self.viewport().update()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+
+class _LoadCell(QWidget):
+    def __init__(self, editor, other):
+        super().__init__()
+        self.editor = editor
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(editor)
+        layout.addWidget(other)
+
+    def __getattr__(self, name):
+        return getattr(self.editor, name)
 
 
 class ZoneDialog(QDialog):
@@ -88,14 +141,12 @@ class ZoneDialog(QDialog):
             "Confirm all zones that pass validation. Incomplete zones stay "
             "as drafts so they do not prevent saving the demonstration."
         )
-        left.addWidget(self.verify_all)
         self.verification_summary = QLabel()
         self.verification_summary.setWordWrap(True)
         self.verification_summary.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        left.addWidget(self.verification_summary)
         self.zone_list = QListWidget()
         left.addWidget(self.zone_list)
-        for label, callback in ((messages.ZONE_DIALOG_DETECT_MISSING_ZONES, self.detect), ("Add Zone", self.add_zone), ("Delete Zone", self.delete_zone)):
+        for label, callback in (("Add Zone", self.add_zone), ("Delete Zone", self.delete_zone)):
             button = QPushButton(label)
             button.clicked.connect(callback)
             left.addWidget(button)
@@ -135,19 +186,29 @@ class ZoneDialog(QDialog):
                 self.cts.addItem(entry)
         right.addWidget(self.cts)
         right.addWidget(QLabel(messages.ZONE_DIALOG_OPERATING_LOADS_USE_A_SEPARATE_STAGE_FOR_RECLOSE_MOTOR))
-        self.actions = QTableWidget(0, 6)
-        self.actions.setHorizontalHeaderLabels(["Equipment", "Load", "Stage", "DC supply", "Operation", "Multiplier"])
+        self.actions = QTableWidget(0, 8)
+        row_header = _LoadRowHeader(self.actions)
+        self.actions.setVerticalHeader(row_header)
+        row_header.delete_requested.connect(self._delete_load_row)
+        self.actions.setHorizontalHeaderLabels(["Equipment", "Load", "Stage", "DC supply", "Operation", "Multiplier", "Other load name", "Other current (A)"])
+        self.actions.setColumnHidden(6, True)
+        self.actions.setColumnHidden(7, True)
+        self.actions.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.actions.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectItems)
+        self.actions.horizontalHeader().setSectionsClickable(True)
+        self.actions.verticalHeader().setSectionsClickable(True)
         self.actions.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.actions.verticalHeader().setDefaultSectionSize(44)
         right.addWidget(self.actions, 1)
         row = QHBoxLayout()
-        for label, callback in (("Add Load", lambda: self.add_action()), ("Remove Load", self.remove_action)):
-            button = QPushButton(label)
-            button.clicked.connect(callback)
-            row.addWidget(button)
+        add_load = QPushButton("Add Load")
+        add_load.clicked.connect(lambda: self.add_action())
+        row.addWidget(add_load)
         right.addLayout(row)
         self.confirmed = QCheckBox("I have verified this zone's CT boundaries and operating actions")
         right.addWidget(self.confirmed)
+        right.addWidget(self.verify_all)
+        right.addWidget(self.verification_summary)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
@@ -186,7 +247,11 @@ class ZoneDialog(QDialog):
         self.setStyleSheet("""
             QDialog { background-color: #f4f6f8; color: #1f2933; }
             QLabel, QCheckBox { color: #1f2933; background-color: transparent; }
-            QTableWidget, QListWidget, QLineEdit, QComboBox, QSpinBox {
+            QTableWidget, QListWidget, QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {
+                background-color: #ffffff; color: #1f2933;
+                selection-background-color: #006a4e; selection-color: #ffffff;
+            }
+            QDoubleSpinBox QLineEdit {
                 background-color: #ffffff; color: #1f2933;
                 selection-background-color: #006a4e; selection-color: #ffffff;
             }
@@ -321,6 +386,12 @@ class ZoneDialog(QDialog):
                 load=self.actions.cellWidget(row, 1).currentData(),
                 stage=self.actions.cellWidget(row, 2).currentText().strip(),
                 operation=self.actions.cellWidget(row, 4).currentData())
+            if action["component"].startswith("other:"):
+                action["custom_load"] = {"name": self.actions.cellWidget(row, 6).text().strip(),
+                                         "amps": self.actions.cellWidget(row, 7).value()}
+                action.update(stage="Miscellaneous load", supply="DC 1", operation="device")
+            else:
+                action.pop("custom_load", None)
             # Quantities are derived for modern rows. Unresolved legacy drafts
             # retain their original quantity so review never loses information.
             if action["operation"] != "legacy":
@@ -434,6 +505,8 @@ class ZoneDialog(QDialog):
         equipment, load, stage = QComboBox(), QComboBox(), QComboBox()
         equipment._saved_action = copy.deepcopy(action)
         equipment.addItem("Select equipment", "")
+        other_id = action["component"] if action["component"].startswith("other:") else "other:" + uuid.uuid4().hex
+        equipment.addItem("Other", other_id)
         for ident, component in self.components.items():
             if kind(component) not in ("ct", "pt", "ground", "junction", "bus", "surge_arrester", "incoming_line"):
                 equipment.addItem(f"{component.get('label', ident)} [{ident}]", ident)
@@ -457,21 +530,76 @@ class ZoneDialog(QDialog):
             if action.get("units", 1) not in (1, 3) or (action.get("units", 1) != 1 and (action["load"].startswith("motor_") or component is None or kind(component) != "breaker")):
                 selected = "legacy"
         if selected == "legacy":
-            operation.addItem("Legacy units — review", "legacy")
+            operation.addItem("Legacy units â€” review", "legacy")
         operation.setCurrentIndex(operation.findData(selected))
         multiplier = QLineEdit()
         multiplier.setReadOnly(True)
-        for col, widget in enumerate((equipment, load, stage, supply, operation, multiplier)):
-            self.actions.setCellWidget(row, col, widget)
+        custom_name = QLineEdit(action.get("custom_load", {}).get("name") or "Other load")
+        custom_name.setPlaceholderText("Enter load name")
+        custom_current = QDoubleSpinBox()
+        custom_current.setRange(0, 1000000)
+        custom_current.setDecimals(3)
+        custom_current.setValue(action.get("custom_load", {}).get("amps", 0))
+        # Miscellaneous current is entered directly in the Load cell.
+        other_amps = QDoubleSpinBox()
+        other_amps.setRange(0, 1000000)
+        other_amps.setDecimals(3)
+        other_amps.setSuffix(" A")
+        other_amps.setValue(custom_current.value())
+        other_amps.valueChanged.connect(custom_current.setValue)
+        custom_current.valueChanged.connect(other_amps.setValue)
+        other_amps.valueChanged.connect(self.unconfirm)
+        for col, widget in enumerate((equipment, load, stage, supply, operation, multiplier, custom_name, custom_current)):
+            if col not in (1, 2, 3, 4, 5):
+                self.actions.setCellWidget(row, col, widget)
+            widget.installEventFilter(self)
+            for child in widget.findChildren(QLineEdit):
+                child.installEventFilter(self)
         def update_row(*_):
             self._update_action_preview(equipment, load, operation, supply, multiplier)
+            other = equipment.currentData().startswith("other:")
+            load.setVisible(not other)
+            other_amps.setVisible(other)
+            for widget in (stage, supply, operation, multiplier):
+                widget.setVisible(not other)
+            custom_name.setEnabled(other)
+            custom_current.setEnabled(other)
+            load.setEnabled(not other)
             self.unconfirm()
         for combo in (equipment, load, operation):
             combo.currentIndexChanged.connect(update_row)
         stage.currentTextChanged.connect(self.unconfirm)
         supply.textEdited.connect(self.unconfirm)
-        self._update_action_preview(equipment, load, operation, supply, multiplier)
+        custom_name.textEdited.connect(self.unconfirm)
+        custom_current.valueChanged.connect(self.unconfirm)
+        for col, original, alternate in ((1, load, other_amps), (2, stage, QWidget()),
+                                         (3, supply, QWidget()), (4, operation, QWidget()),
+                                         (5, multiplier, QWidget())):
+            holder = _LoadCell(original, alternate)
+            if col >= 2:
+                alternate.hide()
+            self.actions.setCellWidget(row, col, holder)
+        update_row()
         self.unconfirm()
+
+    def eventFilter(self, watched, event):
+        if event.type() in (QEvent.Type.FocusIn, QEvent.Type.MouseButtonPress) and hasattr(self, "actions"):
+            index = self.actions.indexAt(watched.mapTo(self.actions.viewport(), QPoint(0, 0)))
+            if index.isValid():
+                flags = QItemSelectionModel.SelectionFlag.NoUpdate
+                if event.type() == QEvent.Type.MouseButtonPress:
+                    if event.modifiers() & Qt.KeyboardModifier.ShiftModifier and self.actions.currentRow() >= 0:
+                        self.actions.setRangeSelected(QTableWidgetSelectionRange(
+                            min(index.row(), self.actions.currentRow()),
+                            min(index.column(), self.actions.currentColumn()),
+                            max(index.row(), self.actions.currentRow()),
+                            max(index.column(), self.actions.currentColumn())), True)
+                    else:
+                        flags = (QItemSelectionModel.SelectionFlag.Toggle
+                                 if event.modifiers() & Qt.KeyboardModifier.ControlModifier
+                                 else QItemSelectionModel.SelectionFlag.ClearAndSelect)
+                self.actions.setCurrentCell(index.row(), index.column(), flags)
+        return super().eventFilter(watched, event)
 
     def _update_action_preview(self, equipment, load, operation, supply, multiplier):
         component = self.components.get(equipment.currentData())
@@ -499,15 +627,23 @@ class ZoneDialog(QDialog):
                 if operation.currentData() == "legacy":
                     raise ValueError(messages.ZONE_DIALOG_REVIEW_THE_LEGACY_MULTIPLIER_AND_SELECT_WHOLE_DEVICE)
                 units = 1
-            multiplier.setText(f"×{units}")
+            multiplier.setText(f"Ã—{units}")
             multiplier.setToolTip("Calculated from the equipment current basis and operating action")
         except ValueError as error:
             multiplier.setText("Review")
             multiplier.setToolTip(str(error))
 
     def remove_action(self):
-        row = self.actions.currentRow()
-        if row >= 0:
+        rows = {index.row() for index in self.actions.selectedIndexes()}
+        if not rows and self.actions.currentRow() >= 0:
+            rows.add(self.actions.currentRow())
+        for row in sorted(rows, reverse=True):
+            self.actions.removeRow(row)
+        if rows:
+            self.unconfirm()
+
+    def _delete_load_row(self, row):
+        if 0 <= row < self.actions.rowCount():
             self.actions.removeRow(row)
             self.unconfirm()
 

@@ -109,6 +109,33 @@ class GuiZoneIntegration(unittest.TestCase):
         self.example()
         self.assertEqual(self.window._scene_topology(), analyze_topology(self.window._protection_netlist()))
 
+    def test_operating_table_deletes_selected_rows_and_retains_other_load(self):
+        from PySide6.QtWidgets import QTableWidgetSelectionRange
+        from gft_opto.logic.protection_study import evaluate_zones
+        self.example()
+        dialog = self.dialog()
+        dialog.add_action()
+        dialog.add_action()
+        equipment = dialog.actions.cellWidget(1, 0)
+        equipment.setCurrentIndex(equipment.findText("Other"))
+        dialog.actions.cellWidget(1, 6).setText("Panel heater DC")
+        dialog.actions.cellWidget(1, 7).setValue(7.25)
+        dialog.actions.clearSelection()
+        dialog.actions.setRangeSelected(QTableWidgetSelectionRange(0, 0, 0, 7), True)
+        dialog.actions.setRangeSelected(QTableWidgetSelectionRange(2, 0, 2, 7), True)
+        dialog.remove_action()
+        self.assertEqual(dialog.actions.rowCount(), 1)
+        dialog.capture()
+        action = dialog.zones[0]["actions"][0]
+        self.assertEqual(action["custom_load"], {"name": "Panel heater DC", "amps": 7.25})
+        restored = self.dialog(json.loads(json.dumps(dialog.zones)))
+        restored.capture()
+        self.assertEqual(restored.zones[0]["actions"], dialog.zones[0]["actions"])
+        report = evaluate_zones(restored.netlist, restored.zones)
+        stage = report["zones"][0]["scenarios"][0]
+        self.assertEqual(stage["peak_current_A"], 7.25)
+        self.assertEqual(stage["loads"][0]["name"], "Panel heater DC")
+
     def test_verify_all_zones_preserves_edits_and_tracks_individual_changes(self):
         *_, zone = self.example()
         second = copy.deepcopy(zone)

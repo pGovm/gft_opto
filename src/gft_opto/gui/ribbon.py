@@ -60,17 +60,18 @@ class RibbonBar(QTabWidget):
             QWidget#ribbonPage { background-color: #ffffff; color: #1f2933; }
             QFrame#ribbonGroup { background: #ffffff; border: none; border-right: 1px solid #e4e7eb; }
             QLabel { color: #1f2933; background: transparent; font-size: 10pt; font-weight: normal; }
-            QLabel#ribbonCaption { color: #52606d; font-size: 9pt; }
             QToolButton {
                 background: transparent; color: #1f2933; border: 1px solid transparent;
-                border-radius: 5px; padding: 4px 8px; font-size: 10pt; font-weight: normal;
+                border-radius: 5px; padding: 4px 6px; font-size: 10pt; font-weight: normal;
             }
             QToolButton:hover { background: #e6f2ed; border-color: #b5d4c7; }
             QToolButton:pressed { background: #cee6db; }
-            QToolButton:disabled { color: #64748b; }
+            QToolButton:disabled, QCheckBox:disabled { color: #52606d; background: #f4f6f8; }
             QToolButton:focus { border-color: #006a4e; }
             QCheckBox { color: #1f2933; background: transparent; font-size: 10pt; font-weight: normal; }
-            QCheckBox:disabled { color: #64748b; }
+            QMenu { background: #ffffff; color: #1f2933; }
+            QMenu::item:selected { background: #006a4e; color: white; }
+            QMenu::item:disabled { color: #52606d; }
         """)
 
     def add_page(self, title):
@@ -78,8 +79,8 @@ class RibbonBar(QTabWidget):
         page.setObjectName("ribbonPage")
         row = QHBoxLayout(page)
         row.setContentsMargins(8, 4, 8, 3)
-        row.setSpacing(8)
-        row.addStretch(1)
+        row.setSpacing(4)
+        row.setAlignment(Qt.AlignmentFlag.AlignLeft)
         self.addTab(page, title)
         return row
 
@@ -89,31 +90,28 @@ class RibbonGroup(QFrame):
         super().__init__()
         self.setObjectName("ribbonGroup")
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(2, 0, 10, 0)
+        layout.setContentsMargins(3, 0, 6, 0)
         layout.setSpacing(2)
         self.controls = QGridLayout()
         self.controls.setContentsMargins(0, 0, 0, 0)
         self.controls.setHorizontalSpacing(4)
         self.controls.setVerticalSpacing(4)
         layout.addLayout(self.controls, 1)
-        caption = QLabel(title)
-        caption.setObjectName("ribbonCaption")
-        caption.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(caption)
-        row.insertWidget(row.count() - 1, self)
+        self.setAccessibleName(title)
+        row.addWidget(self)
 
     def add_action(self, action, column, icon):
         action.setIcon(icon if isinstance(icon, QIcon) else self.style().standardIcon(icon, None, self))
         button = QToolButton()
         button.setDefaultAction(action)
-        button.setIconSize(QSize(20, 20))
-        button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
+        button.setIconSize(QSize(16, 16))
+        button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         # Moving focus commits pending property edits before commands run.
         button.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        button.setMinimumSize(72, 48)
+        button.setMinimumHeight(32)
         self.controls.addWidget(button, 0, column, 2, 1)
         button.ensurePolished()
-        button.setMinimumWidth(max(72, button.sizeHint().width()))
+        button.setMinimumWidth(button.sizeHint().width())
         return button
 
 
@@ -156,7 +154,7 @@ def populate_ribbon(window):
 
     view = ribbon.add_page("&View")
     layers = RibbonGroup(view, "Drawing layers")
-    layers.controls.setHorizontalSpacing(20)
+    layers.controls.setHorizontalSpacing(10)
     for row, col, control in ((0, 0, window.grid_show_cb), (0, 1, window.pdf_show_cb),
                               (1, 0, window.circuit_show_cb), (1, 1, window.zones_show_cb)):
         layers.controls.addWidget(control, row, col)

@@ -217,6 +217,14 @@ def validate_zones(zones: list[dict]) -> None:
             if not isinstance(action, dict):
                 raise ValueError(messages.PROTECTION_STUDY_EACH_ACTION_MUST_BE_AN_OBJECT.format(ident))
             _text(action.get("component"), "Action component", empty=True)
+            if "custom_load" in action:
+                custom = action["custom_load"]
+                if not action["component"].startswith("other:") or not isinstance(custom, dict):
+                    raise ValueError("Other loads must have their own load ID and settings.")
+                _text(custom.get("name"), "Other load name", empty=True)
+                amps = custom.get("amps")
+                if isinstance(amps, bool) or not isinstance(amps, (int, float)) or not math.isfinite(amps) or amps < 0:
+                    raise ValueError("Other load current must be a finite, nonnegative number.")
             if not isinstance(action.get("load"), str) or action["load"] not in LOADS:
                 raise ValueError(messages.PROTECTION_STUDY_UNKNOWN_LOAD_PROPERTY.format(ident))
             # Draft rows may be blank, but cannot produce a complete result.
@@ -618,6 +626,9 @@ def _evaluate_actions(zone: dict, graph: _Graph, voltage: float) -> tuple[list[d
                 continue
             seen[physical] = assignment
             component = graph.records.get(ident)
+            if "custom_load" in action:
+                component = {"type": "custom_load", "properties": {
+                    key: action["custom_load"]["amps"]}}
             if component is None:
                 warnings.append(messages.PROTECTION_STUDY_OPERATING_EQUIPMENT_IS_MISSING.format(ident))
                 continue
@@ -635,7 +646,12 @@ def _evaluate_actions(zone: dict, graph: _Graph, voltage: float) -> tuple[list[d
             if not valid:
                 warnings.append(messages.PROTECTION_STUDY_CURRENT_MUST_BE_FINITE_AND_GREATER_THAN_ZERO.format(ident, LOADS[key]))
                 continue
-            load = Load(f"{component.get('label') or ident} - {LOADS[key]}", value, units,
+            if "custom_load" in action and not action["custom_load"]["name"].strip():
+                warnings.append("Other load name is missing.")
+                continue
+            name = (action["custom_load"]["name"] if "custom_load" in action else
+                    f"{component.get('label') or ident} - {LOADS[key]}")
+            load = Load(name, value, units,
                         note=f"{ident}; {stage}; {supply}")
             scenario.add_load(load)
             by_supply.setdefault(supply, Scenario(f"{zone['name']} / {stage} / {supply}", voltage)).add_load(load)

@@ -182,14 +182,13 @@ class ComponentDialog(QDialog):
         self._update_fields_for_component()
 
     def _update_fields_for_component(self, _text: str = ""):
-        """Bus shows rating only; other types show coil / motor fields."""
-        is_bus = self._is_bus()
-        is_arrester = self.symbol_type_key() == "surge_arrester"
-        is_incoming = self.symbol_type_key() == "incoming_line"
-        self.form.labelForField(self.rating_spin).setText("MCOV (kV):" if is_arrester else "Rating (kV):")
-        self.form.setRowVisible(self.rating_spin, is_bus or is_arrester)
-        for field_widget in self._non_bus_fields:
-            self.form.setRowVisible(field_widget, not (is_bus or is_arrester or is_incoming))
+        """Show electrical inputs supported by the selected symbol."""
+        symbol = self.symbol_type_key()
+        self.form.setRowVisible(self.rating_spin, symbol == "bus")
+        for field_widget in (self.trip_coil_1_spin, self.trip_coil_2_spin, self.close_coil_spin):
+            self.form.setRowVisible(field_widget, symbol in {"breaker", "custom"})
+        for field_widget in (self.motor_inrush_spin, self.motor_run_spin):
+            self.form.setRowVisible(field_widget, symbol in {"breaker", "mos", "custom"})
         self.adjustSize()
 
     @staticmethod
@@ -221,13 +220,17 @@ class ComponentDialog(QDialog):
             "symbol_type": self.symbol_type_key(),
             "tags": ["Manufacturer", "Year"],
         }
-        if self._is_bus() or self.symbol_type_key() == "surge_arrester":
+        symbol = self.symbol_type_key()
+        if symbol == "bus":
             data["Rating"] = self.rating_spin.value()
-        elif self.symbol_type_key() != "incoming_line":
+        if symbol in {"breaker", "custom"}:
             data.update({
                 "TripCoil1": self.trip_coil_1_spin.value(),
                 "TripCoil2": self.trip_coil_2_spin.value(),
                 "CloseCoil": self.close_coil_spin.value(),
+            })
+        if symbol in {"breaker", "mos", "custom"}:
+            data.update({
                 "MotorInrushCurrent": self.motor_inrush_spin.value(),
                 "MotorRunCurrent": self.motor_run_spin.value(),
             })

@@ -813,15 +813,16 @@ class SubstationGuiMockup(QMainWindow):
         self.grid_opacity_controls = QWidget()
         opacity_row = QHBoxLayout(self.grid_opacity_controls)
         opacity_row.setContentsMargins(0, 0, 0, 0)
+        opacity_row.setSpacing(4)
         opacity_row.addWidget(QLabel("Grid Opacity:"))
         self.grid_opacity_slider = QSlider(Qt.Orientation.Horizontal)
         self.grid_opacity_slider.setRange(0, 100)
-        self.grid_opacity_slider.setMinimumWidth(100)
-        self.grid_opacity_slider.setMaximumWidth(180)
+        self.grid_opacity_slider.setFixedWidth(120)
         self.grid_opacity_slider.setAccessibleName("Grid opacity")
         self.grid_opacity_label = QLabel(f"{self.grid_opacity_slider.value()}%")
-        opacity_row.addWidget(self.grid_opacity_slider, 1)
+        opacity_row.addWidget(self.grid_opacity_slider)
         opacity_row.addWidget(self.grid_opacity_label)
+        opacity_row.addStretch(1)
 
         def _on_opacity_changed(value: int):
             self.grid_opacity_label.setText(f"{value}%")
@@ -856,16 +857,15 @@ class SubstationGuiMockup(QMainWindow):
 
         identity = QWidget()
         identity.setObjectName("headerIdentity")
-        identity.setMinimumWidth(225)
         identity.setMaximumWidth(480)
         identity.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
-        identity_layout = QVBoxLayout(identity)
+        identity_layout = QHBoxLayout(identity)
         identity_layout.setContentsMargins(0, 0, 0, 0)
         identity_layout.setSpacing(6)
-        identity_layout.addStretch(1)
 
         logo = QLabel()
-        logo_pix = load_gft_logo_pixmap(height=28)
+        logo.setObjectName("headerLogo")
+        logo_pix = load_gft_logo_pixmap(height=40)
         if not logo_pix.isNull():
             logo.setPixmap(logo_pix)
             logo.setFixedSize(logo_pix.size())
@@ -875,7 +875,9 @@ class SubstationGuiMockup(QMainWindow):
         title = QLabel("AI-Assisted Substation Protection & Control Design")
         title.setObjectName("appTitle")
         title.setWordWrap(True)
-        title.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        title.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        title.setMinimumWidth(156)
+        title.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
 
         project_box = QLineEdit("Untitled Project")
         project_box.setMinimumWidth(120)
@@ -883,21 +885,17 @@ class SubstationGuiMockup(QMainWindow):
         project_box.setAccessibleName("Project name")
         self.project_box = project_box
 
-        identity_row = QHBoxLayout()
-        identity_row.setSpacing(8)
-        identity_row.addWidget(logo)
-        identity_row.addWidget(title, 1)
-        identity_layout.addLayout(identity_row)
         project_row = QHBoxLayout()
         project_row.setSpacing(6)
         project_row.addWidget(QLabel("Project:"))
         project_row.addWidget(project_box, 1)
-        identity_layout.addLayout(project_row)
-        identity_layout.addStretch(1)
-        layout.addWidget(identity)
+        identity_layout.addWidget(logo)
+        identity_layout.addWidget(title, 1)
+        layout.addWidget(identity, 1)
 
         self.ribbon = RibbonBar()
-        layout.addWidget(self.ribbon, 1)
+        layout.addWidget(self.ribbon, 2)
+        layout.addLayout(project_row)
         return frame
 
     def _build_content(self):
