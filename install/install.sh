@@ -9,5 +9,5 @@ if ! command -v uv >/dev/null 2>&1; then
 fi
 
 uv sync --locked
-uv run --locked python -c "import PySide6, pymupdf, gft_opto.gui.subscription_gui"
+uv run --locked python -c "import PySide6, pymupdf, gft_opto.gui.substation_gui"
 echo "Setup complete. Start the app with: uv run gft-opto"
