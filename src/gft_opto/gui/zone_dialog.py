@@ -48,7 +48,7 @@ class _LoadRowHeader(QHeaderView):
             painter.save()
             painter.fillRect(rect.adjusted(1, 1, -1, -1), QColor("#fde8e8"))
             painter.setPen(QColor("#9b1c1c"))
-            painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, "âˆ’")
+            painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, "\u2212")
             painter.restore()
 
     def mousePressEvent(self, event):
@@ -530,7 +530,7 @@ class ZoneDialog(QDialog):
             if action.get("units", 1) not in (1, 3) or (action.get("units", 1) != 1 and (action["load"].startswith("motor_") or component is None or kind(component) != "breaker")):
                 selected = "legacy"
         if selected == "legacy":
-            operation.addItem("Legacy units â€” review", "legacy")
+            operation.addItem("Legacy units \u2014 review", "legacy")
         operation.setCurrentIndex(operation.findData(selected))
         multiplier = QLineEdit()
         multiplier.setReadOnly(True)
@@ -627,7 +627,7 @@ class ZoneDialog(QDialog):
                 if operation.currentData() == "legacy":
                     raise ValueError(messages.ZONE_DIALOG_REVIEW_THE_LEGACY_MULTIPLIER_AND_SELECT_WHOLE_DEVICE)
                 units = 1
-            multiplier.setText(f"Ã—{units}")
+            multiplier.setText(f"\u00d7{units}")
             multiplier.setToolTip("Calculated from the equipment current basis and operating action")
         except ValueError as error:
             multiplier.setText("Review")
