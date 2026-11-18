@@ -1,8 +1,10 @@
-"""Keep the installed command and Windows build aligned with the GUI module."""
+"""Keep the installed command, install scripts and Windows build aligned with the GUI module."""
 import ast
 import importlib
+import importlib.util
 from importlib.metadata import EntryPoint, distribution
 from pathlib import Path
+import re
 import tomllib
 import unittest
 
@@ -34,6 +36,28 @@ class AppEntrypoints(unittest.TestCase):
         module = importlib.import_module(self.target.split(":", 1)[0])
         self.assertTrue((ROOT / scripts[0]).is_file())
         self.assertEqual((ROOT / scripts[0]).resolve(), Path(module.__file__).resolve())
+
+    def test_install_scripts_and_shortcut_use_the_same_gui_module(self):
+        module = self.target.split(":", 1)[0]
+        install = ROOT / "install"
+        found = {name: re.findall(r"gft_opto(?:\.\w+)+", (install / name).read_text(encoding="utf-8"))
+                 for name in ("install.sh", "install.ps1")}
+        self.assertTrue(found["install.sh"], "install.sh no longer checks that the app imports")
+        self.assertGreaterEqual(len(found["install.ps1"]), 2, "install.ps1 import check or shortcut missing")
+        # Every module the installers import or launch must exist and be the
+        # one the gft-opto command starts.
+        for name, modules in found.items():
+            for referenced in modules:
+                with self.subTest(script=name, module=referenced):
+                    self.assertIsNotNone(importlib.util.find_spec(referenced), f"{referenced} does not exist")
+                    self.assertEqual(referenced, module)
+        self.assertIn(f"-m {module}", (install / "install.ps1").read_text(encoding="utf-8"))
+
+    def test_windows_installer_runs_a_script_that_exists(self):
+        text = (ROOT / "install" / "install.bat").read_text(encoding="utf-8")
+        scripts = re.findall(r"%~dp0([\w.-]+\.ps1)", text)
+        self.assertEqual(len(scripts), 1, "install.bat should run exactly one PowerShell script")
+        self.assertTrue((ROOT / "install" / scripts[0]).is_file(), f"{scripts[0]} is missing")
 
 
 if __name__ == "__main__":

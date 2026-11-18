@@ -22,7 +22,7 @@ from PySide6.QtTest import QTest
 from PySide6.QtGui import QFontDatabase
 from PySide6.QtWidgets import QApplication, QMessageBox
 
-from gft_opto.gui.commands import AddEquipmentCommand, AddConnectionCommand, SplitWireCommand
+from gft_opto.gui.commands import AddEquipmentCommand, SplitWireCommand
 from gft_opto.gui.layout_io import build_scene, scene_data, library_from_layout
 from gft_opto.gui.substation_gui import SubstationGuiMockup
 from gft_opto.gui.symbols import (

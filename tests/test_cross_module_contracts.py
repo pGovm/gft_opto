@@ -1,11 +1,11 @@
-"""Cross-module contracts for the v2 bundle; these are NOT Qt runtime tests.
+"""Contracts between the drawing adapter, zone detector and study; not Qt runtime tests.
 
 Scene fixtures implement the actual public item/connection interface. All
 adapter, detector, study and arithmetic calls use unmodified production code.
+How the GUI reads the study's results is checked by the GUI tests themselves.
 """
 import ast
 import copy
-import inspect
 import json
 from pathlib import Path
 import random
@@ -74,21 +74,6 @@ def confirmed(net, zone):
     return value
 
 
-def read_tree(relative):
-    return ast.parse((PACKAGE / relative).read_text(encoding='utf-8'))
-
-
-def function(tree, name):
-    return next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == name)
-
-
-def keys_used(tree, name):
-    return {n.slice.value for n in ast.walk(tree) if isinstance(n, ast.Subscript)
-            and isinstance(n.ctx, ast.Load)
-            and isinstance(n.value, ast.Name) and n.value.id == name
-            and isinstance(n.slice, ast.Constant) and isinstance(n.slice.value, str)}
-
-
 class CrossModuleContracts(unittest.TestCase):
     def test_expected_export_names_exist_for_every_gui_logic_import(self):
         modules = {'gft_opto.logic.protection_study': study,
@@ -102,12 +87,6 @@ class CrossModuleContracts(unittest.TestCase):
                         self.assertTrue(hasattr(modules[node.module], alias.name), (path.name, alias.name))
                         count += 1
         self.assertGreater(count, 10)
-
-    def test_gui_uses_study_evaluator_not_all_loads_scene_calculator(self):
-        tree = function(read_tree('gui/evaluation_view.py'), '_on_run_evaluation_clicked')
-        calls = {n.func.id for n in ast.walk(tree) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
-        self.assertIn('evaluate_zones', calls)
-        self.assertFalse(calls & {'evaluate_scene', 'scenario_from_netlist', 'calculator_from_netlist'})
 
     def test_original_scene_and_serialized_topology_catalogs_are_identical(self):
         scene, symbols, _ = fixture()
@@ -128,18 +107,6 @@ class CrossModuleContracts(unittest.TestCase):
             net = calculator.netlist_from_scene(Scene(symbols + wires))
             with self.subTest(case=case):
                 self.assertEqual(study.topology_records(detector.identify_zones(symbols, CT)), study.analyze_topology(net))
-
-    def test_report_has_every_dictionary_field_consumed_by_evaluation_handler(self):
-        scene, _, _ = fixture()
-        net = calculator.netlist_from_scene(scene)
-        report = study.evaluate_zones(net, [confirmed(net, study.propose_zones(net)[0])])
-        handler = function(read_tree('gui/evaluation_view.py'), '_on_run_evaluation_clicked')
-        samples = {'report': report, 'netlist': net, 'zone': report['zones'][0],
-                   'scenario': report['zones'][0]['scenarios'][0],
-                   'load': report['zones'][0]['scenarios'][0]['loads'][0],
-                   'region': report['topology_regions'][0]}
-        for variable, sample in samples.items():
-            self.assertTrue(keys_used(handler, variable) <= sample.keys(), (variable, keys_used(handler, variable) - sample.keys()))
 
     def test_selected_topology_region_survives_json_and_calculation(self):
         scene, _, _ = fixture()
@@ -225,12 +192,7 @@ class CrossModuleContracts(unittest.TestCase):
         self.assertEqual({k: v['peak_current_A'] for k,v in report['supply_peaks'].items()}, {'DC 1': 12, 'DC 2': 20})
         self.assertEqual([s['supplies'] for s in report['zones'][0]['scenarios']], [{'DC 1': 10, 'DC 2': 20}, {'DC 1': 12}])
 
-    def test_layout_and_dialog_validate_the_same_saved_schema(self):
-        for relative in ('gui/layout_io.py', 'gui/zone_dialog.py'):
-            names = {n.name for node in ast.walk(read_tree(relative))
-                     if isinstance(node, ast.ImportFrom) and node.module == 'gft_opto.logic.protection_study'
-                     for n in node.names}
-            self.assertIn('validate_zones', names)
+    def test_saved_zone_settings_survive_validation_and_evaluation_unchanged(self):
         scene, _, _ = fixture()
         net = calculator.netlist_from_scene(scene)
         zone = study.propose_zones(net)[0]
@@ -246,22 +208,6 @@ class CrossModuleContracts(unittest.TestCase):
         before = copy.deepcopy(data)
         study.evaluate_zones(net, data)
         self.assertEqual(data, before)
-
-    def test_highlight_schema_contains_keys_for_exact_wire_selection(self):
-        scene, _, _ = fixture()
-        net = calculator.netlist_from_scene(scene)
-        report = study.evaluate_zones(net, [confirmed(net, study.propose_zones(net)[0])])
-        handler = function(read_tree('gui/substation_gui.py'), '_show_zone_highlights')
-        self.assertTrue(keys_used(handler, 'report') <= report.keys())
-        expected = keys_used(handler, 'zone')
-        for row in report['zones']:
-            self.assertTrue(expected <= row.keys(), expected - row.keys())
-        for row in report['topology_regions']:
-            # 'complete' is only consumed in the configured-zone branch.
-            self.assertTrue((expected - {'complete'}) <= row.keys(), expected - row.keys())
-            for edge in row['connections']:
-                self.assertEqual(len(edge), 2)
-                self.assertTrue(all(len(endpoint) == 2 for endpoint in edge))
 
 
 if __name__ == '__main__':

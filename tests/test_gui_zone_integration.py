@@ -576,6 +576,20 @@ class GuiZoneIntegration(unittest.TestCase):
         error.assert_called_once()
         self.assertIs(self.window.workspace_scene, old_scene)
 
+    def test_bad_saved_zone_is_also_refused_by_configure_zones(self):
+        # The same setting that stops a layout opening (test above) must not
+        # reach the zone editor either; both use the same validation rules.
+        self.example()
+        self.window.protection_zones[0]["actions"][0]["units"] = 0
+        before = copy.deepcopy(self.window.protection_zones)
+        with patch.object(QMessageBox, "warning") as warning, \
+                patch.object(ZoneDialog, "exec", return_value=QDialog.DialogCode.Rejected) as opened:
+            self.window.configure_zones_action.trigger()
+        warning.assert_called_once()
+        self.assertIn("units", warning.call_args.args[2])
+        opened.assert_not_called()
+        self.assertEqual(self.window.protection_zones, before)
+
 
     def test_missing_configuration_approval_is_unconfirmed_in_the_dialog(self):
         *_, zone = self.example()
