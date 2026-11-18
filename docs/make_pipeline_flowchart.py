@@ -19,7 +19,7 @@ HERE = Path(__file__).resolve().parent
 OUTPUT = HERE / "pipeline_flowchart.pdf"
 FONT_DIR = Path("/usr/share/fonts/truetype/dejavu")
 STATUS_DATE = "18 Nov 2026"
-STATUS_SOURCE = "branch codex/gui-layout-fixes at 5ca1e7a, plus local changes not yet pushed"
+STATUS_SOURCE = "branch codex/gui-layout-fixes at 3ba726b"
 FONT = "DejaVu Sans"
 BOX_WIDTH = 255          # points; every box is this wide so columns line up
 COLUMN, ROW = 300, 150   # grid spacing in points
@@ -95,11 +95,11 @@ PAGES = [
         node("launch", 1, 0, "2  Launch", ["gft-opto command, desktop shortcut", "or .exe opens the main window"], "ok", "starts and closes cleanly"),
         node("build", 2, 0, "3  Build the one-line drawing", ["Open a layout or netlist, import the PDF,", "place and wire equipment, enter currents"],
              "ok", "13 of 13 sample layouts"),
-        node("ci", 0, 1, "Every push to GitHub", ["GitHub Actions runs all tests on", "Ubuntu and Windows"], "ok", "passing at 5ca1e7a"),
+        node("ci", 0, 1, "Every push to GitHub", ["GitHub Actions runs all tests on", "Ubuntu and Windows"], "ok", "passing at 3ba726b"),
         node("validate", 1, 1, "4  Validate (optional)", ["Lists unconnected terminals and", "shorted devices"], "manual"),
         node("evaluate", 2, 1, "5  Run Evaluation", ["Finds protection zones, then totals", "each operating stage per DC supply"],
              "issue", "1: supply names are free text"),
-        node("review", 1, 2, "6  Configure and confirm zones", ["The engineer assigns operating loads", "and confirms each zone"], "ok", local=True),
+        node("review", 1, 2, "6  Configure and confirm zones", ["The engineer assigns operating loads", "and confirms each zone"], "ok"),
         node("results", 2, 2, "7  Results and files", ["Analysis output, calculation PDF,", "netlist PDF, saved layout file"],
              "issue", "2: netlist PDF hidden"),
         edge("install", "launch"), edge("launch", "build"),
@@ -115,7 +115,7 @@ PAGES = [
              "notrun", "Windows only"),
         node("sh", 1, 0, "install.sh", ["Linux / macOS: installs uv if missing,", "then runs the steps below"], "ok", "completes"),
         node("ci", 2, 0, "GitHub Actions  (tests.yml)", ["Every push and pull request: Ubuntu", "and Windows, Python 3.12, all tests"],
-             "ok", "passing at 5ca1e7a"),
+             "ok", "253 tests passing at 3ba726b"),
         node("sync", 1, 1, "uv sync --locked", ["Creates .venv exactly from uv.lock:", "Python 3.12+, PySide6 6.11.2, PyMuPDF 1.28.2"], "ok"),
         node("check", 0, 2, "Import check", ["Confirms PySide6, PyMuPDF and", "the app all import"], "ok"),
         node("wheel", 1, 2, "uv build", ["Python wheel and source package,", "logo and icon included"], "ok", "installs and runs"),
@@ -188,16 +188,17 @@ PAGES = [
         node("rows", 2, 0, "Operating load rows", ["Equipment, load, stage, operation;", "supply and multiplier come from the",
                                                    "breaker; Other = background load"], "ok"),
         node("delete", 2, 1, "Removing rows", ["− on a row number deletes that row;", "Delete key removes selected rows;",
-                                               "Detect Missing Zones button removed"], "ok", local=True),
+                                               "Detect Missing Zones button removed"], "ok"),
         node("verify", 1, 1, "Verify", ["Tick “verified” per zone, or Verify all;", "optional Demonstration mode for",
                                          "sample layouts (PDF is labelled)"], "ok"),
         node("save", 0, 1, "Save zone settings", ["Stamps the approval; refuses a confirmed", "zone that still has warnings; undoable"], "ok"),
         node("again", 0, 2, "Run Evaluation again", ["Totals now final for confirmed zones"], "plain"),
         node("clears", 1, 2, "What withdraws an approval", ["Wiring, switch position or breaker", "setting changes; editing the zone’s",
-                                                             "rows. Current values alone do not."], "ok"),
+                                                             "rows. Current values alone do not.",
+                                                             "Checked every time it runs."], "ok"),
         edge("prov", "dialog"), edge("dialog", "rows"), edge("rows", "delete", style="dashed"),
         edge("rows", "verify"), edge("verify", "save"), edge("save", "again"),
-        edge("clears", "again", "checked on every run", style="dashed"),
+        edge("clears", "again", style="dashed"),
     )),
     ("Stage 7: results and files",
      "What the engineer gets out. Every export below was produced for all 13 sample layouts in this review.",
@@ -253,7 +254,7 @@ NOTES_HTML = """
 <li>Opening a layout no longer moves components; Align to Grid does that on request.</li>
 </ul>
 
-<h2>Local changes not yet pushed (18 Nov)</h2>
+<h2>Also changed on 18 Nov</h2>
 <ul>
 <li>Detect Missing Zones removed from the zone editor, with its code and tests.</li>
 <li>Delete or Backspace in the load table removes the selected rows; text fields still edit normally.</li>
@@ -309,7 +310,8 @@ def decorate(page, number, total, title, subtitle):
                        width=width, dashes=dashes, radius=0.25)
         page.insert_text((x + 28, y + 9), text, fontname="dv", fontsize=8.5, color=ink)
         x += 28 + dv.text_length(text, fontsize=8.5) + 16
-    page.insert_text((x, y + 9), "● Local change, not yet pushed", fontname="dv", fontsize=8.5, color=hex_rgb("#6d28d9"))
+    if any(escape(LOCAL) in source for _, _, source in PAGES):
+        page.insert_text((x, y + 9), "● Local change, not yet pushed", fontname="dv", fontsize=8.5, color=hex_rgb("#6d28d9"))
     page.draw_line((MARGIN, H - 30), (W - MARGIN, H - 30), color=hex_rgb("#c9d1da"), width=0.6)
     page.insert_text((MARGIN, H - 17), f"Status checked {STATUS_DATE} · {STATUS_SOURCE}",
                      fontname="dv", fontsize=8, color=grey)
