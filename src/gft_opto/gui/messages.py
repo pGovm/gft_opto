@@ -91,7 +91,6 @@ WORKSPACE_PASTED_COMPONENT_S_REVIEW_PROTECTION_ZONE_ASSIGNMENTS = 'Pasted {0} co
 # Zone Dialog
 ZONE_DIALOG_LEGACY_SUPPLY_CONFLICTS = '\nLegacy supply conflicts: {0}'
 ZONE_DIALOG_REVIEW_THESE_BREAKER_S_SUPPLY_SETTINGS_BEFORE_CONFIRMING = ". Review these breaker's supply settings before confirming."
-ZONE_DIALOG_DETECT_MISSING_ZONES = 'Detect Missing Zones'
 ZONE_DIALOG_SELECT_ONLY_THE_OUTER_CT_BOUNDARIES_FOR_THIS_SCHEME = 'Select only the outer CT boundaries for this scheme. Unchecked CTs inside the zone do not split it. Review draft boundaries against the relay drawing.'
 ZONE_DIALOG_OPERATING_LOADS_USE_A_SEPARATE_STAGE_FOR_RECLOSE_MOTOR = 'Operating loads — use a separate stage for reclose, motor operation, or breaker failure:'
 ZONE_DIALOG_MISSING = 'Missing: {0}'
@@ -181,5 +180,3 @@ PROTECTION_ZONES_BOUNDARY_TYPES_MUST_CONTAIN_CLASSES = 'boundary_types must cont
 PROTECTION_ZONES_EXPECTED_A_CONNECTIONS_METHOD = '{0}: expected a connections() method'
 PROTECTION_ZONES_EVERY_ZONE_MUST_HAVE_A_NONEMPTY_STRING_ZONE_ID = 'Every zone must have a nonempty string zone_id'
 PROTECTION_ZONES_CORE_AND_BOUNDARY_COMPONENTS_MUST_BE_DISJOINT = '{0}: core and boundary components must be disjoint'
-PROTECTION_ZONES_THE_BOUNDARY_MUST_BE_SHARED_BY_BOTH_ZONES = 'The boundary must be shared by both zones'
-PROTECTION_ZONES_MISSING_ENCLOSURE_ENTRIES = 'Missing enclosure entries: {0}'

@@ -541,47 +541,6 @@ def propose_zones(netlist: dict) -> list[dict]:
     return result
 
 
-def add_missing_proposals(netlist: dict, zones: list[dict]) -> list[dict]:
-    """Return existing settings plus missing seeds, without reusing an event ID.
-
-    Selecting another region can change an existing event's seed without changing
-    its ID. A newly proposed event for the old seed must get a distinct ID.
-    Existing settings, confirmations and extra metadata are deep-copied intact.
-    """
-    validate_zones(zones)
-    result = copy.deepcopy(zones)
-    seeds = {z["seed"] for z in result}
-    used_ids = {z["id"] for z in result}
-    # A bus region is covered once, even when the saved event uses another bus
-    # as its seed or still carries the shared-bus review warning.
-    footprints = set()
-    for existing in result:
-        region, warnings = _resolve_region(netlist, existing)
-        if region is not None and (existing["kind"] == "Bus" or not warnings):
-            footprints.add((existing["kind"], _digest(zone_signature(region))))
-    for proposed in propose_zones(netlist):
-        if proposed["seed"] in seeds:
-            continue
-        region, warnings = _resolve_region(netlist, proposed)
-        footprint = None
-        if region is not None and (proposed["kind"] == "Bus" or not warnings):
-            footprint = (proposed["kind"], _digest(zone_signature(region)))
-        if footprint is not None and footprint in footprints:
-            continue
-        if footprint is not None:
-            footprints.add(footprint)
-        base = proposed["id"]
-        suffix = 2
-        while proposed["id"] in used_ids:
-            proposed["id"] = f"{base}-{suffix}"
-            suffix += 1
-        used_ids.add(proposed["id"])
-        seeds.add(proposed["seed"])
-        result.append(proposed)
-    return result
-
-
-
 def _physical_key(action: dict) -> tuple[str, str]:
     load = "motor" if action["load"] in {"motor_run_a", "motor_inrush_a"} else action["load"]
     return action["component"], load

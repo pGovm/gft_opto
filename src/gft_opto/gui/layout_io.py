@@ -19,7 +19,6 @@ from gft_opto.gui.symbols import (
     _instance_counters, make_user_equipment, batch_label_refresh,
 )
 from gft_opto.logic.protection_study import validate_zones
-from gft_opto.gui.routing import default_snap_port, position_for_snapped_port
 
 
 def library_from_layout(data):
@@ -107,7 +106,7 @@ def validate_properties(props, *, symbol=None):
                 raise ValueError(messages.LAYOUT_IO_INVALID_VALUE_FOR.format(key))
 
 
-def build_scene(data, *, align_to_grid=False):
+def build_scene(data):
     """Validate and construct a separate scene before touching the user's drawing."""
     if not isinstance(data, dict) or data.get("version") != 1:
         raise ValueError(messages.LAYOUT_IO_UNSUPPORTED_LAYOUT_FORMAT_OR_VERSION)
@@ -183,9 +182,6 @@ def build_scene(data, *, align_to_grid=False):
             if len(position) != 2:
                 raise ValueError(messages.LAYOUT_IO_INVALID_COMPONENT_POSITION)
             restored_position = QPointF(*[_number(v) for v in position])
-            if align_to_grid and settings["snap"]:
-                anchor = default_snap_port(item)
-                restored_position = position_for_snapped_port(restored_position, item.ports()[anchor])
             item.setPos(restored_position)
             item.setZValue(100)
             items[ident] = item

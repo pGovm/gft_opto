@@ -124,23 +124,6 @@ def _boundary_classes(boundary_types: Iterable[type] | type) -> tuple[type, ...]
     return types
 
 
-def _is_boundary_item(item: Any, boundary_types: Iterable[type] | type) -> bool:
-    return isinstance(item, _boundary_classes(boundary_types))
-
-
-def _neighbors(item: Any):
-    """Legacy helper: ignore stale connection entries unrelated to this item."""
-    for connection in item.connections():
-        if connection.from_item is item:
-            other = connection.to_item
-        elif connection.to_item is item:
-            other = connection.from_item
-        else:
-            continue
-        if other is not None:
-            yield other
-
-
 class _DisjointSets:
     """Union/find over real equipment and internal boundary-terminal tokens."""
     def __init__(self) -> None:
@@ -320,17 +303,6 @@ def _zones_by_boundary(zones: list[Zone]) -> dict:
     return dict(mapping)
 
 
-def _merge_across_boundary(zone_a: Zone, zone_b: Zone, boundary_item: Any) -> Zone:
-    """Legacy single-boundary helper; public generator checks full incidence."""
-    if boundary_item not in zone_a.boundary_items & zone_b.boundary_items:
-        raise ValueError(messages.PROTECTION_ZONES_THE_BOUNDARY_MUST_BE_SHARED_BY_BOTH_ZONES)
-    core = zone_a.core_items | zone_b.core_items | {boundary_item}
-    return _name_zone(Zone(
-        "", core, (zone_a.boundary_items | zone_b.boundary_items) - core,
-        zone_a.connection_items | zone_b.connection_items,
-    ))
-
-
 def generate_composite_zones(primary_zones: Iterable[Zone]) -> list[Zone]:
     """One pairwise merge level, retaining all original conductors.
 
@@ -371,17 +343,3 @@ def generate_composite_zones(primary_zones: Iterable[Zone]) -> list[Zone]:
         if zone.zone_id not in primary_ids:
             composites.setdefault(zone.zone_id, zone)
     return sorted(composites.values(), key=lambda z: z.zone_id)
-
-
-def independent_zones(zones: Iterable[Zone], enclosures: dict[str, list[str]]) -> list[Zone]:
-    """Legacy name for outermost regions, NOT mutually disjoint load groups.
-
-    Breakers may appear in multiple separate results. Deduplicate breaker IDs
-    within one result; do not sum separate results merely because they are here.
-    """
-    zones = list(zones)
-    _validate_zones(zones)
-    missing = {z.zone_id for z in zones} - set(enclosures)
-    if missing:
-        raise ValueError(messages.PROTECTION_ZONES_MISSING_ENCLOSURE_ENTRIES.format(sorted(missing)))
-    return [z for z in zones if not enclosures[z.zone_id]]

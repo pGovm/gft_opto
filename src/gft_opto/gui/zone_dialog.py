@@ -7,7 +7,7 @@ import copy
 import uuid
 
 from PySide6.QtCore import Qt, QEvent, QPoint, QItemSelectionModel, Signal
-from PySide6.QtGui import QColor, QPalette
+from PySide6.QtGui import QColor, QKeySequence, QPalette, QShortcut
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QHBoxLayout,
     QLabel, QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPushButton,
@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
 
 from gft_opto.logic.protection_study import (
     LOADS, STAGES, kind, propose_zones, validate_zones, topology_signature,
-    configuration_signature, analyze_topology, evaluate_zones, add_missing_proposals,
+    configuration_signature, analyze_topology, evaluate_zones,
 )
 from gft_opto.logic.breaker_settings import breaker_settings, resolve_breaker_action, SUPPLY_KEYS
 from gft_opto.gui.theme import SCROLLBAR_STYLE
@@ -31,7 +31,7 @@ class _LoadRowHeader(QHeaderView):
         super().__init__(Qt.Orientation.Vertical, parent)
         self.hovered_row = -1
         self.setMouseTracking(True)
-        self.setToolTip("Click the minus sign to delete this load")
+        self.setToolTip("Click the minus sign to delete this load, or select loads and press Delete")
 
     def mouseMoveEvent(self, event):
         self.hovered_row = self.logicalIndexAt(event.position().toPoint())
@@ -186,6 +186,12 @@ class ZoneDialog(QDialog):
         self.actions.setHorizontalHeaderLabels(["Equipment", "Load", "Stage", "DC supply", "Operation", "Multiplier"])
         self.actions.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.actions.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectItems)
+        # Delete or Backspace removes the selected load rows. Text fields in the
+        # table claim these keys first, so typing still edits the text.
+        for key in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
+            shortcut = QShortcut(QKeySequence(key), self.actions)
+            shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+            shortcut.activated.connect(self.remove_action)
         self.actions.horizontalHeader().setSectionsClickable(True)
         self.actions.verticalHeader().setSectionsClickable(True)
         self.actions.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
@@ -614,16 +620,6 @@ class ZoneDialog(QDialog):
             self.actions.removeRow(row)
             self.load_rows.pop(row)
             self.unconfirm()
-
-    def detect(self):
-        try:
-            self.capture()
-            zones = add_missing_proposals(self.netlist, self.zones)
-        except (ValueError, TypeError) as error:
-            QMessageBox.warning(self, messages.ZONE_DIALOG_INCOMPLETE_ZONE_SETTINGS, str(error))
-            return
-        self.zones = zones
-        self.refresh_list()
 
     def add_zone(self):
         self.capture()
