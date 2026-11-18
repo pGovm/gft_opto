@@ -294,10 +294,16 @@ class GuiWorkflows(unittest.TestCase):
         self.assertNotIn("Connections", text)
         # Readable property names with units in parentheses, readable values.
         for readable in ("Trip Coil 1 (A): 12", "Coil current basis: Per mechanism",
-                         "Trip Coil 1 supply: DC 1", "Symbol: Circuit Breaker"):
+                         "Trip Coil 1 supply: DC 1", "Circuit Breaker"):
             self.assertIn(readable, text)
-        for raw in ("trip_coil_1_a", "per_mechanism", "symbol_type"):
+        for raw in ("trip_coil_1_a", "per_mechanism", "symbol_type", "Symbol:", "breaker\n"):
             self.assertNotIn(raw, text)
+        # The Type column spells out abbreviated equipment types.
+        from gft_opto.gui.pdf_export import type_label
+        self.assertEqual(type_label("mos"), "Motor Operated Switch (MOS)")
+        self.assertEqual(type_label("ct"), "Current Transformer (CT/BCT)")
+        self.assertEqual(type_label("xfmr_2w"), "Transformer (2-winding)")
+        self.assertEqual(type_label("custom_relay"), "Custom")
         self.assertIn("Netlist PDF saved:", w.footer_status_label.text())
 
     def test_netlist_json_import_rebuilds_diagram(self):

@@ -38,6 +38,16 @@ def property_label(key):
     return (text[:1].upper() + text[1:] + unit) if text else str(key)
 
 
+def type_label(component_type):
+    """Full equipment name, as in the app's equipment library (e.g. mos -> Motor Operated Switch (MOS))."""
+    if component_type in BUILTIN_SYMBOLS:
+        return BUILTIN_SYMBOLS[component_type]["label"]
+    if str(component_type).startswith("custom"):
+        return "Custom"
+    text = str(component_type).replace("_", " ").strip()
+    return text[:1].upper() + text[1:]
+
+
 def property_value(key, value):
     if isinstance(value, bool):
         return "Yes" if value else "No"
@@ -287,13 +297,14 @@ class PdfExportMixin:
             property_text = "<br>".join(
                 f"<b>{escape(property_label(key))}:</b> {escape(property_value(key, value))}"
                 for key, value in properties.items()
+                if key != "symbol_type"  # already shown, in full, in the Type column
             ) or "None"
             ports = ", ".join(str(port) for port in component.get("ports", []))
             component_rows.append(
                 "<tr>"
                 f"<td>{escape(str(component.get('display_id', component.get('id', ''))))}</td>"
                 f"<td>{escape(str(component.get('name', '')))}</td>"
-                f"<td>{escape(str(component.get('type', '')))}</td>"
+                f"<td>{escape(type_label(component.get('type', '')))}</td>"
                 f"<td>{property_text}</td>"
                 f"<td>{escape(ports or 'None')}</td>"
                 "</tr>"
