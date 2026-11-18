@@ -144,7 +144,9 @@ be reviewed after pasting. Copy/paste inside text fields still edits text normal
    stage. Legacy miscellaneous entries use the same background behavior.
    Hover over a row number to reveal **−**, then click it to delete that load.
    The table supports cell selection and column-header selection, with Shift
-   and Ctrl for selecting multiple cells.
+   and Ctrl for selecting multiple cells. Press **Delete** or **Backspace** to
+   remove every load row with a selected cell; inside a text field these keys
+   edit the text as usual.
 6. Check the verification box for each zone after reviewing its assignments,
    or use **Verify all zones** below it, then Save. Bulk verification confirms
    valid zones and leaves incomplete ordinary zones as drafts, with details in
