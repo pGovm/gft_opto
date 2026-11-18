@@ -115,15 +115,19 @@ breaker-failure or reclose sequence. If primary and backup loads overlap, put
 all overlapping loads in the same stage. A motor's inrush and running currents
 cannot represent the same simultaneous operating state.
 
-The output lists zone membership, boundaries, per-stage load breakdowns, and
-each DC supply's maximum current across complete zones. Each physical coil or
-motor is counted once per stage. Separate DC supplies are not combined into a
-single battery demand. Missing currents, unreachable CTs, unconfirmed settings,
-and uncovered bus/transformer equipment make the study incomplete; provisional
-values are labeled, and final supply peaks are withheld until the complete
-study is verified. Protection is not
-inferred from the PDF artwork or from equipment proximity. CT/relay assignments
-and actual trip logic must be reviewed by the user.
+The Calculation PDF summarizes each zone's per-stage totals, review issues,
+assigned loads, and each DC supply's maximum current across complete zones. Its
+Evaluation Output retains per-stage supply totals and load calculations without
+the equipment-member lists or topology descriptions. CTs define zone boundaries;
+they are not included as calculated loads. The Netlist PDF remains the separate
+component and connectivity inventory. Each physical coil or motor is counted
+once per stage. Separate DC supplies are not combined into a single battery
+demand. Missing currents, unreachable CTs, unconfirmed settings, and uncovered
+bus/transformer equipment make the study incomplete; provisional values are
+labeled, and final supply peaks are withheld until the complete study is
+verified. Protection is not inferred from the PDF artwork or from equipment
+proximity. CT/relay assignments and actual trip logic must be reviewed by the
+user.
 
 Use the zone selector above the analysis output to view all zones or one zone.
 Colored outlines mark the protected equipment and connections; dashed outlines

@@ -241,13 +241,26 @@ class GuiWorkflows(unittest.TestCase):
         with pymupdf.open(path) as document:
             pages = [page.get_text() for page in document]
         text = "".join(pages)
+        ct_labels = [item.visible_id() for item in w.workspace_scene.items()
+                     if isinstance(item, CurrentTransformerItem)]
         self.assertIn("18", text)
+        self.assertIn("Supply Peaks", text)
         self.assertIn("Zone Summary", pages[0])
-        self.assertIn("Warnings Summary", pages[0])
+        self.assertIn("Review", pages[0])
         self.assertIn("Test Bus Zone", text)
         self.assertNotIn("bus_zone", text)
-        self.assertIn("Primary trip: Confirmed 18.0 A", text)
-        self.assertIn("Appendix: Detected Topology Regions", pages[-1])
+        for label in ct_labels:
+            self.assertNotIn(label, text)
+        self.assertIn("Primary trip", text)
+        self.assertIn("DC 1", text)
+        self.assertIn("Load Breakdown", text)
+        self.assertIn("Evaluation Output", text)
+        self.assertIn("Stage total", text)
+        self.assertIn("×", text)
+        self.assertNotIn("CT boundaries:", text)
+        self.assertNotIn("Equipment:", text)
+        self.assertNotIn("Each configured zone is a separate fault event", text)
+        self.assertNotIn("Appendix: Detected Topology Regions", text)
         self.assertIn("Results saved:", w.footer_status_label.text())
         bad_path = Path(self.temp.name) / "missing" / "results.pdf"
         with patch("gft_opto.gui.substation_gui.QFileDialog.getSaveFileName", return_value=(str(bad_path), "")), patch.object(QMessageBox, "critical") as error:
@@ -265,7 +278,7 @@ class GuiWorkflows(unittest.TestCase):
         with pymupdf.open(path) as document:
             pages = [page.get_text() for page in document]
         self.assertIn("REVIEW REQUIRED", pages[0])
-        self.assertIn("Missing or invalid currents", pages[0])
+        self.assertIn("Review", pages[0])
         self.assertIn("current is missing", pages[0])
         self.assertIn("Test Bus Zone", pages[0])
         self.assertNotIn("bus_zone", "".join(pages))
@@ -282,6 +295,7 @@ class GuiWorkflows(unittest.TestCase):
             text = "".join(page.get_text() for page in document)
         self.assertIn("Netlist:", text)
         self.assertIn("Components", text)
+        self.assertNotIn("•", text)
         self.assertIn("Netlist PDF saved:", w.footer_status_label.text())
 
     def test_netlist_json_import_rebuilds_diagram(self):

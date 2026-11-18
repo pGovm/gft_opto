@@ -1445,8 +1445,6 @@ class SubstationGuiMockup(QMainWindow):
             return
 
         result = self.last_result
-        peak = result.get("peak_current_A", "Not available")
-        peak_display = f"{peak:g} A" if isinstance(peak, (int, float)) else str(peak)
         report = result.get("protection_analysis") or {}
         study_status = "COMPLETE" if report.get("complete") else messages.SUBSTATION_GUI4_INCOMPLETE_PROVISIONAL_STUDY
         demo_notice = (
@@ -1462,18 +1460,18 @@ class SubstationGuiMockup(QMainWindow):
         loads = result.get("loads") or []
         load_rows = "".join(
             "<tr>"
+            f"<td>{escape(str(load.get('zone_name', '')))}<br>"
+            f"{escape(str(load.get('stage', '')))} / {escape(str(load.get('supply', '')))}</td>"
             f"<td>{escape(str(load.get('name', 'Load')))}</td>"
             f"<td>{escape(str(load.get('quantity', 1)))}</td>"
             f"<td>{escape(str(load.get('amps_per_unit', 'N/A')))} A</td>"
             f"<td>{escape(str(load.get('total_amps', 'N/A')))} A</td>"
-            f"<td>{escape(str(load.get('note', '')))}</td>"
             "</tr>"
             for load in loads
         ) or "<tr><td colspan='5'>No loads returned.</td></tr>"
 
         zone_summary_rows = []
-        missing_current_items = []
-        review_zone_items = []
+        review_rows = []
         for zone in report.get("zones", []):
             status = ("COMPLETE (DEMO)" if zone.get("demonstration_complete") else
                       "COMPLETE" if zone.get("complete") else "REVIEW REQUIRED — PROVISIONAL")
@@ -1482,17 +1480,18 @@ class SubstationGuiMockup(QMainWindow):
             for scenario in zone.get("scenarios", []):
                 if not scenario.get("loads"):
                     stage_totals.append(
-                        "<div><b class='incomplete'>Not calculated — no valid loads</b></div>"
+                        f"{escape(str(scenario.get('stage', 'Unspecified stage')))}: "
+                        "<b class='incomplete'>Not calculated</b>"
                     )
                     continue
                 qualifier = ("Demo" if zone.get("demonstration_complete") else
                              "Confirmed" if zone.get("complete") else "PROVISIONAL")
                 stage_totals.append(
-                    f"<div>{escape(str(scenario.get('stage', 'Unspecified stage')))}: "
+                    f"{escape(str(scenario.get('stage', 'Unspecified stage')))}: "
                     f"<b class='{status_class}'>{qualifier} "
-                    f"{escape(str(scenario.get('peak_current_A', 'N/A')))} A</b></div>"
+                    f"{escape(str(scenario.get('peak_current_A', 'N/A')))} A</b>"
                 )
-            total_html = "".join(stage_totals) or "No calculated stage totals"
+            total_html = "<br>".join(stage_totals) or "No calculated stages"
             zone_summary_rows.append(
                 "<tr>"
                 f"<td>{escape(str(zone.get('name', 'Unnamed zone')))}</td>"
@@ -1500,87 +1499,85 @@ class SubstationGuiMockup(QMainWindow):
                 f"<td class='{status_class}'><b>{status}</b></td>"
                 "</tr>"
             )
-            zone_warnings = [str(warning) for warning in zone.get("warnings", [])]
-            if not zone.get("complete"):
-                details = "; ".join(zone_warnings) or "No completion details were returned."
-                review_zone_items.append(
-                    f"<li><b>{escape(str(zone.get('name', 'Unnamed zone')))}:</b> "
-                    f"{escape(details)}</li>"
+            zone_name = str(zone.get("name", "Unnamed zone"))
+            review_rows.extend((zone_name, str(warning)) for warning in zone.get("warnings", []))
+            for scenario in zone.get("scenarios", []):
+                review_rows.extend(
+                    (f"{zone_name} / {scenario.get('stage', 'Unspecified stage')}", str(advisory))
+                    for advisory in scenario.get("advisories", [])
                 )
-            for warning in zone_warnings:
-                lowered = warning.lower()
-                if "current" in lowered and (
-                    "missing" in lowered or "not numeric" in lowered or "must be finite" in lowered
-                ):
-                    missing_current_items.append(
-                        f"<li><b>{escape(str(zone.get('name', 'Unnamed zone')))}:</b> "
-                        f"{escape(warning)}</li>"
-                    )
         zone_summary_html = "".join(zone_summary_rows) or (
             "<tr><td colspan='3'>No configured zones.</td></tr>"
         )
-        missing_current_html = "".join(dict.fromkeys(missing_current_items)) or (
-            "<li>None reported.</li>"
-        )
-        review_zone_html = "".join(review_zone_items) or "<li>None.</li>"
-        other_warnings = [str(warning) for warning in report.get("warnings", [])]
-        other_warning_html = "".join(
-            f"<li>{escape(warning)}</li>" for warning in other_warnings
-        ) or "<li>None.</li>"
-
-        topology_regions = report.get("topology_regions", [])
-        topology_rows = "".join(
+        review_rows.extend(("Study", str(warning)) for warning in report.get("warnings", []))
+        review_html = "".join(
             "<tr>"
-            f"<td>{escape(str(region.get('name', 'Unnamed region')))}</td>"
-            f"<td>{'Enclosed' if region.get('enclosed_by') else 'Outermost'}</td>"
-            f"<td>{len(region.get('connections', []))}</td>"
+            f"<td>{escape(zone_name)}</td>"
+            f"<td>{escape(warning)}</td>"
             "</tr>"
-            for region in topology_regions
-        ) or "<tr><td colspan='3'>No topology regions detected.</td></tr>"
-
-        steps = result.get("calculation_steps") or []
-
-        if isinstance(steps, str):
-            steps = [steps]
-
-        steps_html = (
-            "".join(
-                f"<li>{escape(str(step))}</li>"
-                for step in steps
-            )
-            if steps
-            else "<li>The evaluator did not return individual calculation steps.</li>"
+            for zone_name, warning in dict.fromkeys(review_rows)
+        ) or "<tr><td colspan='2'>None.</td></tr>"
+        supply_peak_html = "".join(
+            "<tr>"
+            f"<td>{escape(str(supply))}</td>"
+            f"<td>{escape(str(peak.get('peak_current_A', 'N/A')))} A</td>"
+            f"<td>{escape(str(peak.get('zone', '')))} / {escape(str(peak.get('stage', '')))}</td>"
+            "</tr>"
+            for supply, peak in sorted(report.get("supply_peaks", {}).items())
+        ) or (
+            "<tr><td colspan='3'>Unavailable until zone assignments and currents are complete.</td></tr>"
         )
-
-        output_text = self.output_box.toPlainText()
-        topology_marker = "Detected topology regions (not automatically added to the calculation):"
-        peak_marker = "Peak per supply among confirmed, complete configured zones:"
-        before_topology, topology_separator, after_topology = output_text.partition(topology_marker)
-        if topology_separator:
-            _, peak_separator, after_peak = after_topology.partition(peak_marker)
-            output_text = before_topology + (
-                f"\n\n{peak_marker}{after_peak}" if peak_separator else ""
-            )
-        output_html = escape(output_text)
-        zone_names = [
-            str(zone.get('name', '')) for zone in report.get('zones', [])
-            if str(zone.get('name', '')).strip()
-        ]
-        for zone_name in sorted(set(zone_names), key=len, reverse=True):
-            escaped_name = escape(zone_name)
-            output_html = output_html.replace(escaped_name, f"<b>{escaped_name}</b>")
+        evaluation_rows = []
+        for zone in report.get("zones", []):
+            zone_name = escape(str(zone.get("name", "Unnamed zone")))
+            for scenario in zone.get("scenarios", []):
+                stage = str(scenario.get("stage", "Unspecified stage"))
+                loads = scenario.get("loads", [])
+                if loads:
+                    supply_totals = "; ".join(
+                        f"{escape(str(supply))}: {escape(str(current))} A"
+                        for supply, current in scenario.get("supplies", {}).items()
+                    )
+                    load_calculations = "<br>".join(
+                        f"{escape(str(load.get('name', 'Load')))}: "
+                        f"{escape(str(load.get('amps_per_unit', 'N/A')))} A &times; "
+                        f"{escape(str(load.get('quantity', 1)))} = "
+                        f"{escape(str(load.get('total_amps', 'N/A')))} A "
+                        f"({escape(str(load.get('supply', '')))})"
+                        for load in loads
+                    )
+                    calculation = (
+                        f"{load_calculations}<br><b>Stage total: "
+                        f"{escape(str(scenario.get('peak_current_A', 'N/A')))} A</b>"
+                    )
+                    if supply_totals:
+                        calculation = f"{supply_totals}<br>{calculation}"
+                else:
+                    calculation = "<b class='incomplete'>Not calculated — no valid loads</b>"
+                evaluation_rows.append(
+                    "<tr>"
+                    f"<td>{zone_name}<br>{escape(stage)}</td>"
+                    f"<td>{calculation}</td>"
+                    "</tr>"
+                )
+        evaluation_html = "".join(evaluation_rows) or (
+            "<tr><td colspan='2'>No configured zone calculations.</td></tr>"
+        )
 
         html = f"""
         <html>
         <head>
           <style>
-            body {{ font-family: sans-serif; font-size: 10pt; }}
+            body {{ font-family: sans-serif; font-size: 9pt; margin: 0; }}
             h1, h2 {{ color: #006A4E; }}
-            table {{ border-collapse: collapse; width: 100%; }}
-            .summary {{ font-size: 9pt; }}
+            h1 {{ margin: 0 0 6px; }}
+            h2 {{ margin: 10px 0 4px; }}
+            p {{ margin: 4px 0; }}
+            table {{ border-collapse: collapse; width: 100%; margin-bottom: 6px; }}
+            .summary {{ font-size: 8.5pt; }}
             th, td {{
                 border: 1px solid #cbd2d9;
-                padding: 6px;
+                padding: 4px;
                 text-align: left;
                 vertical-align: top;
             }}
@@ -1588,8 +1585,6 @@ class SubstationGuiMockup(QMainWindow):
             tr {{ page-break-inside: avoid; }}
             .complete {{ color: #176b3a; }}
             .incomplete {{ color: #9a4f00; background: #fff3cd; }}
-            .appendix {{ page-break-before: always; }}
-            pre {{ white-space: pre-wrap; }}
           </style>
         </head>
 
@@ -1597,68 +1592,45 @@ class SubstationGuiMockup(QMainWindow):
           <h1>Calculation Results</h1>
           <p><b>{escape(study_status)}</b></p>
           {demo_notice}
+          <p><b>System:</b> {escape(str(result.get('scenario_name', 'N/A')))}
+            &nbsp; <b>Voltage:</b> {escape(str(result.get('voltage_V', 'N/A')))} V</p>
 
-          <p>
-            <b>System:</b>
-            {escape(str(result.get('scenario_name', 'N/A')))}
-          </p>
-
-          <p>
-            <b>Voltage:</b>
-            {escape(str(result.get('voltage_V', 'N/A')))} V
-          </p>
-
-          <p>
-            <b>Highest peak on one DC supply:</b>
-            {escape(peak_display)}
-            ({escape(str(result.get('worst_case_supply') or 'not available'))})
-          </p>
+          <h2>Supply Peaks</h2>
+          <table class="summary">
+            <tr><th>DC supply</th><th>Maximum current</th><th>Zone / stage</th></tr>
+            {supply_peak_html}
+          </table>
 
           <h2>Zone Summary</h2>
-          <p>Stage totals are shown separately; stages and separate zone faults are not added together.</p>
+          <p>Stage totals and separate zone faults are not added together.</p>
           <table class="summary">
             <tr><th>Zone</th><th>Per-stage total across assigned supplies</th><th>Status</th></tr>
             {zone_summary_html}
           </table>
 
-          <h2>Warnings Summary</h2>
-          <h3>Zones requiring review</h3>
-          <ul>{review_zone_html}</ul>
-          <h3>Missing or invalid currents</h3>
-          <ul>{missing_current_html}</ul>
-          <h3>Other study warnings</h3>
-          <ul>{other_warning_html}</ul>
+          <h2>Review</h2>
+          <table class="summary">
+            <tr><th>Zone / stage</th><th>Issue</th></tr>
+            {review_html}
+          </table>
 
-          <div style="page-break-before: always;">
-          <h2>Loads</h2>
-
+          <h2>Load Breakdown</h2>
           <table>
             <tr>
+                <th>Zone / stage / supply</th>
                 <th>Load</th>
                 <th>Quantity</th>
-                <th>Current per unit</th>
-                <th>Total current</th>
-                <th>Note</th>
+                <th>Current / unit</th>
+                <th>Total</th>
             </tr>
-
             {load_rows}
           </table>
 
-          </ol>
-
           <h2>Evaluation Output</h2>
-
-          <pre>{output_html}</pre>
-          </div>
-
-          <div class="appendix">
-            <h1>Appendix: Detected Topology Regions</h1>
-            <p>Topology detection is retained for reference and is not automatically added to the protection calculation.</p>
-            <table>
-              <tr><th>Region</th><th>Relationship</th><th>Conductors</th></tr>
-              {topology_rows}
-            </table>
-          </div>
+          <table class="summary">
+            <tr><th>Zone / stage</th><th>Calculation</th></tr>
+            {evaluation_html}
+          </table>
         </body>
         </html>
         """
@@ -1711,20 +1683,18 @@ class SubstationGuiMockup(QMainWindow):
         component_rows = []
         for component in netlist.get("components", []):
             properties = component.get("properties") or {}
-            property_list = "".join(
-                "<li>"
+            property_text = "<br>".join(
                 f"<b>{escape(str(key))}:</b> "
                 f"{escape(str(value))}"
-                "</li>"
                 for key, value in properties.items()
-            ) or "<li>None</li>"
+            ) or "None"
             ports = ", ".join(str(port) for port in component.get("ports", []))
             component_rows.append(
                 "<tr>"
                 f"<td>{escape(str(component.get('display_id', component.get('id', ''))))}</td>"
                 f"<td>{escape(str(component.get('name', '')))}</td>"
                 f"<td>{escape(str(component.get('type', '')))}</td>"
-                f"<td><ul>{property_list}</ul></td>"
+                f"<td>{property_text}</td>"
                 f"<td>{escape(ports or 'None')}</td>"
                 "</tr>"
             )
@@ -1758,20 +1728,20 @@ class SubstationGuiMockup(QMainWindow):
           <style>
             body {{ font-family: sans-serif; font-size: 9pt; color: #1f2933; }}
             h1, h2 {{ color: #006A4E; }}
-            table {{ border-collapse: collapse; width: 100%; margin-bottom: 16px; }}
-            th, td {{ border: 1px solid #cbd2d9; padding: 6px; text-align: left; vertical-align: top; }}
+            h1 {{ margin: 0 0 6px; }}
+            h2 {{ margin: 8px 0 4px; }}
+            p {{ margin: 4px 0; }}
+            table {{ border-collapse: collapse; width: 100%; margin-bottom: 8px; }}
+            th, td {{ border: 1px solid #cbd2d9; padding: 4px; text-align: left; vertical-align: top; }}
             th {{ background: #e8f1ed; }}
-            ul {{ margin: 0; padding-left: 16px; }}
             tr {{ page-break-inside: avoid; }}
           </style>
         </head>
         <body>
           <h1>Netlist: {escape(str(netlist.get('project_name', 'Untitled Project')))}</h1>
-          <p>
-            <b>Schema version:</b> {escape(str(netlist.get('schema_version', 'N/A')))}
+          <p><b>Schema version:</b> {escape(str(netlist.get('schema_version', 'N/A')))}
             &nbsp; <b>Components:</b> {len(netlist.get('components', []))}
-            &nbsp; <b>Connections:</b> {len(netlist.get('connections', []))}
-          </p>
+            &nbsp; <b>Connections:</b> {len(netlist.get('connections', []))}</p>
           <h2>Components</h2>
           <table>
             <thead><tr>

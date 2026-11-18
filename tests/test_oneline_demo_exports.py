@@ -58,6 +58,9 @@ class OneLineDemoExportTests(unittest.TestCase):
                         for row in loads:
                             self.assertIn(row['name'], text)
                             self.assertIn(str(row['amps_per_unit']), text)
+                            self.assertIn(row['zone_name'], text)
+                            self.assertIn(row['stage'], text)
+                            self.assertIn(row['supply'], text)
                         self.assertIn('PROVISIONAL', text)
                         self.assertIn('DEMO', text)
                         self.assertIn('DEMONSTRATION', text)
