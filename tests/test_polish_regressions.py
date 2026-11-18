@@ -96,6 +96,22 @@ class PolishGui(unittest.TestCase):
         self.assertEqual(dialog.zones[0]["name"], "")
         self.assertFalse(dialog.verify_all.isChecked())
 
+    def test_load_table_keeps_four_rows_visible_in_a_short_dialog(self):
+        _, dialog = self.editor()
+        for _ in range(11):
+            dialog.add_action()
+        dialog.show()
+        dialog.guidance.setText("Review the selected zone's CTs and operating actions. " * 50)
+        for height in (650, 750, 900):
+            dialog.resize(1050, height)
+            self.app.processEvents()
+            self.assertGreaterEqual(dialog.actions.viewport().height(),
+                                    4 * dialog.actions.rowHeight(0))
+        dialog.zone_splitter.setSizes([10000, 1])
+        self.app.processEvents()
+        self.assertGreaterEqual(dialog.actions.viewport().height(),
+                                4 * dialog.actions.rowHeight(0))
+
     def test_demo_mode_is_explicit_and_can_be_saved_and_undone(self):
         _, dialog = self.editor()
         dialog.demo_mode.setChecked(True)

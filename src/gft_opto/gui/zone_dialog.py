@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QHBoxLayout,
     QLabel, QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPushButton,
     QSpinBox, QTableWidget, QVBoxLayout, QWidget, QHeaderView, QAbstractItemView, QDoubleSpinBox,
-    QTableWidgetSelectionRange, QStackedWidget,
+    QTableWidgetSelectionRange, QStackedWidget, QSplitter, QScrollArea, QFrame,
 )
 
 from gft_opto.logic.protection_study import (
@@ -120,7 +120,6 @@ class ZoneDialog(QDialog):
             self.guidance.setText(self.guidance.text() + messages.ZONE_DIALOG_LEGACY_SUPPLY_CONFLICTS.format(", ".join(sorted(conflicts)))
                 + messages.ZONE_DIALOG_REVIEW_THESE_BREAKER_S_SUPPLY_SETTINGS_BEFORE_CONFIRMING)
         self._base_guidance = self.guidance.text()
-        outer.addWidget(self.guidance)
         self.demo_mode = QCheckBox("Demonstration mode (allow incomplete demo zones)")
         self.demo_mode.setChecked(bool(self.netlist.get("demonstration_mode", False)))
         outer.addWidget(self.demo_mode)
@@ -145,6 +144,29 @@ class ZoneDialog(QDialog):
         body.addLayout(left, 1)
         right = QVBoxLayout()
         body.addLayout(right, 4)
+        self.zone_splitter = QSplitter(Qt.Orientation.Vertical)
+        self.zone_splitter.setObjectName("zoneDetailsSplitter")
+        self.zone_splitter.setChildrenCollapsible(False)
+        self.zone_splitter.setHandleWidth(4)
+        right.addWidget(self.zone_splitter, 1)
+        settings_scroll = QScrollArea()
+        settings_scroll.setObjectName("zoneSettingsScroll")
+        settings_scroll.viewport().setObjectName("zoneSettingsViewport")
+        settings_scroll.setWidgetResizable(True)
+        settings_scroll.setMinimumHeight(90)
+        settings_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        settings_panel = QWidget()
+        settings_panel.setObjectName("zoneSettingsPanel")
+        settings_panel.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        settings_layout = QVBoxLayout(settings_panel)
+        settings_layout.setContentsMargins(0, 0, 0, 0)
+        settings_layout.addWidget(self.guidance)
+        settings_scroll.setWidget(settings_panel)
+        self.zone_splitter.addWidget(settings_scroll)
+        loads_panel = QWidget()
+        loads_layout = QVBoxLayout(loads_panel)
+        loads_layout.setContentsMargins(0, 0, 0, 0)
+        self.zone_splitter.addWidget(loads_panel)
         form = QFormLayout()
         self.region_combo = QComboBox()
         self.region_combo.addItem("Custom seed and selected CTs", None)
@@ -164,8 +186,8 @@ class ZoneDialog(QDialog):
         form.addRow("Zone name", self.name)
         form.addRow("Zone type", self.zone_kind)
         form.addRow("Protected equipment", self.seed)
-        right.addLayout(form)
-        right.addWidget(QLabel("Boundary CTs (assigned to this protection scheme):"))
+        settings_layout.addLayout(form)
+        settings_layout.addWidget(QLabel("Boundary CTs (assigned to this protection scheme):"))
         self.cts = QListWidget()
         self.cts.setToolTip(messages.ZONE_DIALOG_SELECT_ONLY_THE_OUTER_CT_BOUNDARIES_FOR_THIS_SCHEME)
         self.cts.setMaximumHeight(150)
@@ -176,8 +198,8 @@ class ZoneDialog(QDialog):
                 entry.setFlags(entry.flags() | Qt.ItemFlag.ItemIsUserCheckable)
                 entry.setCheckState(Qt.CheckState.Unchecked)
                 self.cts.addItem(entry)
-        right.addWidget(self.cts)
-        right.addWidget(QLabel(messages.ZONE_DIALOG_OPERATING_LOADS_USE_A_SEPARATE_STAGE_FOR_RECLOSE_MOTOR))
+        settings_layout.addWidget(self.cts)
+        loads_layout.addWidget(QLabel(messages.ZONE_DIALOG_OPERATING_LOADS_USE_A_SEPARATE_STAGE_FOR_RECLOSE_MOTOR))
         self.load_rows = []
         self.actions = QTableWidget(0, 6)
         row_header = _LoadRowHeader(self.actions)
@@ -196,7 +218,18 @@ class ZoneDialog(QDialog):
         self.actions.verticalHeader().setSectionsClickable(True)
         self.actions.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.actions.verticalHeader().setDefaultSectionSize(44)
-        right.addWidget(self.actions, 1)
+        self.actions.ensurePolished()
+        self.actions.horizontalHeader().ensurePolished()
+        table_margins = self.actions.contentsMargins()
+        self.actions.setMinimumHeight(
+            5 * self.actions.verticalHeader().defaultSectionSize()
+            + self.actions.horizontalHeader().sizeHint().height()
+            + table_margins.top() + table_margins.bottom()
+            + self.actions.horizontalScrollBar().sizeHint().height())
+        loads_layout.addWidget(self.actions, 1)
+        self.zone_splitter.setStretchFactor(0, 1)
+        self.zone_splitter.setStretchFactor(1, 2)
+        self.zone_splitter.setSizes([230, 300])
         row = QHBoxLayout()
         add_load = QPushButton("Add Load")
         add_load.clicked.connect(lambda: self.add_action())
@@ -243,6 +276,15 @@ class ZoneDialog(QDialog):
         self.setPalette(palette)
         self.setStyleSheet("""
             QDialog { background-color: #f4f6f8; color: #1f2933; }
+            QScrollArea#zoneSettingsScroll, QWidget#zoneSettingsViewport,
+            QWidget#zoneSettingsPanel {
+                background-color: #f4f6f8; color: #1f2933; border: none;
+            }
+            QSplitter#zoneDetailsSplitter { background-color: #f4f6f8; }
+            QSplitter#zoneDetailsSplitter::handle {
+                background-color: #f4f6f8;
+                border: none;
+            }
             QLabel, QCheckBox { color: #1f2933; background-color: transparent; }
             QTableWidget, QListWidget, QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {
                 background-color: #ffffff; color: #1f2933;
