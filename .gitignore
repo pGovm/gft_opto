@@ -14,3 +14,4 @@ __pycache__/
 # Misc folders
 .zone-integration-backups/
 zone-verification-*
+docs/*.drawio
