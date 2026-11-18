@@ -249,8 +249,6 @@ class IndependentTopologyChecks(unittest.TestCase):
                                 members != fp[0] | fp[1] or keys != fp[2]):
                             expected_parents.append(other.zone_id)
                     self.assertEqual(parents[z.zone_id], sorted(expected_parents))
-                outer = detector.independent_zones(all_zones, parents)
-                self.assertEqual({z.zone_id for z in outer}, {z.zone_id for z in all_zones if not parents[z.zone_id]})
 
     def test_long_ct_chain_preserves_all_299_wire_only_regions(self):
         items = [CT(f'ct{i}') for i in range(300)]

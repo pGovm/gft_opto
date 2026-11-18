@@ -3,7 +3,6 @@
 These call the real study and scene-netlist adapter. Lightweight scene objects
 exercise the adapter protocol only; they are not replacements for Qt GUI tests.
 """
-import copy
 import json
 import unittest
 
@@ -72,34 +71,6 @@ class ReviewRegressions(unittest.TestCase):
         report = study.evaluate_zones(net, [zone])
         self.assertTrue(report['complete'])
         self.assertEqual(report['supply_peaks']['DC 1']['peak_current_A'], 30)
-
-    def test_detect_missing_allocates_an_id_after_an_existing_seed_edit(self):
-        net = example()
-        existing = study.propose_zones(net)
-        old_id = existing[0]['id']
-        existing[0]['seed'] = 'cb1'
-        merged = study.add_missing_proposals(net, existing)
-        self.assertEqual(len(merged), 2)
-        self.assertEqual(merged[0]['id'], old_id)
-        self.assertEqual(merged[1]['seed'], 'bus')
-        self.assertNotEqual(merged[0]['id'], merged[1]['id'])
-        study.validate_zones(merged)
-
-    def test_detect_missing_is_idempotent(self):
-        net = example()
-        first = study.add_missing_proposals(net, [])
-        self.assertEqual(study.add_missing_proposals(net, first), first)
-
-    def test_detect_missing_retains_existing_settings_and_does_not_mutate_input(self):
-        net = example()
-        existing = [approve(net, study.propose_zones(net)[0])]
-        existing[0]['notes'] = {'retain': ['a', 'b']}
-        saved = copy.deepcopy((net, existing))
-        result = study.add_missing_proposals(net, existing)
-        self.assertEqual((net, existing), saved)
-        self.assertEqual(result, existing)
-        result[0]['notes']['retain'].append('new')
-        self.assertEqual((net, existing), saved)
 
     def test_scene_netlist_does_not_collapse_colon_delimited_endpoints(self):
         a, b, z = Item('a'), Item('a:b'), Item('z')

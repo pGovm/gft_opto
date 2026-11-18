@@ -368,11 +368,13 @@ class GuiWorkflows(unittest.TestCase):
         self.assertTrue(w.prop_name.isReadOnly())
         self.assertTrue(w.prop_trip_coil_1.isReadOnly())
 
-    def test_ribbon_controls_fit_and_open_layout_button_works(self):
+    def test_ribbon_tabs_and_open_layout_button_work(self):
         w = self.window
         w.show()
         self.assertEqual([w.ribbon.tabText(i).replace("&", "") for i in range(w.ribbon.count())],
                          ["File", "Edit", "View", "Analysis"])
+        # Each command is on the tab the README describes. Whether the controls
+        # can be reached at narrow window widths is checked in test_ribbon_overflow.py.
         pages = ((w.new_layout_btn, w.open_layout_btn, w.save_layout_btn, w.save_as_btn,
                   w.load_btn, w.import_netlist_btn, w.save_results_btn),
                  (w.undo_btn, w.redo_btn, w.copy_btn, w.paste_btn, w.delete_btn, w.rotate_btn,
@@ -380,18 +382,11 @@ class GuiWorkflows(unittest.TestCase):
                  (w.grid_show_cb, w.pdf_show_cb, w.circuit_show_cb, w.zones_show_cb,
                   w.grid_snap_cb, w.grid_opacity_slider),
                  (w.check_btn, w.zone_setup_btn, w.run_btn, w.expand_analysis_btn))
-        for width in (1000, 1280):
-            w.resize(width, 800)
-            for index, controls in enumerate(pages):
-                w.ribbon.setCurrentIndex(index)
-                self.app.processEvents()
-                for control in controls:
-                    self.assertTrue(control.isVisible())
-                    w.ribbon.widget(index).ensureWidgetVisible(control, 0, 0)
-                    self.app.processEvents()
-                    origin = control.mapTo(w, QPointF(0, 0).toPoint())
-                    self.assertGreaterEqual(origin.x(), 0)
-                    self.assertLessEqual(origin.x() + control.width(), w.width())
+        for index, controls in enumerate(pages):
+            w.ribbon.setCurrentIndex(index)
+            self.app.processEvents()
+            for control in controls:
+                self.assertTrue(control.isVisible())
         self.assertTrue(any(action.shortcut().toString() == "Ctrl+O" for action in w.actions()))
         w.ribbon.setCurrentIndex(0)
         with patch("gft_opto.gui.substation_gui.QFileDialog.getOpenFileName", return_value=("", "")) as dialog:

@@ -3,7 +3,7 @@ import copy
 import unittest
 
 from gft_opto.logic.protection_study import (
-    add_missing_proposals, configuration_signature, evaluate_zones,
+    configuration_signature, evaluate_zones,
     propose_zones, topology_signature, zone_members,
 )
 
@@ -173,17 +173,6 @@ class SchemeProposals(unittest.TestCase):
         next(c for c in net["components"] if c["id"] == "ds")["properties"]["status"] = "Open"
         bus = next(z for z in propose_zones(net) if z["kind"] == "Bus")
         self.assertIn("bus-ct-1", bus["boundary_cts"])
-
-    def test_existing_explicit_near_ct_assignment_remains_unchanged(self):
-        net = station()
-        saved = propose_zones(net)[0]
-        saved["boundary_cts"] = ["bus-ct-1", "bus-ct-2"]
-        saved["name"] = "Reviewed bus scheme"
-        original = copy.deepcopy(saved)
-        result = add_missing_proposals(net, [saved])
-        self.assertEqual(result[0], original)
-        self.assertEqual(saved, original)
-        self.assertEqual(len(result), 3)
 
     def test_line_only_drawing_does_not_add_a_redundant_breaker_region(self):
         net = station()

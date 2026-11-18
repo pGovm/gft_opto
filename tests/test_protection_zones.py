@@ -22,7 +22,6 @@ from gft_opto.logic.protection_zones import (
     find_enclosed_zones,
     generate_composite_zones,
     identify_zones,
-    independent_zones,
     stable_zone_id,
     zone_signature,
 )
@@ -361,8 +360,6 @@ class ProtectionZones(unittest.TestCase):
         self.assertEqual(len(composites), 2)
         enclosures = find_enclosed_zones(primary + composites)
         self.assertEqual(set(enclosures[wire_zone.zone_id]), {z.zone_id for z in composites})
-        self.assertEqual({z.zone_id for z in independent_zones(primary + composites, enclosures)},
-                         {z.zone_id for z in composites})
 
     def test_all_fully_internal_shared_cts_are_removed_together(self):
         a, b, ct1, ct2 = FakeItem("a"), FakeItem("b"), FakeCT("ct1"), FakeCT("ct2")
@@ -405,7 +402,6 @@ class ProtectionZones(unittest.TestCase):
         second = Zone("second", {a}, {ct}, {wire})
         enclosures = find_enclosed_zones([first, second])
         self.assertEqual(enclosures, {"first": [], "second": []})
-        self.assertEqual(independent_zones([first, second], enclosures), [first, second])
 
     def test_enclosure_requires_boundaries_and_wires_not_just_a_core_subset(self):
         a, b, ct = FakeItem("a"), FakeItem("b"), FakeCT("ct")
@@ -425,8 +421,7 @@ class ProtectionZones(unittest.TestCase):
         self.assertEqual(enclosures["empty"], [])
         self.assertEqual(enclosures["inner"], ["middle", "outer"])
         self.assertEqual(enclosures["middle"], ["outer"])
-        self.assertEqual({z.zone_id for z in independent_zones(iter(zones), enclosures)},
-                         {"empty", "outer"})
+        self.assertEqual(enclosures["outer"], [])
 
     def test_invalid_zone_ids_and_overlapping_core_boundary_sets_are_rejected(self):
         item = FakeItem("a")
@@ -440,10 +435,6 @@ class ProtectionZones(unittest.TestCase):
                 with self.subTest(function=function.__name__, zones=zones), self.assertRaises(ValueError):
                     function(zones)
 
-    def test_missing_enclosure_entries_are_rejected(self):
-        with self.assertRaisesRegex(ValueError, "Missing enclosure entries"):
-            independent_zones([Zone("a", {FakeItem("a")})], {})
-
     def test_outermost_regions_can_share_breakers_and_are_separate_candidates(self):
         a, b, c = FakeBreaker("a"), FakeBreaker("b"), FakeBreaker("c")
         ct1, ct2 = FakeCT("ct1"), FakeCT("ct2")
@@ -454,7 +445,9 @@ class ProtectionZones(unittest.TestCase):
             FakeConnection(left, lp, right, rp)
         primary = identify_zones([a, ct1, b, ct2, c], FakeCT)
         all_zones = primary + generate_composite_zones(primary)
-        outermost = independent_zones(all_zones, find_enclosed_zones(all_zones))
+        # The app treats a region with no enclosing region as outermost.
+        enclosures = find_enclosed_zones(all_zones)
+        outermost = [z for z in all_zones if not enclosures[z.zone_id]]
         breaker_sets = [frozenset(i.instance_id for i in z.all_items if isinstance(i, FakeBreaker))
                         for z in outermost]
         self.assertEqual(set(breaker_sets), {frozenset({"a", "b"}), frozenset({"b", "c"})})

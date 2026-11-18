@@ -3,7 +3,7 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import unittest
 
-from PySide6.QtWidgets import QApplication, QCheckBox, QToolButton
+from PySide6.QtWidgets import QApplication, QCheckBox, QSlider, QToolButton
 from gft_opto.gui.substation_gui import SubstationGuiMockup
 
 
@@ -26,8 +26,10 @@ class RibbonOverflowTests(unittest.TestCase):
                     scroll = window.ribbon.widget(tab)
                     controls = scroll.widget().findChildren(QToolButton)
                     controls += scroll.widget().findChildren(QCheckBox)
+                    controls += scroll.widget().findChildren(QSlider)
                     for control in controls:
-                        with self.subTest(width=width, tab=tab, text=control.text()):
+                        name = control.text() if hasattr(control, "text") else control.accessibleName()
+                        with self.subTest(width=width, tab=tab, text=name):
                             scroll.ensureWidgetVisible(control, 0, 0)
                             app.processEvents()
                             top_left = control.mapTo(scroll.viewport(), control.rect().topLeft())

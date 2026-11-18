@@ -1,9 +1,8 @@
 """Switching and proposal regressions for CT-bounded operating regions."""
-import copy
 import unittest
 
 from gft_opto.logic.protection_study import (
-    add_missing_proposals, analyze_topology, configuration_signature,
+    analyze_topology, configuration_signature,
     evaluate_zones, propose_zones, topology_signature, zone_members,
 )
 
@@ -108,16 +107,6 @@ class SwitchingRegions(unittest.TestCase):
         net = bus_sections()
         net["connections"].append(wire("a", "b"))
         self.assertEqual(len(propose_zones(net)), 1)
-
-    def test_existing_alternate_bus_seed_is_preserved_without_duplicate(self):
-        net = bus_sections("Closed")
-        existing = propose_zones(net)[0]
-        existing.update(seed="b", name="Reviewed common bus", confirmed=True, notes="keep")
-        existing["topology_signature"] = topology_signature(net)
-        existing["configuration_signature"] = configuration_signature(existing)
-        original = copy.deepcopy(existing)
-        self.assertEqual(add_missing_proposals(net, [existing]), [original])
-        self.assertEqual(existing, original)
 
     def test_separate_ct_regions_not_deduplicated(self):
         net = bus_sections("Closed")

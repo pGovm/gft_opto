@@ -90,6 +90,27 @@ class TeammateMerge(unittest.TestCase):
         approve(net, zone)
         self.assertFalse(study.evaluate_zones(net, [zone])['complete'])
 
+    def test_modern_actions_derive_multiplier_and_supply_from_breaker(self):
+        net, cb, zone = modern_case()
+        result = study.evaluate_zones(net, [zone])
+        self.assertTrue(result['complete'])
+        self.assertEqual(result['supply_peaks']['Battery A']['peak_current_A'], 30)
+        zone['actions'][0]['operation'] = 'one_pole'
+        approve(net, zone)
+        self.assertEqual(study.evaluate_zones(net, [zone])['supply_peaks']['Battery A']['peak_current_A'], 10)
+        # A whole-breaker current cannot be split per pole, and is never multiplied.
+        cb['properties']['coil_current_basis'] = 'whole_breaker'
+        approve(net, zone)
+        self.assertFalse(study.evaluate_zones(net, [zone])['complete'])
+        zone['actions'][0]['operation'] = 'all_poles'
+        approve(net, zone)
+        self.assertEqual(study.evaluate_zones(net, [zone])['supply_peaks']['Battery A']['peak_current_A'], 10)
+        # A shared mechanism operates once for all poles.
+        cb['properties']['coil_current_basis'] = 'per_mechanism'
+        cb['properties']['mechanism_arrangement'] = 'shared'
+        approve(net, zone)
+        self.assertEqual(study.evaluate_zones(net, [zone])['supply_peaks']['Battery A']['peak_current_A'], 10)
+
     def test_modern_rows_without_legacy_fields_survive_json(self):
         net, cb, zone = modern_case()
         restored = json.loads(json.dumps([zone]))

@@ -15,8 +15,9 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QPoint, Qt
 from PySide6.QtGui import QFontDatabase
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QDialog, QMessageBox, QGraphicsPathItem
 
 from gft_opto.gui.layout_io import build_scene, scene_data, library_from_layout
@@ -97,6 +98,12 @@ class GuiZoneIntegration(unittest.TestCase):
         self.dialogs.append(dialog)
         return dialog
 
+    def show_active(self, dialog):
+        """Keyboard shortcuts only reach a window that is active."""
+        dialog.show()
+        dialog.activateWindow()
+        self.assertTrue(QTest.qWaitForWindowActive(dialog))
+
     def select_region(self, ident):
         for index in range(self.window.zone_view.count()):
             data = self.window.zone_view.itemData(index)
@@ -109,21 +116,63 @@ class GuiZoneIntegration(unittest.TestCase):
         self.example()
         self.assertEqual(self.window._scene_topology(), analyze_topology(self.window._protection_netlist()))
 
+    def test_shared_bus_region_is_explicitly_flagged_in_zone_editor(self):
+        netlist = {
+            "components": [
+                {"id": "bus1", "type": "bus", "label": "Bus 1", "properties": {}},
+                {"id": "bus2", "type": "bus", "label": "Bus 2", "properties": {}},
+                {"id": "ct1", "type": "ct", "properties": {}},
+                {"id": "ct2", "type": "ct", "properties": {}},
+                {"id": "cb1", "type": "breaker", "properties": {"trip_coil_1_a": 10}},
+                {"id": "cb2", "type": "breaker", "properties": {"trip_coil_1_a": 20}},
+                {"id": "g1", "type": "ground", "properties": {}},
+                {"id": "g2", "type": "ground", "properties": {}},
+            ],
+            "connections": [
+                ["bus1", "right", "bus2", "left"],
+                ["bus1", "left", "ct1", "left"],
+                ["ct1", "right", "cb1", "right"],
+                ["cb1", "left", "g1", "node"],
+                ["bus2", "right", "ct2", "left"],
+                ["ct2", "right", "cb2", "right"],
+                ["cb2", "left", "g2", "node"],
+            ],
+        }
+        dialog = ZoneDialog(netlist, propose_zones(netlist))
+        try:
+            self.assertEqual(dialog.zone_list.count(), 1)
+            self.assertIn("multiple buses share this detected region",
+                          dialog.guidance.text().lower())
+            self.assertIn("Bus 1", dialog.guidance.text())
+            self.assertIn("Bus 2", dialog.guidance.text())
+            self.assertIn("suggested nearby breakers (not assigned)",
+                          dialog.guidance.text().lower())
+            self.assertEqual(dialog.actions.rowCount(), 0)
+        finally:
+            dialog.reject()
+            dialog.deleteLater()
+            self.app.processEvents()
+
     def test_operating_table_deletes_selected_rows_and_retains_other_load(self):
-        from PySide6.QtWidgets import QTableWidgetSelectionRange
         from gft_opto.logic.protection_study import evaluate_zones
         self.example()
         dialog = self.dialog()
+        self.show_active(dialog)
         dialog.add_action()
         dialog.add_action()
         equipment = dialog.actions.cellWidget(1, 0)
         equipment.setCurrentIndex(equipment.findText("Other"))
         dialog.load_rows[1].saved_action["custom_load"] = {"name": "Panel heater DC"}
         dialog.load_rows[1].current.setValue(7.25)
-        dialog.actions.clearSelection()
-        dialog.actions.setRangeSelected(QTableWidgetSelectionRange(0, 0, 0, 5), True)
-        dialog.actions.setRangeSelected(QTableWidgetSelectionRange(2, 0, 2, 5), True)
-        dialog.remove_action()
+        # Select rows 1 and 3 the way a user does (click, then Ctrl-click), then
+        # press Delete. Multiplier cells are used because they open no dropdown.
+        QTest.mouseClick(dialog.load_rows[0].multiplier, Qt.MouseButton.LeftButton)
+        QTest.mouseClick(dialog.load_rows[2].multiplier, Qt.MouseButton.LeftButton,
+                         Qt.KeyboardModifier.ControlModifier)
+        self.assertEqual({index.row() for index in dialog.actions.selectedIndexes()}, {0, 2})
+        focus = self.app.focusWidget()
+        self.assertTrue(focus is dialog.actions or dialog.actions.isAncestorOf(focus))
+        QTest.keyClick(focus, Qt.Key.Key_Delete)
         self.assertEqual(dialog.actions.rowCount(), 1)
         dialog.capture()
         action = dialog.zones[0]["actions"][0]
@@ -135,6 +184,52 @@ class GuiZoneIntegration(unittest.TestCase):
         stage = report["zones"][0]["scenarios"][0]
         self.assertEqual(stage["peak_current_A"], 7.25)
         self.assertEqual(stage["loads"][0]["name"], "Panel heater DC")
+
+    def test_delete_and_backspace_inside_load_text_fields_edit_text_not_rows(self):
+        self.example()
+        dialog = self.dialog()
+        self.show_active(dialog)
+        dialog.add_action()
+        self.app.processEvents()  # Lay out the new row before clicking into it.
+        row = dialog.load_rows[-1]
+        rows = dialog.actions.rowCount()
+        # Clicking a field also selects its row, so a wrongly triggered table
+        # shortcut would delete that row. An editable drop-down keeps focus
+        # itself and passes keys to its text field.
+        QTest.mouseClick(row.stage.lineEdit(), Qt.MouseButton.LeftButton)
+        self.assertIs(self.app.focusWidget(), row.stage)
+        row.stage.lineEdit().setText("Primary tripX")
+        row.stage.lineEdit().end(False)
+        QTest.keyClick(row.stage, Qt.Key.Key_Backspace)
+        self.assertEqual(row.stage.currentText(), "Primary trip")
+        supply = row.supply
+        self.assertFalse(supply.isReadOnly())
+        QTest.mouseClick(supply, Qt.MouseButton.LeftButton)
+        self.assertIs(self.app.focusWidget(), supply)
+        supply.setText("DC 1X")
+        supply.setCursorPosition(4)
+        QTest.keyClick(supply, Qt.Key.Key_Delete)
+        self.assertEqual(supply.text(), "DC 1")
+        self.assertEqual(dialog.actions.rowCount(), rows)
+
+    def test_minus_on_a_row_number_deletes_only_that_load_and_needs_review(self):
+        self.example()
+        dialog = self.dialog()
+        dialog.show()
+        dialog.add_action()
+        dialog.add_action()
+        dialog.load_rows[1].load.setCurrentIndex(dialog.load_rows[1].load.findData("close_coil_a"))
+        dialog.load_rows[2].load.setCurrentIndex(dialog.load_rows[2].load.findData("motor_inrush_a"))
+        dialog.confirmed.setChecked(True)
+        header = dialog.actions.verticalHeader()
+        middle = header.sectionViewportPosition(1) + header.sectionSize(1) // 2
+        QTest.mouseClick(header.viewport(), Qt.MouseButton.LeftButton,
+                         Qt.KeyboardModifier.NoModifier, QPoint(header.width() // 2, middle))
+        self.assertEqual(dialog.actions.rowCount(), 2)
+        self.assertFalse(dialog.confirmed.isChecked())
+        dialog.capture()
+        self.assertEqual([action["load"] for action in dialog.zones[0]["actions"]],
+                         ["trip_coil_1_a", "motor_inrush_a"])
 
     def test_verify_all_zones_preserves_edits_and_tracks_individual_changes(self):
         *_, zone = self.example()
@@ -505,21 +600,6 @@ class GuiZoneIntegration(unittest.TestCase):
         self.assertEqual(dialog.zones[0]["actions"][0]["review_notes"], zone["actions"][0]["review_notes"])
         self.assertEqual(dialog.zones[0]["actions"][0]["stage"], "Reclose")
         self.assertEqual(zone["actions"][0]["units"], 1)
-
-
-    def test_detect_missing_after_seed_edit_keeps_event_ids_unique(self):
-        bus, ct, breaker, ground, wires, _ = self.example()
-        proposals = propose_zones(self.window._protection_netlist())
-        old_id = proposals[0]["id"]
-        proposals[0]["seed"] = breaker.instance_id
-        dialog = self.dialog(proposals)
-        dialog.detect()
-        self.assertEqual(len(dialog.zones), 2)
-        self.assertEqual(len({z["id"] for z in dialog.zones}), 2)
-        self.assertEqual(dialog.zones[0]["id"], old_id)
-        self.assertEqual({z["seed"] for z in dialog.zones}, {bus.instance_id, breaker.instance_id})
-        dialog.accept()
-        self.assertEqual(dialog.result(), QDialog.DialogCode.Accepted)
 
 
     def test_scene_adapter_preserves_ambiguous_colon_strings_as_two_wires(self):
