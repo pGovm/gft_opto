@@ -55,9 +55,11 @@ class OneLineDemoExportTests(unittest.TestCase):
                             w._on_save_results_clicked()
                         with pymupdf.open(target) as document:
                             text = '\n'.join(page.get_text() for page in document)
+                        flat = ' '.join(text.split())  # a long line may wrap in the PDF
                         for row in loads:
-                            self.assertIn(row['name'], text)
-                            self.assertIn(str(row['amps_per_unit']), text)
+                            # Each assigned load appears as its calculation line in Evaluation Output.
+                            self.assertIn(f"{row['name']}: {row['amps_per_unit']:g} A × {row['quantity']} = "
+                                          f"{row['total_amps']:g} A ({row['supply']})", flat)
                             self.assertIn(row['zone_name'], text)
                             self.assertIn(row['stage'], text)
                             self.assertIn(row['supply'], text)

@@ -31,19 +31,6 @@ class PdfExportMixin:
             if report.get("demonstration_mode") else ""
         )
 
-        loads = result.get("loads") or []
-        load_rows = "".join(
-            "<tr>"
-            f"<td>{escape(str(load.get('zone_name', '')))}<br>"
-            f"{escape(str(load.get('stage', '')))} / {escape(str(load.get('supply', '')))}</td>"
-            f"<td>{escape(str(load.get('name', 'Load')))}</td>"
-            f"<td>{escape(str(load.get('quantity', 1)))}</td>"
-            f"<td>{escape(str(load.get('amps_per_unit', 'N/A')))} A</td>"
-            f"<td>{escape(str(load.get('total_amps', 'N/A')))} A</td>"
-            "</tr>"
-            for load in loads
-        ) or "<tr><td colspan='5'>No loads returned.</td></tr>"
-
         zone_summary_rows = []
         review_rows = []
         for zone in report.get("zones", []):
@@ -154,18 +141,6 @@ class PdfExportMixin:
             {review_html}
           </table>
 
-          <h2>Load Breakdown</h2>
-          <table>
-            <tr>
-                <th>Zone / stage / supply</th>
-                <th>Load</th>
-                <th>Quantity</th>
-                <th>Current / unit</th>
-                <th>Total</th>
-            </tr>
-            {load_rows}
-          </table>
-
           <h2>Evaluation Output</h2>
           <pre>{evaluation_html}</pre>
         </body>
@@ -178,7 +153,10 @@ class PdfExportMixin:
 
     @staticmethod
     def _evaluation_output_html(result, report):
-        """The full evaluation output: each zone once, its stages and loads beneath, with stage totals."""
+        """Each zone once, its stages and loads beneath, with stage totals.
+
+        Zone membership (equipment and CT IDs) is left to the netlist PDF.
+        """
         def amps(value):
             return f"{value:g}" if isinstance(value, (int, float)) and not isinstance(value, bool) else str(value)
 
@@ -194,11 +172,7 @@ class PdfExportMixin:
         lines += [escape(messages.SUBSTATION_GUI4_REVIEW_WARNING.format(warning))
                   for warning in report.get("warnings", [])]
         for zone in report.get("zones", []):
-            members = ", ".join(zone.get("members", [])) or "No members"
-            lines.append(f"<b>{escape(str(zone.get('name', 'Unnamed zone')))}</b> "
-                         f"{escape(f'({members}) ({zone.get('kind', 'Manual')})')}")
-            lines.append(escape("  CT boundaries: " + ", ".join(zone.get("boundaries", []))))
-            lines.append(escape("  Equipment: " + members))
+            lines.append(f"<b>{escape(str(zone.get('name', 'Unnamed zone')))}</b>")
             lines += [escape(messages.SUBSTATION_GUI4_INDENTED_REVIEW_WARNING.format(warning))
                       for warning in zone.get("warnings", [])]
             prefix = "" if zone.get("complete") else messages.SUBSTATION_GUI4_PROVISIONAL

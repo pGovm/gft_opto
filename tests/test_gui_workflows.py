@@ -235,13 +235,15 @@ class GuiWorkflows(unittest.TestCase):
         self.assertNotIn("bus_zone", text)
         self.assertIn("Primary trip", text)
         self.assertIn("DC 1", text)
-        self.assertIn("Load Breakdown", text)
-        # Evaluation Output: each zone once, with its CT boundaries, equipment,
-        # stages and loads beneath it, and a total for every stage.
+        # Evaluation Output: each zone once, its stages and loads beneath it,
+        # and a total for every stage. Zone membership is in the netlist PDF.
         self.assertIn("Evaluation Output", text)
         self.assertIn("Each configured zone is a separate fault event", text)
-        self.assertIn("CT boundaries: " + ", ".join(sorted(ct_ids)), text)
-        self.assertIn("Equipment:", text)
+        for ct_id in ct_ids:
+            self.assertNotIn(ct_id, text)
+        self.assertNotIn("CT boundaries:", text)
+        self.assertNotIn("Equipment:", text)
+        self.assertNotIn("Load Breakdown", text)
         self.assertIn("Primary trip: 18 A across assigned supplies", text)
         self.assertIn("18 A × 1 = 18 A (DC 1)", text)
         self.assertIn("Stage total: 18 A", text)
