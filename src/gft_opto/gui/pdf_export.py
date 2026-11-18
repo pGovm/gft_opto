@@ -101,42 +101,7 @@ class PdfExportMixin:
         ) or (
             "<tr><td colspan='3'>Unavailable until zone assignments and currents are complete.</td></tr>"
         )
-        evaluation_rows = []
-        for zone in report.get("zones", []):
-            zone_name = escape(str(zone.get("name", "Unnamed zone")))
-            for scenario in zone.get("scenarios", []):
-                stage = str(scenario.get("stage", "Unspecified stage"))
-                loads = scenario.get("loads", [])
-                if loads:
-                    supply_totals = "; ".join(
-                        f"{escape(str(supply))}: {escape(str(current))} A"
-                        for supply, current in scenario.get("supplies", {}).items()
-                    )
-                    load_calculations = "<br>".join(
-                        f"{escape(str(load.get('name', 'Load')))}: "
-                        f"{escape(str(load.get('amps_per_unit', 'N/A')))} A &times; "
-                        f"{escape(str(load.get('quantity', 1)))} = "
-                        f"{escape(str(load.get('total_amps', 'N/A')))} A "
-                        f"({escape(str(load.get('supply', '')))})"
-                        for load in loads
-                    )
-                    calculation = (
-                        f"{load_calculations}<br><b>Stage total: "
-                        f"{escape(str(scenario.get('peak_current_A', 'N/A')))} A</b>"
-                    )
-                    if supply_totals:
-                        calculation = f"{supply_totals}<br>{calculation}"
-                else:
-                    calculation = "<b class='incomplete'>Not calculated — no valid loads</b>"
-                evaluation_rows.append(
-                    "<tr>"
-                    f"<td>{zone_name}<br>{escape(stage)}</td>"
-                    f"<td>{calculation}</td>"
-                    "</tr>"
-                )
-        evaluation_html = "".join(evaluation_rows) or (
-            "<tr><td colspan='2'>No configured zone calculations.</td></tr>"
-        )
+        evaluation_html = self._evaluation_output_html(result, report)
 
         html = f"""
         <html>
@@ -159,6 +124,7 @@ class PdfExportMixin:
             tr {{ page-break-inside: avoid; }}
             .complete {{ color: #176b3a; }}
             .incomplete {{ color: #9a4f00; background: #fff3cd; }}
+            pre {{ white-space: pre-wrap; font-size: 8.5pt; margin: 0; }}
           </style>
         </head>
 
@@ -201,10 +167,7 @@ class PdfExportMixin:
           </table>
 
           <h2>Evaluation Output</h2>
-          <table class="summary">
-            <tr><th>Zone / stage</th><th>Calculation</th></tr>
-            {evaluation_html}
-          </table>
+          <pre>{evaluation_html}</pre>
         </body>
         </html>
         """
@@ -212,6 +175,53 @@ class PdfExportMixin:
         self._save_html_as_pdf(
             "Save Calculation PDF", "calculation_results.pdf", html, "Results saved"
         )
+
+    @staticmethod
+    def _evaluation_output_html(result, report):
+        """The full evaluation output: each zone once, its stages and loads beneath, with stage totals."""
+        def amps(value):
+            return f"{value:g}" if isinstance(value, (int, float)) and not isinstance(value, bool) else str(value)
+
+        lines = [
+            escape(f"Momentary DC protection-zone study: {result.get('scenario_name', 'N/A')}"),
+            escape("COMPLETE" if report.get("complete") else
+                   messages.SUBSTATION_GUI4_INCOMPLETE_CONFIGURE_REVIEW_FLAGGED_ZONES_PARTIAL_TOTALS_ARE_NOT),
+            "Each configured zone is a separate fault event. Same-stage loads are simultaneous; "
+            "other stages are separate.",
+            "DC supplies are reported separately. No battery amp-hour calculation.",
+            "",
+        ]
+        lines += [escape(messages.SUBSTATION_GUI4_REVIEW_WARNING.format(warning))
+                  for warning in report.get("warnings", [])]
+        for zone in report.get("zones", []):
+            members = ", ".join(zone.get("members", [])) or "No members"
+            lines.append(f"<b>{escape(str(zone.get('name', 'Unnamed zone')))}</b> "
+                         f"{escape(f'({members}) ({zone.get('kind', 'Manual')})')}")
+            lines.append(escape("  CT boundaries: " + ", ".join(zone.get("boundaries", []))))
+            lines.append(escape("  Equipment: " + members))
+            lines += [escape(messages.SUBSTATION_GUI4_INDENTED_REVIEW_WARNING.format(warning))
+                      for warning in zone.get("warnings", [])]
+            prefix = "" if zone.get("complete") else messages.SUBSTATION_GUI4_PROVISIONAL
+            for scenario in zone.get("scenarios", []):
+                total = amps(scenario.get("peak_current_A", "N/A"))
+                lines.append(escape(f"  {prefix}{scenario.get('stage', 'Unspecified stage')}: "
+                                    f"{total} A across assigned supplies"))
+                lines += [escape(f"    NOTE: {advice}") for advice in scenario.get("advisories", [])]
+                lines += [escape(f"    {supply}: {amps(current)} A")
+                          for supply, current in scenario.get("supplies", {}).items()]
+                lines += [escape(f"    {load.get('name', 'Load')}: {amps(load.get('amps_per_unit', 'N/A'))} A "
+                                 f"× {load.get('quantity', 1)} = {amps(load.get('total_amps', 'N/A'))} A "
+                                 f"({load.get('supply', '')})")
+                          for load in scenario.get("loads", [])]
+                lines.append(f"    <b>Stage total: {escape(total)} A</b>")
+            lines.append("")
+        lines.append("Peak per supply among confirmed, complete configured zones:")
+        for supply, peak in report.get("supply_peaks", {}).items():
+            lines.append(f"  {escape(str(supply))}: {escape(amps(peak.get('peak_current_A', 'N/A')))} A — "
+                         f"<b>{escape(str(peak.get('zone', '')))}</b> / {escape(str(peak.get('stage', '')))}")
+        if not report.get("supply_peaks"):
+            lines.append(escape(messages.SUBSTATION_GUI4_NOT_AVAILABLE_UNTIL_ZONE_ASSIGNMENTS_AND_CURRENTS_ARE_COMPLETE))
+        return "\n".join(lines)
 
 
     def _save_html_as_pdf(

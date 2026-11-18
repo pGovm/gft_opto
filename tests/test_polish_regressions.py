@@ -169,7 +169,8 @@ class PolishGui(unittest.TestCase):
             with pymupdf.open(path) as document:
                 text = " ".join(" ".join(page.get_text().split()) for page in document)
             self.assertIn("Other load", text)
-            self.assertIn("Stage total: 15.0 A", text)
+            self.assertIn("Other load: 5 A × 1 = 5 A (DC 1)", text)
+            self.assertIn("Stage total: 15 A", text)
 
     def test_align_to_grid_is_explicit_and_undo_restores_exact_position(self):
         breaker, _ = self.editor()

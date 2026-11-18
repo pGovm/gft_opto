@@ -225,25 +225,27 @@ class GuiWorkflows(unittest.TestCase):
         with pymupdf.open(path) as document:
             pages = [page.get_text() for page in document]
         text = "".join(pages)
-        ct_labels = [item.visible_id() for item in w.workspace_scene.items()
-                     if isinstance(item, CurrentTransformerItem)]
+        ct_ids = [item.instance_id for item in w.workspace_scene.items()
+                  if isinstance(item, CurrentTransformerItem)]
         self.assertIn("18", text)
         self.assertIn("Supply Peaks", text)
         self.assertIn("Zone Summary", pages[0])
         self.assertIn("Review", pages[0])
         self.assertIn("Test Bus Zone", text)
         self.assertNotIn("bus_zone", text)
-        for label in ct_labels:
-            self.assertNotIn(label, text)
         self.assertIn("Primary trip", text)
         self.assertIn("DC 1", text)
         self.assertIn("Load Breakdown", text)
+        # Evaluation Output: each zone once, with its CT boundaries, equipment,
+        # stages and loads beneath it, and a total for every stage.
         self.assertIn("Evaluation Output", text)
-        self.assertIn("Stage total", text)
-        self.assertIn("×", text)
-        self.assertNotIn("CT boundaries:", text)
-        self.assertNotIn("Equipment:", text)
-        self.assertNotIn("Each configured zone is a separate fault event", text)
+        self.assertIn("Each configured zone is a separate fault event", text)
+        self.assertIn("CT boundaries: " + ", ".join(sorted(ct_ids)), text)
+        self.assertIn("Equipment:", text)
+        self.assertIn("Primary trip: 18 A across assigned supplies", text)
+        self.assertIn("18 A × 1 = 18 A (DC 1)", text)
+        self.assertIn("Stage total: 18 A", text)
+        self.assertIn("Peak per supply among confirmed, complete configured zones:", text)
         self.assertNotIn("Appendix: Detected Topology Regions", text)
         self.assertIn("Results saved:", w.footer_status_label.text())
         bad_path = Path(self.temp.name) / "missing" / "results.pdf"
