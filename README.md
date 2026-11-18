@@ -5,21 +5,40 @@ This desktop application builds substation one-line diagrams and evaluates
 momentary DC loads for configured protection-zone scenarios. It runs locally
 and does not require an internet connection. Battery capacity sizing is outside
 the project scope.
-This main functionalities of this app are as follows:
+The main features are:
 - Customize and make your own electrical components.
 - Import the desired One-line diagram as a PDF that will show up in the background.
 - Draw and connect equipment, edit electrical properties, and undo or redo edits.
 - Save editable layouts and export momentary current reports.
 
+## Setup and launch
+
+From the project folder on Windows, run `install\install.bat`, or run the
+PowerShell installer with `powershell -ExecutionPolicy Bypass -File install/install.ps1`.
+The installer sets up uv, installs the project dependencies, and creates a desktop shortcut.
+Initial setup requires internet access to download missing tools and dependencies.
+
+With uv already installed, start the source application with:
+
+```powershell
+uv sync --locked
+uv run gft-opto
+```
+
+The project requires Python 3.12 or newer. Linux users can run `bash install/install.sh`
+to install dependencies, followed by `uv run gft-opto`.
+
 ## Layouts and properties
 
 The top command bar groups controls into **File**, **Edit**, **View**, and
 **Analysis** tabs. File contains **New**, **Open** (`Ctrl+O`), **Save**
-(`Ctrl+S`), **Save As** (`Ctrl+Shift+S`), **Import PDF**, and **Export Results**.
+(`Ctrl+S`), **Save As** (`Ctrl+Shift+S`), **Import PDF**, **Import Netlist**, and **Export Results**.
 Edit contains undo/redo, copy/paste, delete, rotate, and component creation.
 View contains the drawing-layer visibility controls, grid snapping, and opacity.
 Analysis contains validation, zone configuration, evaluation, and the expanded
-results view. The Project field names
+results view. Ribbon pages scroll horizontally when the window is narrow.
+The logo and program title appear on the left, with the Project field on the right.
+The Project field names
 the current layout. Layout JSON files preserve equipment definitions, component
 properties, positions, sizes, rotations, bus taps, connections, and grid settings.
 Unsaved changes are checked before closing or replacing a layout.
@@ -32,9 +51,12 @@ the demonstration's Primary trip stage on DC 1; closing, motor inrush, and
 motor running are separate stages. Nearby breakers use automatically proposed
 zone boundaries. Devices without a suggested zone action have separate Manual
 independent-operation scenarios, which do not assert additional protection zones.
-All demonstration scenarios remain unconfirmed and their totals provisional;
-they do not establish an approved worst-case DC supply load. No relay wiring or
-actual trip sequence is inferred from the drawings.
+Demonstration scenarios initially open as unconfirmed drafts. In **Configure Zones**,
+**Verify all zones** allows scenarios named `DEMO - ...` to be marked complete
+for demonstration purposes even when boundary CTs or operating loads are missing.
+The PDF labels these scenarios **COMPLETE (DEMO)** and retains a demonstration
+notice. Empty scenarios contribute no calculated loads. Demo completion represents
+assumed settings, rather than engineering approval of the operating sequence.
 Opening a layout also populates the Equipment Library from the components in
 the drawing, preserving their saved electrical and breaker settings alongside
 any existing templates. Identical definitions are reused; junction dots remain
@@ -48,6 +70,11 @@ Property edits commit when you press Enter or leave the field and support
 Undo/Redo. Blank current fields commit as zero. Currents must be finite and
 nonnegative; bus voltage must be positive or blank. Select one component at a
 time to edit its properties.
+
+**Create Component** shows fields according to the selected symbol. Breakers
+offer coil and motor currents, motor-operated switches offer motor currents,
+and buses offer a voltage rating. Passive symbols such as Ground have no
+operating-current fields. Custom components offer all coil and motor inputs.
 
 Select components in the workspace and press **Ctrl+C**, then **Ctrl+V** to
 duplicate them, or use **Copy** and **Paste** on the Edit tab. Ctrl-click
@@ -63,7 +90,8 @@ be reviewed after pasting. Copy/paste inside text fields still edits text normal
 
 1. Import the one-line PDF and rebuild it with connected equipment. Enter
    the relevant coil and motor currents in the properties panel.
-2. Click **Run Evaluation**. Bus, transformer, and eligible line/feeder proposals are traced
+2. Click **Run Evaluation**. When the configured zone list is empty, bus,
+   transformer, and eligible line/feeder proposals are traced
    through actual wires and junctions, stopping at candidate CT boundaries.
    An unbranched path through one closed breaker can extend a proposal to CTs
    on the opposite side, allowing neighboring schemes to overlap at the breaker.
@@ -72,7 +100,8 @@ be reviewed after pasting. Copy/paste inside text fields still edits text normal
    do not create line events. Separate transformer proposals require separating
    CT topology, rather than a shared bus/transformer region.
    Visually crossing wires without a junction are not connected. Additional
-   line/manual zones can be added explicitly. The selector also shows primary/composite
+   zones can be added explicitly with **Add Zone** in Configure Zones. Once zones
+   exist, evaluation uses their saved assignments. The selector also shows primary/composite
    topology regions, including CT-to-CT conductors. These are display candidates,
    not extra fault events or automatically assigned operating loads.
    Explicitly open breakers, disconnects, and motor-operated switches separate
@@ -100,8 +129,18 @@ be reviewed after pasting. Copy/paste inside text fields still edits text normal
    coil data. Motor current is always whole-device current, not multiplied by
    breaker poles. Non-breaker devices retain an editable supply in the zone row.
    Trip Coil 2 is included only when explicitly assigned.
+   For miscellaneous current, choose **Other** in the Equipment dropdown and
+   enter amps directly in the **Load** cell. The remaining operating fields are
+   hidden for that row. These entries are saved as **Other load**, grouped in
+   the **Miscellaneous load** stage, and assigned to **DC 1**.
+   Hover over a row number to reveal **−**, then click it to delete that load.
+   The table supports cell selection and column-header selection, with Shift
+   and Ctrl for selecting multiple cells.
 6. Check the verification box for each zone after reviewing its assignments,
-   then Save. Editing zone settings clears that zone's verification. Wiring,
+   or use **Verify all zones** below it, then Save. Bulk verification confirms
+   valid zones and leaves incomplete ordinary zones as drafts, with details in
+   the verification summary's tooltip. The demo exception is described above.
+   Editing zone settings clears that zone's verification. Wiring,
    equipment, and switch-status changes require reconfirmation. Older layouts
    approved before the switch-aware detector also require reconfirmation. They
    still open; compatible legacy supply/multiplier settings are carried into
@@ -114,6 +153,11 @@ motor inrush/run, and breaker-failure stages explicitly; there is no inferred
 breaker-failure or reclose sequence. If primary and backup loads overlap, put
 all overlapping loads in the same stage. A motor's inrush and running currents
 cannot represent the same simultaneous operating state.
+
+The GUI uses an assumed **125 V DC** control supply in its reports. The current
+calculation sums the entered amps and derived quantities. AC bus voltage ratings
+and the reported DC voltage do not scale those currents. Enter component currents
+appropriate to the intended DC supply voltage.
 
 The Calculation PDF summarizes each zone's per-stage totals, review issues,
 assigned loads, and each DC supply's maximum current across complete zones. Its

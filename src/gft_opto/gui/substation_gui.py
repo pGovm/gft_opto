@@ -880,8 +880,8 @@ class SubstationGuiMockup(QMainWindow):
         title.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
 
         project_box = QLineEdit("Untitled Project")
-        project_box.setMinimumWidth(120)
-        project_box.setMaximumWidth(280)
+        project_box.setMinimumWidth(180)
+        project_box.setMaximumWidth(320)
         project_box.setAccessibleName("Project name")
         self.project_box = project_box
 

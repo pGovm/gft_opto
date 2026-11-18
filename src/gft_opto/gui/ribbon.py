@@ -3,7 +3,7 @@ from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QFrame, QGridLayout, QHBoxLayout, QLabel, QMenu, QStyle, QTabWidget,
-    QSizePolicy, QToolButton, QVBoxLayout, QWidget,
+    QSizePolicy, QToolButton, QVBoxLayout, QWidget, QScrollArea, QLayout,
 )
 
 
@@ -81,7 +81,14 @@ class RibbonBar(QTabWidget):
         row.setContentsMargins(8, 4, 8, 3)
         row.setSpacing(4)
         row.setAlignment(Qt.AlignmentFlag.AlignLeft)
-        self.addTab(page, title)
+        row.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
+        scroll = QScrollArea()
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setWidgetResizable(True)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setWidget(page)
+        self.addTab(scroll, title)
         return row
 
 
@@ -170,5 +177,10 @@ def populate_ribbon(window):
     window.run_btn = study.add_action(window.evaluate_action, 1, icon.SP_MediaPlay)
     results = RibbonGroup(analysis, "Results")
     window.expand_analysis_btn = results.add_action(window.expand_analysis_action, 0, icon.SP_TitleBarMaxButton)
-    # Give space to complete command labels before shrinking the wrapped title.
-    ribbon.setMinimumWidth(ribbon.minimumSizeHint().width())
+    # Keep every command reachable at narrow widths. Reserve scrollbar height
+    # across tabs so changing pages does not resize the workspace.
+    for index in range(ribbon.count()):
+        scroll = ribbon.widget(index)
+        scroll.setFixedHeight(scroll.widget().sizeHint().height()
+                              + scroll.horizontalScrollBar().sizeHint().height() + 4)
+    ribbon.setMinimumWidth(ribbon.tabBar().minimumSizeHint().width())
