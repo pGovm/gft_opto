@@ -16,7 +16,7 @@ from PySide6.QtWidgets import QGraphicsScene
 
 from gft_opto.gui.symbols import (
     BUILTIN_SYMBOLS, BusItem, ConnectionItem, JunctionItem, OneLineSymbolItem,
-    _instance_counters, make_user_equipment,
+    _instance_counters, make_user_equipment, batch_label_refresh,
 )
 from gft_opto.logic.protection_study import validate_zones
 from gft_opto.gui.routing import default_snap_port, position_for_snapped_port
@@ -123,6 +123,8 @@ def build_scene(data, *, align_to_grid=False):
     for key in ("grid_visible", "snap", "pdf_visible"):
         if not isinstance(settings[key], bool):
             raise ValueError(messages.LAYOUT_IO_INVALID_SETTING.format(key))
+    if "demonstration_mode" in settings and not isinstance(settings["demonstration_mode"], bool):
+        raise ValueError("Demonstration mode must be true or false.")
     if data.get("pdf") is not None and not isinstance(data["pdf"], str):
         raise ValueError(messages.LAYOUT_IO_INVALID_PDF_REFERENCE)
     library = data["library"]
@@ -187,10 +189,11 @@ def build_scene(data, *, align_to_grid=False):
             item.setPos(restored_position)
             item.setZValue(100)
             items[ident] = item
-        for a, ap, b, bp in data["connections"]:
-            if a not in items or b not in items or ap not in items[a].ports() or bp not in items[b].ports():
-                raise ValueError(messages.LAYOUT_IO_WIRE_REFERENCES_AN_UNKNOWN_COMPONENT_OR_TERMINAL)
-            scene.addItem(ConnectionItem(items[a], ap, items[b], bp))
+        with batch_label_refresh(scene):
+            for a, ap, b, bp in data["connections"]:
+                if a not in items or b not in items or ap not in items[a].ports() or bp not in items[b].ports():
+                    raise ValueError(messages.LAYOUT_IO_WIRE_REFERENCES_AN_UNKNOWN_COMPONENT_OR_TERMINAL)
+                scene.addItem(ConnectionItem(items[a], ap, items[b], bp))
     finally:
         OneLineSymbolItem.snap_to_grid_enabled = snap
         _instance_counters.clear()

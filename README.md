@@ -35,6 +35,9 @@ The top command bar groups controls into **File**, **Edit**, **View**, and
 (`Ctrl+S`), **Save As** (`Ctrl+Shift+S`), **Import PDF**, **Import Netlist**, and **Export Results**.
 Edit contains undo/redo, copy/paste, delete, rotate, and component creation.
 View contains the drawing-layer visibility controls, grid snapping, and opacity.
+**Align to Grid** aligns the selected components, or the whole drawing when
+nothing is selected. It supports Undo/Redo. Opening a saved layout preserves
+its exact component positions.
 Analysis contains validation, zone configuration, evaluation, and the expanded
 results view. Ribbon pages scroll horizontally when the window is narrow.
 The logo and program title appear on the left, with the Project field on the right.
@@ -52,11 +55,14 @@ motor running are separate stages. Nearby breakers use automatically proposed
 zone boundaries. Devices without a suggested zone action have separate Manual
 independent-operation scenarios, which do not assert additional protection zones.
 Demonstration scenarios initially open as unconfirmed drafts. In **Configure Zones**,
-**Verify all zones** allows scenarios named `DEMO - ...` to be marked complete
+enable **Demonstration mode** and use **Verify all zones** to mark scenarios complete
 for demonstration purposes even when boundary CTs or operating loads are missing.
 The PDF labels these scenarios **COMPLETE (DEMO)** and retains a demonstration
 notice. Empty scenarios contribute no calculated loads. Demo completion represents
 assumed settings, rather than engineering approval of the operating sequence.
+Demonstration mode is an explicit project setting saved in the layout and can
+be changed in Configure Zones. Older demo layouts migrate their `DEMO - ...`
+names to this setting on first opening. Subsequent renaming has no effect on mode.
 Opening a layout also populates the Equipment Library from the components in
 the drawing, preserving their saved electrical and breaker settings alongside
 any existing templates. Identical definitions are reused; junction dots remain
@@ -131,8 +137,11 @@ be reviewed after pasting. Copy/paste inside text fields still edits text normal
    Trip Coil 2 is included only when explicitly assigned.
    For miscellaneous current, choose **Other** in the Equipment dropdown and
    enter amps directly in the **Load** cell. The remaining operating fields are
-   hidden for that row. These entries are saved as **Other load**, grouped in
-   the **Miscellaneous load** stage, and assigned to **DC 1**.
+   hidden for that row. These entries are saved as **Other load** on **DC 1**
+   and represent standing background demand. Their current is added to every
+   configured operating stage in that zone. A 10 A trip stage plus a 5 A Other
+   load totals 15 A. A zone containing only Other loads has a **Background load**
+   stage. Legacy miscellaneous entries use the same background behavior.
    Hover over a row number to reveal **−**, then click it to delete that load.
    The table supports cell selection and column-header selection, with Shift
    and Ctrl for selecting multiple cells.
@@ -209,3 +218,7 @@ $env:QT_QPA_PLATFORM = "offscreen"
 .venv/Scripts/python.exe -m unittest discover -s tests -p 'test_*.py' -v
 Remove-Item Env:QT_QPA_PLATFORM
 ```
+
+GitHub Actions runs this suite on Windows with the native Qt platform and on
+Linux with the offscreen Qt platform. Calculation, import/export, load editing,
+demo-mode persistence, and grid-alignment regressions are covered.

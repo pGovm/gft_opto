@@ -38,7 +38,8 @@ class DetectMethodContract(unittest.TestCase):
                 warnings.append((title,text))
         tree=ast.parse(SOURCE.read_text())
         method=next(n for n in ast.walk(tree) if isinstance(n,ast.FunctionDef) and n.name=='detect')
-        namespace={'add_missing_proposals':study.add_missing_proposals, 'QMessageBox':MessageRecorder}
+        from gft_opto.gui import messages
+        namespace={'messages': messages, 'add_missing_proposals':study.add_missing_proposals, 'QMessageBox':MessageRecorder}
         exec(compile(ast.fix_missing_locations(ast.Module(body=[method],type_ignores=[])),str(SOURCE),'exec'),namespace)
         self.detect=namespace['detect']
 

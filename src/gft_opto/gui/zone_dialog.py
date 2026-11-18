@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QHBoxLayout,
     QLabel, QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPushButton,
     QSpinBox, QTableWidget, QVBoxLayout, QWidget, QHeaderView, QAbstractItemView, QDoubleSpinBox,
-    QTableWidgetSelectionRange,
+    QTableWidgetSelectionRange, QStackedWidget,
 )
 
 from gft_opto.logic.protection_study import (
@@ -21,6 +21,7 @@ from gft_opto.logic.protection_study import (
 )
 from gft_opto.logic.breaker_settings import breaker_settings, resolve_breaker_action, SUPPLY_KEYS
 from gft_opto.gui.theme import SCROLLBAR_STYLE
+from gft_opto.gui.operating_loads import OperatingLoadRow
 
 
 class _LoadRowHeader(QHeaderView):
@@ -60,19 +61,6 @@ class _LoadRowHeader(QHeaderView):
             event.accept()
             return
         super().mousePressEvent(event)
-
-
-class _LoadCell(QWidget):
-    def __init__(self, editor, other):
-        super().__init__()
-        self.editor = editor
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(editor)
-        layout.addWidget(other)
-
-    def __getattr__(self, name):
-        return getattr(self.editor, name)
 
 
 class ZoneDialog(QDialog):
@@ -133,6 +121,10 @@ class ZoneDialog(QDialog):
                 + messages.ZONE_DIALOG_REVIEW_THESE_BREAKER_S_SUPPLY_SETTINGS_BEFORE_CONFIRMING)
         self._base_guidance = self.guidance.text()
         outer.addWidget(self.guidance)
+        self.demo_mode = QCheckBox("Demonstration mode (allow incomplete demo zones)")
+        self.demo_mode.setChecked(bool(self.netlist.get("demonstration_mode", False)))
+        outer.addWidget(self.demo_mode)
+        self.demo_mode.toggled.connect(self._change_demo_mode)
         body = QHBoxLayout()
         outer.addLayout(body, 1)
         left = QVBoxLayout()
@@ -186,13 +178,12 @@ class ZoneDialog(QDialog):
                 self.cts.addItem(entry)
         right.addWidget(self.cts)
         right.addWidget(QLabel(messages.ZONE_DIALOG_OPERATING_LOADS_USE_A_SEPARATE_STAGE_FOR_RECLOSE_MOTOR))
-        self.actions = QTableWidget(0, 8)
+        self.load_rows = []
+        self.actions = QTableWidget(0, 6)
         row_header = _LoadRowHeader(self.actions)
         self.actions.setVerticalHeader(row_header)
         row_header.delete_requested.connect(self._delete_load_row)
-        self.actions.setHorizontalHeaderLabels(["Equipment", "Load", "Stage", "DC supply", "Operation", "Multiplier", "Other load name", "Other current (A)"])
-        self.actions.setColumnHidden(6, True)
-        self.actions.setColumnHidden(7, True)
+        self.actions.setHorizontalHeaderLabels(["Equipment", "Load", "Stage", "DC supply", "Operation", "Multiplier"])
         self.actions.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.actions.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectItems)
         self.actions.horizontalHeader().setSectionsClickable(True)
@@ -289,24 +280,30 @@ class ZoneDialog(QDialog):
         self.verify_all.blockSignals(False)
 
     def _verify_all_zones(self, checked):
-        self.capture()
-        candidate = copy.deepcopy(self.zones)
-        if checked:
-            for zone in candidate:
-                zone["confirmed"] = True
-                zone["topology_signature"] = topology_signature(self.netlist)
-                zone["configuration_signature"] = configuration_signature(zone)
-            report = evaluate_zones(self.netlist, candidate)
-            eligible = {zone["id"] for zone in report["zones"] if zone["complete"]}
-            demo_ids = {zone["id"] for zone in candidate
-                        if zone["name"].startswith("DEMO - ")}
-            eligible.update(demo_ids)
-            skipped = [zone for zone in report["zones"] if zone["id"] not in eligible]
-        else:
-            eligible, skipped = set(), []
+        try:
+            self.capture()
+            candidate = copy.deepcopy(self.zones)
+            if checked:
+                for zone in candidate:
+                    zone["confirmed"] = True
+                    zone["topology_signature"] = topology_signature(self.netlist)
+                    zone["configuration_signature"] = configuration_signature(zone)
+                report = evaluate_zones(self.netlist, candidate)
+                eligible = {zone["id"] for zone in report["zones"] if zone["complete"]}
+                demo_ids = {zone["id"] for zone in candidate} if self.netlist.get("demonstration_mode") else set()
+                eligible.update(demo_ids)
+                skipped = [zone for zone in report["zones"] if zone["id"] not in eligible]
+            else:
+                eligible, skipped = set(), []
+        except (ValueError, TypeError) as error:
+            self.verify_all.blockSignals(True)
+            self.verify_all.setChecked(False)
+            self.verify_all.blockSignals(False)
+            QMessageBox.warning(self, messages.ZONE_DIALOG_INCOMPLETE_ZONE_SETTINGS, str(error))
+            return
         for zone in self.zones:
             zone["confirmed"] = zone["id"] in eligible
-            if zone["name"].startswith("DEMO - "):
+            if self.netlist.get("demonstration_mode"):
                 zone["demonstration_complete"] = bool(checked)
         self.confirmed.blockSignals(True)
         self.confirmed.setChecked(self.zones[self.active]["confirmed"]
@@ -321,6 +318,10 @@ class ZoneDialog(QDialog):
         )
         self.verification_summary.setToolTip("\n\n".join(
             zone["name"] + ": " + "; ".join(zone["warnings"]) for zone in skipped))
+
+    def _change_demo_mode(self, enabled):
+        self.netlist["demonstration_mode"] = enabled
+        self._verify_all_zones(False)
 
     def _custom_boundary_changed(self, *_):
         if self.loading:
@@ -378,31 +379,7 @@ class ZoneDialog(QDialog):
     def capture(self):
         if not 0 <= self.active < len(self.zones):
             return
-        actions = []
-        for row in range(self.actions.rowCount()):
-            equipment = self.actions.cellWidget(row, 0)
-            action = copy.deepcopy(getattr(equipment, "_saved_action", {}))
-            action.update(component=equipment.currentData() or "",
-                load=self.actions.cellWidget(row, 1).currentData(),
-                stage=self.actions.cellWidget(row, 2).currentText().strip(),
-                operation=self.actions.cellWidget(row, 4).currentData())
-            if action["component"].startswith("other:"):
-                action["custom_load"] = {"name": self.actions.cellWidget(row, 6).text().strip(),
-                                         "amps": self.actions.cellWidget(row, 7).value()}
-                action.update(stage="Miscellaneous load", supply="DC 1", operation="device")
-            else:
-                action.pop("custom_load", None)
-            # Quantities are derived for modern rows. Unresolved legacy drafts
-            # retain their original quantity so review never loses information.
-            if action["operation"] != "legacy":
-                action.pop("units", None)
-            component = self.components.get(action["component"])
-            if component is None or kind(component) != "breaker":
-                action["supply"] = self.actions.cellWidget(row, 3).text().strip()
-            elif action["operation"] != "legacy" and breaker_settings(
-                    component, self.zones)[SUPPLY_KEYS[action["load"]]]:
-                action.pop("supply", None)
-            actions.append(action)
+        actions = [row.to_action(self.components, self.zones) for row in self.load_rows]
         self.zones[self.active].update(name=self.name.text().strip(), kind=self.zone_kind.currentText(),
             seed=self.seed.currentData() or "", confirmed=self.confirmed.isChecked(), actions=actions,
             boundary_cts=[self.cts.item(i).data(Qt.ItemDataRole.UserRole) for i in range(self.cts.count())
@@ -423,6 +400,7 @@ class ZoneDialog(QDialog):
             self.loading = True
             self.name.clear()
             self.actions.setRowCount(0)
+            self.load_rows.clear()
             self.confirmed.setChecked(False)
             self.loading = False
             self._sync_verify_all()
@@ -490,6 +468,7 @@ class ZoneDialog(QDialog):
             entry = self.cts.item(i)
             entry.setCheckState(Qt.CheckState.Checked if entry.data(Qt.ItemDataRole.UserRole) in zone["boundary_cts"] else Qt.CheckState.Unchecked)
         self.actions.setRowCount(0)
+        self.load_rows.clear()
         for action in zone["actions"]:
             self.add_action(action)
         self.confirmed.setChecked(zone["confirmed"])
@@ -503,7 +482,6 @@ class ZoneDialog(QDialog):
         row = self.actions.rowCount()
         self.actions.insertRow(row)
         equipment, load, stage = QComboBox(), QComboBox(), QComboBox()
-        equipment._saved_action = copy.deepcopy(action)
         equipment.addItem("Select equipment", "")
         other_id = action["component"] if action["component"].startswith("other:") else "other:" + uuid.uuid4().hex
         equipment.addItem("Other", other_id)
@@ -534,51 +512,39 @@ class ZoneDialog(QDialog):
         operation.setCurrentIndex(operation.findData(selected))
         multiplier = QLineEdit()
         multiplier.setReadOnly(True)
-        custom_name = QLineEdit(action.get("custom_load", {}).get("name") or "Other load")
-        custom_name.setPlaceholderText("Enter load name")
-        custom_current = QDoubleSpinBox()
-        custom_current.setRange(0, 1000000)
-        custom_current.setDecimals(3)
-        custom_current.setValue(action.get("custom_load", {}).get("amps", 0))
-        # Miscellaneous current is entered directly in the Load cell.
         other_amps = QDoubleSpinBox()
         other_amps.setRange(0, 1000000)
         other_amps.setDecimals(3)
         other_amps.setSuffix(" A")
-        other_amps.setValue(custom_current.value())
-        other_amps.valueChanged.connect(custom_current.setValue)
-        custom_current.valueChanged.connect(other_amps.setValue)
-        other_amps.valueChanged.connect(self.unconfirm)
-        for col, widget in enumerate((equipment, load, stage, supply, operation, multiplier, custom_name, custom_current)):
-            if col not in (1, 2, 3, 4, 5):
-                self.actions.setCellWidget(row, col, widget)
-            widget.installEventFilter(self)
-            for child in widget.findChildren(QLineEdit):
+        other_amps.setValue(action.get("custom_load", {}).get("amps", 0))
+        self.actions.setCellWidget(row, 0, equipment)
+        editors = (equipment, load, stage, supply, operation, multiplier, other_amps)
+        for editor in editors:
+            editor.installEventFilter(self)
+            for child in editor.findChildren(QLineEdit):
                 child.installEventFilter(self)
+        row_model = OperatingLoadRow(*editors, copy.deepcopy(action))
+        self.load_rows.append(row_model)
+        cells = []
+        for col, original, alternate in ((1, load, other_amps), (2, stage, QWidget()),
+                                         (3, supply, QWidget()), (4, operation, QWidget()),
+                                         (5, multiplier, QWidget())):
+            cell = QStackedWidget()
+            cell.addWidget(original)
+            cell.addWidget(alternate)
+            self.actions.setCellWidget(row, col, cell)
+            cells.append(cell)
         def update_row(*_):
             self._update_action_preview(equipment, load, operation, supply, multiplier)
             other = equipment.currentData().startswith("other:")
-            load.setVisible(not other)
-            other_amps.setVisible(other)
-            for widget in (stage, supply, operation, multiplier):
-                widget.setVisible(not other)
-            custom_name.setEnabled(other)
-            custom_current.setEnabled(other)
-            load.setEnabled(not other)
+            for cell in cells:
+                cell.setCurrentIndex(1 if other else 0)
             self.unconfirm()
         for combo in (equipment, load, operation):
             combo.currentIndexChanged.connect(update_row)
         stage.currentTextChanged.connect(self.unconfirm)
         supply.textEdited.connect(self.unconfirm)
-        custom_name.textEdited.connect(self.unconfirm)
-        custom_current.valueChanged.connect(self.unconfirm)
-        for col, original, alternate in ((1, load, other_amps), (2, stage, QWidget()),
-                                         (3, supply, QWidget()), (4, operation, QWidget()),
-                                         (5, multiplier, QWidget())):
-            holder = _LoadCell(original, alternate)
-            if col >= 2:
-                alternate.hide()
-            self.actions.setCellWidget(row, col, holder)
+        other_amps.valueChanged.connect(self.unconfirm)
         update_row()
         self.unconfirm()
 
@@ -639,12 +605,14 @@ class ZoneDialog(QDialog):
             rows.add(self.actions.currentRow())
         for row in sorted(rows, reverse=True):
             self.actions.removeRow(row)
+            self.load_rows.pop(row)
         if rows:
             self.unconfirm()
 
     def _delete_load_row(self, row):
         if 0 <= row < self.actions.rowCount():
             self.actions.removeRow(row)
+            self.load_rows.pop(row)
             self.unconfirm()
 
     def detect(self):

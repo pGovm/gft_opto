@@ -17,7 +17,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFontDatabase
-from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
+from PySide6.QtWidgets import QApplication, QDialog, QMessageBox, QGraphicsPathItem
 
 from gft_opto.gui.layout_io import build_scene, scene_data, library_from_layout
 from gft_opto.gui.substation_gui import SubstationGuiMockup
@@ -118,11 +118,11 @@ class GuiZoneIntegration(unittest.TestCase):
         dialog.add_action()
         equipment = dialog.actions.cellWidget(1, 0)
         equipment.setCurrentIndex(equipment.findText("Other"))
-        dialog.actions.cellWidget(1, 6).setText("Panel heater DC")
-        dialog.actions.cellWidget(1, 7).setValue(7.25)
+        dialog.load_rows[1].saved_action["custom_load"] = {"name": "Panel heater DC"}
+        dialog.load_rows[1].current.setValue(7.25)
         dialog.actions.clearSelection()
-        dialog.actions.setRangeSelected(QTableWidgetSelectionRange(0, 0, 0, 7), True)
-        dialog.actions.setRangeSelected(QTableWidgetSelectionRange(2, 0, 2, 7), True)
+        dialog.actions.setRangeSelected(QTableWidgetSelectionRange(0, 0, 0, 5), True)
+        dialog.actions.setRangeSelected(QTableWidgetSelectionRange(2, 0, 2, 5), True)
         dialog.remove_action()
         self.assertEqual(dialog.actions.rowCount(), 1)
         dialog.capture()
@@ -190,7 +190,8 @@ class GuiZoneIntegration(unittest.TestCase):
 
     def test_verify_all_can_complete_demo_drafts_without_inventing_loads_or_cts(self):
         *_, zone = self.example()
-        zone.update(name="DEMO - incomplete bus", actions=[], boundary_cts=[], confirmed=False)
+        self.window.demonstration_mode = True
+        zone.update(name="incomplete bus", actions=[], boundary_cts=[], confirmed=False)
         dialog = self.dialog([zone])
         dialog.verify_all.click()
         self.assertTrue(dialog.verify_all.isChecked())
@@ -285,7 +286,7 @@ class GuiZoneIntegration(unittest.TestCase):
         self.assertTrue({"ct_2", "ct_3", "ct_4", "ct_5"} <= set(transformer["core"]))
         self.assertEqual(len(self.window._zone_overlays), 3)
         for overlay in self.window._zone_overlays:
-            self.assertIsInstance(overlay, QGraphicsRectItem)
+            self.assertIsInstance(overlay, (QGraphicsRectItem, QGraphicsPathItem))
             self.assertEqual(overlay.brush().style(), Qt.BrushStyle.BDiagPattern)
             self.assertEqual(overlay.acceptedMouseButtons(), Qt.MouseButton.NoButton)
             self.assertLess(overlay.zValue(), 0)
@@ -497,7 +498,7 @@ class GuiZoneIntegration(unittest.TestCase):
         zone["actions"][0]["review_notes"] = {"reference": "field-check", "keep": [1, 2]}
         self.approve(zone)
         dialog = self.dialog()
-        dialog.actions.cellWidget(0, 2).setCurrentText("Reclose")
+        dialog.load_rows[0].stage.setCurrentText("Reclose")
         self.assertFalse(dialog.confirmed.isChecked())
         dialog.accept()  # Save a draft with the edited quantity, not a false approval.
         self.assertEqual(dialog.result(), QDialog.DialogCode.Accepted)
@@ -627,7 +628,7 @@ class GuiZoneIntegration(unittest.TestCase):
         zone["actions"][0]["notes"] = "Verify legacy quantity"
         self.approve(zone)
         dialog = self.dialog()
-        self.assertEqual(dialog.actions.cellWidget(0, 4).currentData(), "legacy")
+        self.assertEqual(dialog.load_rows[0].operation.currentData(), "legacy")
         dialog.confirmed.setChecked(False)
         dialog.capture()
         self.assertEqual(dialog.zones[0]["actions"][0]["units"], 2)

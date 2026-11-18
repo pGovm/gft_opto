@@ -64,29 +64,13 @@ class GuiWorkflows(unittest.TestCase):
         item.setSelected(True)
         return item
 
-    def test_surge_arrester_mcov_and_layout_round_trip(self):
+    def test_passive_component_creation_excludes_operating_loads(self):
         from gft_opto.gui.custom_widget_tool import ComponentDialog
         dialog = ComponentDialog(self.window)
-        dialog.symbol_combo.setCurrentIndex(dialog.symbol_combo.findData("surge_arrester"))
-        dialog.rating_spin.setValue(88)
-        data = dialog.component_data()
-        self.assertEqual(data["Rating"], 88)
-        self.assertNotIn("TripCoil1", data)
-        arrester = make_user_equipment("surge_arrester", "SA-H1", {"rating_kv": 88, "symbol_type": "surge_arrester"})
-        ground = GroundItem()
-        scene = self.window.workspace_scene
-        scene.addItem(arrester)
-        scene.addItem(ground)
-        scene.addItem(ConnectionItem(arrester, "right", ground, "node"))
-        arrester.setSelected(True)
-        self.assertEqual(self.window.prop_voltage_label.text(), "MCOV (kV):")
-        self.window._on_property_voltage_changed("90")
-        self.assertEqual(arrester.properties["rating_kv"], 90)
-        layout = self.window._layout_data()
-        restored = build_scene(layout)
-        loaded = next(i for i in restored.items() if isinstance(i, OneLineSymbolItem) and i.equip_type == "surge_arrester")
-        self.assertEqual(loaded.properties["rating_kv"], 90)
-        self.assertEqual(len(loaded.connections()), 1)
+        self.assertEqual(dialog.symbol_combo.findData("surge_arrester"), -1)
+        dialog.symbol_combo.setCurrentIndex(dialog.symbol_combo.findData("ground"))
+        self.assertNotIn("TripCoil1", dialog.component_data())
+        self.assertTrue(dialog.trip_coil_1_spin.isHidden())
         dialog.deleteLater()
 
     def test_reference_incoming_lines_open_with_single_connected_terminal(self):
@@ -403,6 +387,8 @@ class GuiWorkflows(unittest.TestCase):
                 self.app.processEvents()
                 for control in controls:
                     self.assertTrue(control.isVisible())
+                    w.ribbon.widget(index).ensureWidgetVisible(control, 0, 0)
+                    self.app.processEvents()
                     origin = control.mapTo(w, QPointF(0, 0).toPoint())
                     self.assertGreaterEqual(origin.x(), 0)
                     self.assertLessEqual(origin.x() + control.width(), w.width())
@@ -499,9 +485,9 @@ class GuiWorkflows(unittest.TestCase):
         self.approve_current_zones()
         dialog = ZoneDialog(w._protection_netlist(), w.protection_zones, w)
         self.assertTrue(dialog.confirmed.isChecked())
-        dialog.actions.cellWidget(0, 4).setCurrentIndex(1)
+        dialog.load_rows[0].operation.setCurrentIndex(1)
         self.assertFalse(dialog.confirmed.isChecked())
-        dialog.actions.cellWidget(0, 4).setCurrentIndex(0)
+        dialog.load_rows[0].operation.setCurrentIndex(0)
         dialog.confirmed.setChecked(True)
         dialog.accept()
         self.assertEqual(dialog.result(), dialog.DialogCode.Accepted)
@@ -576,9 +562,9 @@ class GuiWorkflows(unittest.TestCase):
         w.undo_stack.redo()
         self.assertEqual(breaker.properties["trip_coil_1_supply"], "Battery A")
         dialog = ZoneDialog(w._protection_netlist(), w.protection_zones, w)
-        self.assertTrue(dialog.actions.cellWidget(0, 3).isReadOnly())
-        self.assertEqual(dialog.actions.cellWidget(0, 3).text(), "Battery A")
-        self.assertEqual(dialog.actions.cellWidget(0, 5).text(), "×3")
+        self.assertTrue(dialog.load_rows[0].supply.isReadOnly())
+        self.assertEqual(dialog.load_rows[0].supply.text(), "Battery A")
+        self.assertEqual(dialog.load_rows[0].multiplier.text(), "×3")
         dialog.reject()
         path = Path(self.temp.name) / "hardware.json"
         self.assertTrue(w.save_layout(path))
@@ -594,7 +580,7 @@ class GuiWorkflows(unittest.TestCase):
         w.protection_zones[0]["actions"][0]["supply"] = "Legacy DC 2"
         before = w._layout_data()
         dialog = ZoneDialog(w._protection_netlist(), w.protection_zones, w)
-        self.assertEqual(dialog.actions.cellWidget(0, 3).text(), "Legacy DC 2")
+        self.assertEqual(dialog.load_rows[0].supply.text(), "Legacy DC 2")
         dialog.confirmed.setChecked(True)
         dialog.accept()
         with patch("gft_opto.gui.substation_gui.ZoneDialog", return_value=dialog), patch.object(dialog, "exec", return_value=dialog.DialogCode.Accepted):

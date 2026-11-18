@@ -1,3 +1,6 @@
+from gft_opto.gui.pdf_export import PdfExportMixin
+from gft_opto.gui.evaluation_view import EvaluationViewMixin
+from gft_opto.gui.project_files import ProjectFilesMixin
 # Builds the main application window and connects editing, layout files, zone studies, and report export.
 
 """
@@ -10,27 +13,16 @@ This file builds the panels around the workspace and starts the application.
 from gft_opto.gui import messages
 
 import functools
-import json
 import sys
-import time
 import math
-import os
-import tempfile
-import copy
-from html import escape
 
 import pymupdf
-from PySide6.QtCore import Qt, QByteArray, QMimeData, QPointF, QRectF
+from PySide6.QtCore import Qt, QByteArray, QMimeData, QRectF
 from PySide6.QtGui import (
-    QAction, QColor, QPen, QBrush, QPalette, QPainterPath, QPainterPathStroker,
-    QDrag, QIcon, QImage, QKeySequence, QPixmap, QTextDocument, QUndoStack,
+    QAction, QColor, QPen, QBrush, QPalette, QPainterPath, QPainterPathStroker, QDrag, QIcon, QImage, QKeySequence, QPixmap, QUndoStack,
 )
-from PySide6.QtPrintSupport import QPrinter
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFrame, QGraphicsScene,
-    QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget,
-    QListWidgetItem, QMainWindow, QMessageBox, QPushButton, QSlider, QTextEdit,
-    QVBoxLayout, QWidget, QGraphicsRectItem, QGraphicsPathItem, QSpinBox, QScrollArea, QSizePolicy,
+    QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFrame, QGraphicsScene, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QSlider, QTextEdit, QVBoxLayout, QWidget, QGraphicsRectItem, QGraphicsPathItem, QSpinBox, QScrollArea, QSizePolicy,
 )
 
 from gft_opto.gui.circuit_check import check_circuit
@@ -48,22 +40,14 @@ from gft_opto.gui.routing import (
     UI_ACCENT,
 )
 from gft_opto.gui.symbols import (
-    BUILTIN_SYMBOLS,
-    EQUIPMENT_DEFS,
-    BusItem,
-    ConnectionItem,
-    CurrentTransformerItem,
-    CustomComponentItem,
-    JunctionItem,
-    OneLineSymbolItem,
-    make_user_equipment,
+    BUILTIN_SYMBOLS, EQUIPMENT_DEFS, BusItem, ConnectionItem, CurrentTransformerItem, OneLineSymbolItem, make_user_equipment,
 )
 from gft_opto.gui.workspace import WorkspaceView
-from gft_opto.gui.commands import EditPropertyCommand, ReplaceZonesCommand
-from gft_opto.gui.layout_io import scene_data, build_scene, reserve_ids, write_layout, library_from_layout
+from gft_opto.gui.commands import EditPropertyCommand, ReplaceZonesCommand, MoveEquipmentCommand
+from gft_opto.gui.routing import default_snap_port, position_for_snapped_port
 from gft_opto.logic.momentary_calc2 import netlist_from_scene
 from gft_opto.logic.protection_zones import connection_key, identify_zones
-from gft_opto.logic.protection_study import propose_zones, evaluate_zones, topology_records
+from gft_opto.logic.protection_study import propose_zones, topology_records
 from gft_opto.gui.zone_dialog import ZoneDialog
 from gft_opto.gui.theme import SCROLLBAR_STYLE, readable_palette, ui_font
 from gft_opto.gui.ribbon import RibbonBar, populate_ribbon
@@ -71,11 +55,7 @@ from gft_opto.logic.breaker_settings import breaker_settings, SETTING_KEYS
 from pathlib import Path
 from collections import defaultdict
 
-from gft_opto.logic.netlist_manager import (
-    build_netlist,
-    export_netlist_json,
-    load_netlist_json,
-)
+from gft_opto.logic.netlist_manager import build_netlist
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -196,7 +176,6 @@ def load_gft_logo_pixmap(height: int = GFT_LOGO_HEIGHT) -> QPixmap:
     )
 
 
-
 class EquipmentList(QListWidget):
     """List of equipment types; dragging an entry drops a new symbol on the canvas."""
 
@@ -221,12 +200,11 @@ class EquipmentList(QListWidget):
         drag.exec(Qt.DropAction.CopyAction)
 
 
-
 # ---------------------------------------------------------------------------
 # Main window
 # ---------------------------------------------------------------------------
 
-class SubstationGuiMockup(QMainWindow):
+class SubstationGuiMockup(ProjectFilesMixin, EvaluationViewMixin, PdfExportMixin, QMainWindow):
     """Top-level window assembling header, panels, canvas, and footer."""
 
     def __init__(self):
@@ -238,6 +216,7 @@ class SubstationGuiMockup(QMainWindow):
         self.last_netlist: dict | None = None
         self.last_result: dict | None = None
         self.protection_zones = []
+        self.demonstration_mode = False
         self._zone_overlays = []
         self._zone_report = None
         self._zones_visible = True
@@ -429,6 +408,7 @@ class SubstationGuiMockup(QMainWindow):
             ("create_component", "Create Component", "Create Component", None, self._on_create_component_clicked),
             ("validate", "Validate Circuit", "Validate", None, self._on_check_circuit_clicked),
             ("configure_zones", "Configure Protection Zones", "Configure Zones", None, self._configure_protection_zones),
+            ("align_grid", "Align to Grid", "Align to Grid", None, self._align_to_grid),
             ("evaluate", "Run Evaluation", "Run Evaluation", None, self._on_run_evaluation_clicked),
             ("expand_analysis", "Expand Analysis", "Expand Analysis", None, self._expand_zone_analysis),
         ):
@@ -447,32 +427,21 @@ class SubstationGuiMockup(QMainWindow):
         self.copy_action.setToolTip("Copy selected components (Ctrl+C in workspace)")
         self.paste_action.setToolTip("Paste components (Ctrl+V in workspace)")
 
-    def _layout_data(self):
-        rect = self.workspace_scene.sceneRect()
-        return {
-            "version": 1, "project": self.project_box.text().strip() or "Untitled Project",
-            "scene_rect": [rect.x(), rect.y(), rect.width(), rect.height()],
-            "pdf": self.pdf_path,
-            "zones": copy.deepcopy(self.protection_zones),
-            "library": {key: meta["definition"] for key, meta in EQUIPMENT_DEFS.items()},
-            "settings": {"grid_visible": self.grid_show_cb.isChecked(),
-                         "grid_opacity": self.grid_opacity_slider.value(),
-                         "snap": self.grid_snap_cb.isChecked(),
-                         "pdf_visible": self.pdf_show_cb.isChecked()},
-            **scene_data(self.workspace_scene),
-        }
+    def _align_to_grid(self):
+        items = [item for item in self.workspace_scene.selectedItems() if isinstance(item, OneLineSymbolItem)]
+        if not items:
+            items = [item for item in self.workspace_scene.items() if isinstance(item, OneLineSymbolItem)]
+        moves = []
+        for item in items:
+            port = default_snap_port(item)
+            position = position_for_snapped_port(item.pos(), item.port_scene_pos(port) - item.pos())
+            if position != item.pos():
+                moves.append((item, item.pos(), position))
+        if moves:
+            command = MoveEquipmentCommand(moves)
+            command.setText("Align to Grid")
+            self.undo_stack.push(command)
 
-    def _invalidate_results(self):
-        self._clear_zone_highlights()
-        self._zone_report = None
-        self.zone_view.blockSignals(True)
-        self.zone_view.clear()
-        self.zone_view.addItem("Run Evaluation to display zones")
-        self.zone_view.blockSignals(False)
-        if self.last_result is not None:
-            self.output_box.append("\nResults are outdated. Run Evaluation again before exporting.")
-        self.last_result = self.last_netlist = None
-        self.export_results_action.setEnabled(False)
 
     def _mark_modified(self, *_args):
         if self._loading:
@@ -482,290 +451,9 @@ class SubstationGuiMockup(QMainWindow):
         if self.last_result is not None and data != self._evaluated_snapshot:
             self._invalidate_results()
 
-    def _confirm_discard(self):
-        if self._layout_data() == self._saved_snapshot:
-            return True
-        answer = QMessageBox.question(
-            self, "Unsaved Layout", "Save changes to this layout?",
-            QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
-            QMessageBox.StandardButton.Save,
-        )
-        if answer == QMessageBox.StandardButton.Save:
-            return self.save_layout()
-        return answer == QMessageBox.StandardButton.Discard
-
-    def save_layout(self, path=None, save_as=False):
-        path = path or (None if save_as else self.layout_path)
-        if not path:
-            path, _ = QFileDialog.getSaveFileName(self, "Save Layout", "layout.json", "Layout Files (*.json)")
-        if not path:
-            return False
-        if not str(path).lower().endswith(".json"):
-            path = str(path) + ".json"
-        try:
-            data = self._layout_data()
-            # Validate the same representation that Open Layout will accept.
-            checked = build_scene(data)
-            checked.clear()
-            write_layout(path, data)
-        except Exception as error:
-            QMessageBox.critical(self, messages.SUBSTATION_GUI4_SAVE_FAILED, messages.SUBSTATION_GUI4_COULD_NOT_SAVE_THE_LAYOUT.format(error))
-            return False
-        self.layout_path = str(Path(path).resolve())
-        self._saved_snapshot = data
-        self._mark_modified()
-        self.footer_status_label.setText(f"Layout saved: {self.layout_path}")
-        return True
-
-    def new_layout(self):
-        if not self._confirm_discard():
-            return
-        data = {"version": 1, "project": "Untitled Project", "pdf": None,
-                "scene_rect": [0, 0, DEFAULT_WORKSPACE_WIDTH, DEFAULT_WORKSPACE_HEIGHT],
-                "components": [], "connections": [], "library": {},
-                "settings": {"grid_visible": True, "grid_opacity": round(DEFAULT_GRID_OPACITY * 100),
-                             "snap": True, "pdf_visible": True}}
-        self._install_layout(data, build_scene(data), None, None)
-
-    def open_layout(self, path=None):
-        if not path:
-            path, _ = QFileDialog.getOpenFileName(self, "Open Layout", "", "Layout Files (*.json)")
-        if not path:
-            return False
-        # Build the entire replacement before discarding any current work.
-        try:
-            data = json.loads(Path(path).read_text(encoding="utf-8"))
-            scene = build_scene(data, align_to_grid=True)
-            pdf = data.get("pdf")
-            normalized_pdf = str((Path(path).resolve().parent / pdf).resolve()) if pdf else pdf
-            pdf = normalized_pdf
-            pixmap = None
-            if pdf:
-                try:
-                    pixmap = self._read_pdf_pixmap(pdf)
-                except Exception:
-                    replacement, _ = QFileDialog.getOpenFileName(
-                        self, messages.SUBSTATION_GUI4_LOCATE_MISSING_OR_UNREADABLE_BACKGROUND_PDF_CANCEL_TO_OPEN, "", "PDF Files (*.pdf)"
-                    )
-                    if replacement:
-                        pdf = str(Path(replacement).resolve())
-                        pixmap = self._read_pdf_pixmap(pdf)
-            if not self._confirm_discard():
-                return False
-            # Normalize the original reference before taking the saved snapshot.
-            # Selecting a different replacement PDF remains an unsaved edit.
-            self._install_layout(dict(data, pdf=normalized_pdf), scene, str(Path(path).resolve()), pixmap)
-            self.pdf_path = pdf
-            self._mark_modified()
-            self.footer_status_label.setText(
-                "Layout opened; background PDF unavailable" if pdf and pixmap is None else f"Layout opened: {path}"
-            )
-            return True
-        except Exception as error:
-            QMessageBox.critical(self, messages.SUBSTATION_GUI4_OPEN_FAILED, messages.SUBSTATION_GUI4_COULD_NOT_OPEN_THE_LAYOUT.format(error))
-            return False
 
 # import JSON netlist file function
-    def import_netlist_json(self, path=None):
-        if not path:
-            path, _ = QFileDialog.getOpenFileName(
-                self, "Import Netlist JSON", "", "Netlist JSON Files (*.json)"
-            )
-        if not path:
-            return False
 
-        try:
-            netlist = load_netlist_json(path)
-            layout_data = self._layout_data_from_netlist(netlist)
-            staged_scene = build_scene(layout_data)
-        except (
-            OSError, UnicodeError, json.JSONDecodeError, KeyError, TypeError, ValueError
-        ) as error:
-            QMessageBox.critical(
-                self, "Netlist Import Failed", f"Could not import the netlist:\n{error}"
-            )
-            return False
-
-        answer = QMessageBox.question(
-            self,
-            "Replace Current Drawing",
-            "Importing this netlist replaces the current drawing and removes its "
-            "background PDF, protection zones, and saved layout settings. Continue?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        if answer != QMessageBox.StandardButton.Yes or not self._confirm_discard():
-            staged_scene.clear()
-            return False
-
-        self._install_layout(layout_data, staged_scene, None, None)
-        self._saved_snapshot = None
-        self._mark_modified()
-        self.footer_status_label.setText(
-            f"Netlist imported: {layout_data['project']}"
-        )
-        return True
-
-    def _layout_data_from_netlist(self, netlist):
-        project_name = netlist.get("project_name", "Untitled Project")
-        components = []
-        for index, component in enumerate(netlist["components"], start=1):
-            component_type = component["type"]
-            properties = component["properties"]
-            if component_type in BUILTIN_SYMBOLS or component_type == "junction":
-                symbol = component_type
-            else:
-                declared_symbol = properties.get("symbol_type")
-                if declared_symbol in (*BUILTIN_SYMBOLS, "custom"):
-                    symbol = declared_symbol
-                elif component_type.startswith("custom_"):
-                    symbol = "custom"
-                else:
-                    raise ValueError(
-                        f"Component {component['id']!r} has unsupported type "
-                        f"{component_type!r}."
-                    )
-
-            ports = component.get("port_positions") or {}
-            if set(ports) != set(component["ports"]):
-                raise ValueError(
-                    f"Component {component['id']!r} must include a position "
-                    "for every port to be imported."
-                )
-            name = component.get("name") or component_type
-            display_id = component.get("display_id") or component["id"]
-            if not isinstance(name, str) or not isinstance(display_id, str):
-                raise ValueError(
-                    f"Component {index} must have a valid name and display ID."
-                )
-
-            components.append({
-                "id": component["id"],
-                "symbol": symbol,
-                "name": name,
-                "display_id": display_id,
-                "properties": properties,
-                "position": [
-                    component["position"]["x"],
-                    component["position"]["y"],
-                ],
-                "scale": component["scale_factor"],
-                "rotation": component["rotation_deg"],
-                "ports": {
-                    port: [point["x"], point["y"]]
-                    for port, point in ports.items()
-                },
-            })
-
-        connections = [
-            [
-                connection["from"]["component"],
-                connection["from"]["port"],
-                connection["to"]["component"],
-                connection["to"]["port"],
-            ]
-            for connection in netlist["connections"]
-        ]
-        return {
-            "version": 1,
-            "project": project_name,
-            "pdf": None,
-            "scene_rect": [
-                0, 0, DEFAULT_WORKSPACE_WIDTH, DEFAULT_WORKSPACE_HEIGHT
-            ],
-            "components": components,
-            "connections": connections,
-            "zones": [],
-            "library": {},
-            "settings": {
-                "grid_visible": True,
-                "grid_opacity": round(DEFAULT_GRID_OPACITY * 100),
-                "snap": True,
-                "pdf_visible": True,
-            },
-        }
-
-    @staticmethod
-    def _read_pdf_pixmap(path):
-        with pymupdf.open(path) as document:
-            pix = document.load_page(0).get_pixmap(matrix=pymupdf.Matrix(2, 2), alpha=False)
-            image = QPixmap()
-            if not image.loadFromData(pix.tobytes("png")):
-                raise ValueError(messages.SUBSTATION_GUI4_COULD_NOT_DECODE_PDF_BACKGROUND)
-            return image
-
-    def _install_layout(self, data, staged_scene, path, pixmap):
-        self._loading = True
-        self._clear_zone_highlights()
-        self._zone_report = None
-        self.protection_zones = copy.deepcopy(data.get("zones", []))
-        view = self.workspace_view
-        view._cancel_pending()
-        view._clear_drop_preview()
-        view._clear_snap_ports()
-        view._move_origins = {}
-        view._resize_item = None
-        view._rotate_item = None
-        view._bus_resize_item = None
-        self.undo_stack.clear()
-        old_scene = self.workspace_scene
-        old_scene.selectionChanged.disconnect(self._on_selection_changed)
-        staged_scene.setParent(self)
-        self.workspace_scene = staged_scene
-        view.setScene(staged_scene)
-        view._background_item = None
-        view._grid_item = None
-        view._init_grid()
-        staged_scene.selectionChanged.connect(self._on_selection_changed)
-        staged_scene.changed.connect(self._sync_circuit_visibility)
-        self._sync_circuit_visibility()
-        old_scene.deleteLater()
-        self._workspace_original = pixmap
-        if pixmap is not None:
-            view.set_background_pixmap(pixmap, scene_width=data["scene_rect"][2], scene_height=data["scene_rect"][3], fit_existing_sheet=True)
-            staged_scene.setSceneRect(QRectF(*data["scene_rect"]))
-            view._sync_grid_to_scene()
-        self.pdf_path = data.get("pdf")
-        self.layout_path = path
-        self.project_box.setText(data["project"])
-        EQUIPMENT_DEFS.clear()
-        self.equipment_list.clear()
-        self.equipment_search.clear()
-        for key, definition in library_from_layout(data).items():
-            EQUIPMENT_DEFS[key] = {"label": definition["name"], "definition": definition,
-                "factory": functools.partial(make_user_equipment, definition["symbol"], definition["name"], definition["properties"])}
-            entry = QListWidgetItem(definition["name"])
-            entry.setData(Qt.ItemDataRole.UserRole, key)
-            self.equipment_list.addItem(entry)
-        settings = data["settings"]
-        self.grid_show_cb.setChecked(settings["grid_visible"])
-        self.grid_snap_cb.setChecked(settings["snap"])
-        self.pdf_show_cb.setChecked(settings["pdf_visible"])
-        self.pdf_show_cb.setEnabled(pixmap is not None)
-        self.grid_opacity_slider.setValue(settings["grid_opacity"])
-        view.set_grid_visible(settings["grid_visible"])
-        view.set_snap_to_grid(settings["snap"])
-        view.set_pdf_visible(settings["pdf_visible"])
-        view.set_grid_opacity(settings["grid_opacity"])
-        reserve_ids(staged_scene)
-        self.last_result = self.last_netlist = None
-        self.output_box.clear()
-        self.export_results_action.setEnabled(False)
-        self.zone_view.blockSignals(True)
-        self.zone_view.clear()
-        self.zone_view.addItem("Run Evaluation to display zones")
-        self.zone_view.blockSignals(False)
-        self._on_selection_changed()
-        self._saved_snapshot = self._layout_data()
-        self._loading = False
-        self._mark_modified()
-        view.fitInView(staged_scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
-
-    def closeEvent(self, event):
-        if self._confirm_discard():
-            event.accept()
-        else:
-            event.ignore()
 
     # --- Layout assembly ----------------------------------------------------
 
@@ -1158,6 +846,7 @@ class SubstationGuiMockup(QMainWindow):
     def _protection_netlist(self):
         netlist = netlist_from_scene(self.workspace_scene,
             system_name=self.project_box.text().strip() or "Untitled Project")
+        netlist["demonstration_mode"] = self.demonstration_mode
         labels = {item.instance_id: item.visible_id() for item in self.workspace_scene.items()
                   if isinstance(item, OneLineSymbolItem)}
         for component in netlist["components"]:
@@ -1191,32 +880,26 @@ class SubstationGuiMockup(QMainWindow):
                     props = dialog.components[item.instance_id]["properties"]
                     changes.extend((item, key, props[key]) for key in SETTING_KEYS
                                    if key in props and getattr(item, "properties", {}).get(key) != props[key])
-            if changes or self.protection_zones != dialog.zones:
+            demo_mode = dialog.demo_mode.isChecked()
+            if changes or self.protection_zones != dialog.zones or demo_mode != self.demonstration_mode:
                 self.undo_stack.beginMacro("Configure protection zones and breaker settings")
-                self.undo_stack.push(ReplaceZonesCommand(self.protection_zones, dialog.zones, self._apply_protection_zones))
+                self.undo_stack.push(ReplaceZonesCommand(
+                    {"zones": self.protection_zones, "demonstration_mode": self.demonstration_mode},
+                    {"zones": dialog.zones, "demonstration_mode": demo_mode}, self._apply_study_settings))
                 for item, key, value in changes:
                     self.undo_stack.push(EditPropertyCommand(item, key, value, self._on_selection_changed))
                 self.undo_stack.endMacro()
             self._mark_modified()
             self._on_run_evaluation_clicked()
 
+    def _apply_study_settings(self, settings):
+        self.demonstration_mode = settings["demonstration_mode"]
+        self._apply_protection_zones(settings["zones"])
+
     def _apply_protection_zones(self, zones):
         self.protection_zones = zones
         self._on_selection_changed()
 
-    def _expand_zone_analysis(self):
-        dialog = QDialog(self)
-        dialog.setWindowTitle("Momentary Load Analysis")
-        dialog.resize(950, 700)
-        layout = QVBoxLayout(dialog)
-        text = QTextEdit()
-        text.setReadOnly(True)
-        text.setPlainText(self.output_box.toPlainText() or "Run Evaluation to generate a protection-zone study.")
-        layout.addWidget(text)
-        close = QPushButton("Close")
-        close.clicked.connect(dialog.accept)
-        layout.addWidget(close)
-        dialog.exec()
 
     def _sync_circuit_visibility(self, *_):
         control = getattr(self, "circuit_show_cb", None)
@@ -1338,429 +1021,6 @@ class SubstationGuiMockup(QMainWindow):
         overlay.setVisible(self._zones_visible)
         self._zone_overlays.append(overlay)
 
-    def _on_run_evaluation_clicked(self):
-        """Propose zones, evaluate explicit actions, and display complete or draft results."""
-        started = time.perf_counter()
-        self._invalidate_results()
-        try:
-            netlist = self._protection_netlist()
-            if not netlist["components"]:
-                self.output_box.setPlainText(messages.SUBSTATION_GUI4_NO_COMPONENTS_TO_EVALUATE_REBUILD_THE_ONE_LINE_AND)
-                self.footer_status_label.setText(messages.SUBSTATION_GUI4_PLACE_COMPONENTS_BEFORE_EVALUATION)
-                return
-            if not self.protection_zones:
-                self.protection_zones = propose_zones(netlist)
-                self._mark_modified()
-            report = evaluate_zones(netlist, self.protection_zones)
-            # The catalog uses original GUI objects, including CT-only conductors.
-            # Editable operating settings remain separate JSON dictionaries.
-            report["topology_regions"] = self._scene_topology()
-            self._zone_report = report
-            self.zone_view.blockSignals(True)
-            self.zone_view.clear()
-            self.zone_view.addItem(messages.SUBSTATION_GUI4_ALL_CONFIGURED_ZONES_DASHED_INCOMPLETE, None)
-            for index, zone in enumerate(report["zones"]):
-                self.zone_view.addItem(f"{index + 1}. {zone['name']} — {'confirmed' if zone['complete'] else messages.SUBSTATION_GUI4_REVIEW_REQUIRED}", zone["id"])
-            self.zone_view.addItem("All detected regions (topology only)", ("topology", None))
-            for region in report["topology_regions"]:
-                enclosure = " [enclosed]" if region["enclosed_by"] else " [outermost]"
-                self.zone_view.addItem(region["name"] + enclosure, ("topology", region["id"]))
-            if not report["zones"]:
-                self.zone_view.setCurrentIndex(1)
-            self.zone_view.blockSignals(False)
-            self._show_zone_highlights()
-            lines = [f"Momentary DC protection-zone study: {netlist['system_name']}",
-                "COMPLETE" if report["complete"] else messages.SUBSTATION_GUI4_INCOMPLETE_CONFIGURE_REVIEW_FLAGGED_ZONES_PARTIAL_TOTALS_ARE_NOT,
-                "Each configured zone is a separate fault event. Same-stage loads are simultaneous; other stages are separate.",
-                "DC supplies are reported separately. No battery amp-hour calculation.", ""]
-            all_loads, warnings = [], list(report["warnings"])
-            lines.extend(messages.SUBSTATION_GUI4_REVIEW_WARNING.format(warning) for warning in warnings)
-            for zone in report["zones"]:
-                members = ", ".join(zone.get("members", [])) or "No members"
-                lines.extend([
-                    f"{zone['name']} ({members}) ({zone['kind']})",
-                    "  CT boundaries: " + ", ".join(zone["boundaries"]),
-                    "  Equipment: " + members,
-                ])
-                for warning in zone["warnings"]:
-                    lines.append(messages.SUBSTATION_GUI4_INDENTED_REVIEW_WARNING.format(warning))
-                    warnings.append(messages.DIAGNOSTIC_WITH_CONTEXT.format(zone['name'], warning))
-                for scenario in zone["scenarios"]:
-                    prefix = "" if zone["complete"] else messages.SUBSTATION_GUI4_PROVISIONAL
-                    lines.append(f"  {prefix}{scenario['stage']}: {scenario['peak_current_A']:g} A across assigned supplies")
-                    for advice in scenario.get("advisories", []):
-                        lines.append(f"    NOTE: {advice}")
-                    for supply, current in scenario["supplies"].items():
-                        lines.append(f"    {supply}: {current:g} A")
-                    for load in scenario["loads"]:
-                        lines.append(f"    {load['name']}: {load['amps_per_unit']:g} A × {load['quantity']} = {load['total_amps']:g} A ({load['supply']})")
-                    all_loads.extend(
-                        {
-                            **load,
-                            "zone_id": zone["id"],
-                            "zone_name": zone["name"],
-                        }
-                        for load in scenario["loads"]
-                    )
-                lines.append("")
-            lines.append("Detected topology regions (not automatically added to the calculation):")
-            for region in report["topology_regions"]:
-                relation = "enclosed" if region["enclosed_by"] else "outermost"
-                lines.append(f"  {region['name']} ({relation}; {len(region['connections'])} conductors)")
-            lines.append("")
-            lines.append("Peak per supply among confirmed, complete configured zones:")
-            for supply, peak in report["supply_peaks"].items():
-                lines.append(f"  {supply}: {peak['peak_current_A']:g} A — {peak['zone']} / {peak['stage']}")
-            if not report["supply_peaks"]:
-                lines.append(messages.SUBSTATION_GUI4_NOT_AVAILABLE_UNTIL_ZONE_ASSIGNMENTS_AND_CURRENTS_ARE_COMPLETE)
-            worst_supply = max(report["supply_peaks"],
-                key=lambda supply: report["supply_peaks"][supply]["peak_current_A"], default=None)
-            self.last_result = {"scenario_name": netlist["system_name"], "voltage_V": netlist["voltage_V"],
-                "peak_current_A": report["supply_peaks"][worst_supply]["peak_current_A"] if worst_supply and report["complete"] else messages.SUBSTATION_GUI4_INCOMPLETE_STUDY,
-                "worst_case_supply": worst_supply,
-                "loads": all_loads, "warnings": warnings, "protection_analysis": report,
-                "calculation_steps": ["Group actions by zone and operating stage.",
-                    "Count each physical coil or motor once per stage; multiply entered current by the verified unit count.",
-                    "Sum currents per DC supply within each stage, then take each supply's maximum across complete zones.",
-                    messages.SUBSTATION_GUI4_STAGES_AND_SEPARATE_ZONE_FAULTS_ARE_NOT_ADDED_TOGETHER]}
-            netlist["zones"] = copy.deepcopy(self.protection_zones)
-            self.last_netlist = netlist
-            self._evaluated_snapshot = self._layout_data()
-            self.export_results_action.setEnabled(True)
-            self.output_box.setPlainText("\n".join(lines))
-            self.footer_status_label.setText("Zone evaluation complete" if report["complete"] else messages.SUBSTATION_GUI4_ZONE_EVALUATION_NEEDS_REVIEW_CONFIGURE_PROTECTION_ZONES)
-        except Exception as error:
-            self._invalidate_results()
-            self.output_box.setPlainText(messages.SUBSTATION_GUI4_EVALUATION_FAILED.format(error))
-            self.footer_status_label.setText(messages.SUBSTATION_GUI4_ZONE_EVALUATION_FAILED_SEE_ANALYSIS_OUTPUT)
-        self.response_time_label.setText(f"Response time: {(time.perf_counter() - started) * 1000:.0f} ms")
-
-    def _on_save_results_clicked(self):
-        if self.last_result is not None and self._layout_data() != self._evaluated_snapshot:
-            self._invalidate_results()
-        if self.last_result is None or self.last_netlist is None:
-            QMessageBox.information(
-                self, "Save Calculation PDF", "Run an evaluation first."
-            )
-            return
-
-        result = self.last_result
-        report = result.get("protection_analysis") or {}
-        study_status = "COMPLETE" if report.get("complete") else messages.SUBSTATION_GUI4_INCOMPLETE_PROVISIONAL_STUDY
-        demo_notice = (
-            "<p><b>DEMONSTRATION — sample currents and assumed operating actions.</b> "
-            "DEMO scenarios use both trip coils together on DC 1. Closing, motor "
-            "inrush, and motor running are separate stages. Independent-operation "
-            "scenarios are switching examples, not additional protection schemes. "
-            "These provisional totals are not an approved DC supply sizing result.</p>"
-            if any(str(zone.get("name", "")).startswith("DEMO - ")
-                   for zone in report.get("zones", [])) else ""
-        )
-
-        loads = result.get("loads") or []
-        load_rows = "".join(
-            "<tr>"
-            f"<td>{escape(str(load.get('zone_name', '')))}<br>"
-            f"{escape(str(load.get('stage', '')))} / {escape(str(load.get('supply', '')))}</td>"
-            f"<td>{escape(str(load.get('name', 'Load')))}</td>"
-            f"<td>{escape(str(load.get('quantity', 1)))}</td>"
-            f"<td>{escape(str(load.get('amps_per_unit', 'N/A')))} A</td>"
-            f"<td>{escape(str(load.get('total_amps', 'N/A')))} A</td>"
-            "</tr>"
-            for load in loads
-        ) or "<tr><td colspan='5'>No loads returned.</td></tr>"
-
-        zone_summary_rows = []
-        review_rows = []
-        for zone in report.get("zones", []):
-            status = ("COMPLETE (DEMO)" if zone.get("demonstration_complete") else
-                      "COMPLETE" if zone.get("complete") else "REVIEW REQUIRED — PROVISIONAL")
-            status_class = "complete" if zone.get("complete") else "incomplete"
-            stage_totals = []
-            for scenario in zone.get("scenarios", []):
-                if not scenario.get("loads"):
-                    stage_totals.append(
-                        f"{escape(str(scenario.get('stage', 'Unspecified stage')))}: "
-                        "<b class='incomplete'>Not calculated</b>"
-                    )
-                    continue
-                qualifier = ("Demo" if zone.get("demonstration_complete") else
-                             "Confirmed" if zone.get("complete") else "PROVISIONAL")
-                stage_totals.append(
-                    f"{escape(str(scenario.get('stage', 'Unspecified stage')))}: "
-                    f"<b class='{status_class}'>{qualifier} "
-                    f"{escape(str(scenario.get('peak_current_A', 'N/A')))} A</b>"
-                )
-            total_html = "<br>".join(stage_totals) or "No calculated stages"
-            zone_summary_rows.append(
-                "<tr>"
-                f"<td>{escape(str(zone.get('name', 'Unnamed zone')))}</td>"
-                f"<td>{total_html}</td>"
-                f"<td class='{status_class}'><b>{status}</b></td>"
-                "</tr>"
-            )
-            zone_name = str(zone.get("name", "Unnamed zone"))
-            review_rows.extend((zone_name, str(warning)) for warning in zone.get("warnings", []))
-            for scenario in zone.get("scenarios", []):
-                review_rows.extend(
-                    (f"{zone_name} / {scenario.get('stage', 'Unspecified stage')}", str(advisory))
-                    for advisory in scenario.get("advisories", [])
-                )
-        zone_summary_html = "".join(zone_summary_rows) or (
-            "<tr><td colspan='3'>No configured zones.</td></tr>"
-        )
-        review_rows.extend(("Study", str(warning)) for warning in report.get("warnings", []))
-        review_html = "".join(
-            "<tr>"
-            f"<td>{escape(zone_name)}</td>"
-            f"<td>{escape(warning)}</td>"
-            "</tr>"
-            for zone_name, warning in dict.fromkeys(review_rows)
-        ) or "<tr><td colspan='2'>None.</td></tr>"
-        supply_peak_html = "".join(
-            "<tr>"
-            f"<td>{escape(str(supply))}</td>"
-            f"<td>{escape(str(peak.get('peak_current_A', 'N/A')))} A</td>"
-            f"<td>{escape(str(peak.get('zone', '')))} / {escape(str(peak.get('stage', '')))}</td>"
-            "</tr>"
-            for supply, peak in sorted(report.get("supply_peaks", {}).items())
-        ) or (
-            "<tr><td colspan='3'>Unavailable until zone assignments and currents are complete.</td></tr>"
-        )
-        evaluation_rows = []
-        for zone in report.get("zones", []):
-            zone_name = escape(str(zone.get("name", "Unnamed zone")))
-            for scenario in zone.get("scenarios", []):
-                stage = str(scenario.get("stage", "Unspecified stage"))
-                loads = scenario.get("loads", [])
-                if loads:
-                    supply_totals = "; ".join(
-                        f"{escape(str(supply))}: {escape(str(current))} A"
-                        for supply, current in scenario.get("supplies", {}).items()
-                    )
-                    load_calculations = "<br>".join(
-                        f"{escape(str(load.get('name', 'Load')))}: "
-                        f"{escape(str(load.get('amps_per_unit', 'N/A')))} A &times; "
-                        f"{escape(str(load.get('quantity', 1)))} = "
-                        f"{escape(str(load.get('total_amps', 'N/A')))} A "
-                        f"({escape(str(load.get('supply', '')))})"
-                        for load in loads
-                    )
-                    calculation = (
-                        f"{load_calculations}<br><b>Stage total: "
-                        f"{escape(str(scenario.get('peak_current_A', 'N/A')))} A</b>"
-                    )
-                    if supply_totals:
-                        calculation = f"{supply_totals}<br>{calculation}"
-                else:
-                    calculation = "<b class='incomplete'>Not calculated — no valid loads</b>"
-                evaluation_rows.append(
-                    "<tr>"
-                    f"<td>{zone_name}<br>{escape(stage)}</td>"
-                    f"<td>{calculation}</td>"
-                    "</tr>"
-                )
-        evaluation_html = "".join(evaluation_rows) or (
-            "<tr><td colspan='2'>No configured zone calculations.</td></tr>"
-        )
-
-        html = f"""
-        <html>
-        <head>
-          <style>
-            body {{ font-family: sans-serif; font-size: 9pt; margin: 0; }}
-            h1, h2 {{ color: #006A4E; }}
-            h1 {{ margin: 0 0 6px; }}
-            h2 {{ margin: 10px 0 4px; }}
-            p {{ margin: 4px 0; }}
-            table {{ border-collapse: collapse; width: 100%; margin-bottom: 6px; }}
-            .summary {{ font-size: 8.5pt; }}
-            th, td {{
-                border: 1px solid #cbd2d9;
-                padding: 4px;
-                text-align: left;
-                vertical-align: top;
-            }}
-            th {{ background: #e8f1ed; }}
-            tr {{ page-break-inside: avoid; }}
-            .complete {{ color: #176b3a; }}
-            .incomplete {{ color: #9a4f00; background: #fff3cd; }}
-          </style>
-        </head>
-
-        <body>
-          <h1>Calculation Results</h1>
-          <p><b>{escape(study_status)}</b></p>
-          {demo_notice}
-          <p><b>System:</b> {escape(str(result.get('scenario_name', 'N/A')))}
-            &nbsp; <b>Voltage:</b> {escape(str(result.get('voltage_V', 'N/A')))} V</p>
-
-          <h2>Supply Peaks</h2>
-          <table class="summary">
-            <tr><th>DC supply</th><th>Maximum current</th><th>Zone / stage</th></tr>
-            {supply_peak_html}
-          </table>
-
-          <h2>Zone Summary</h2>
-          <p>Stage totals and separate zone faults are not added together.</p>
-          <table class="summary">
-            <tr><th>Zone</th><th>Per-stage total across assigned supplies</th><th>Status</th></tr>
-            {zone_summary_html}
-          </table>
-
-          <h2>Review</h2>
-          <table class="summary">
-            <tr><th>Zone / stage</th><th>Issue</th></tr>
-            {review_html}
-          </table>
-
-          <h2>Load Breakdown</h2>
-          <table>
-            <tr>
-                <th>Zone / stage / supply</th>
-                <th>Load</th>
-                <th>Quantity</th>
-                <th>Current / unit</th>
-                <th>Total</th>
-            </tr>
-            {load_rows}
-          </table>
-
-          <h2>Evaluation Output</h2>
-          <table class="summary">
-            <tr><th>Zone / stage</th><th>Calculation</th></tr>
-            {evaluation_html}
-          </table>
-        </body>
-        </html>
-        """
-
-        self._save_html_as_pdf(
-            "Save Calculation PDF", "calculation_results.pdf", html, "Results saved"
-        )
-
-    def _save_html_as_pdf(
-        self, title: str, default_filename: str, html: str, success_message: str
-    ):
-        file_path, _ = QFileDialog.getSaveFileName(
-            self, title, default_filename, "PDF Files (*.pdf)"
-        )
-        if not file_path:
-            return
-
-        if not Path(file_path).suffix:
-            file_path += ".pdf"
-
-        document = QTextDocument()
-        document.setHtml(html)
-        temporary = None
-        try:
-            with tempfile.NamedTemporaryFile(
-                dir=Path(file_path).parent, suffix=".pdf", delete=False
-            ) as stream:
-                temporary = stream.name
-            printer = QPrinter()
-            printer.setOutputFormat(QPrinter.OutputFormat.PdfFormat)
-            printer.setOutputFileName(temporary)
-            document.print_(printer)
-            if printer.printerState() == QPrinter.PrinterState.Error or Path(temporary).stat().st_size == 0:
-                raise OSError(messages.SUBSTATION_GUI4_THE_PDF_FILE_WAS_NOT_CREATED_OR_IS_EMPTY)
-            os.replace(temporary, file_path)
-        except OSError as error:
-            QMessageBox.critical(
-                self, messages.SUBSTATION_GUI4_SAVE_FAILED, messages.SUBSTATION_GUI4_COULD_NOT_CREATE_THE_PDF.format(error)
-            )
-            return
-        finally:
-            if temporary and Path(temporary).exists():
-                Path(temporary).unlink()
-
-        self.footer_status_label.setText(f"{success_message}: {file_path}")
-
-    def _on_save_netlist_pdf(self):
-        netlist = self._build_current_netlist()
-        self.last_netlist = netlist
-        component_rows = []
-        for component in netlist.get("components", []):
-            properties = component.get("properties") or {}
-            property_text = "<br>".join(
-                f"<b>{escape(str(key))}:</b> "
-                f"{escape(str(value))}"
-                for key, value in properties.items()
-            ) or "None"
-            ports = ", ".join(str(port) for port in component.get("ports", []))
-            component_rows.append(
-                "<tr>"
-                f"<td>{escape(str(component.get('display_id', component.get('id', ''))))}</td>"
-                f"<td>{escape(str(component.get('name', '')))}</td>"
-                f"<td>{escape(str(component.get('type', '')))}</td>"
-                f"<td>{property_text}</td>"
-                f"<td>{escape(ports or 'None')}</td>"
-                "</tr>"
-            )
-        component_table = "".join(component_rows) or (
-            "<tr><td colspan='5'>No components in this netlist.</td></tr>"
-        )
-
-        connection_rows = []
-        for connection in netlist.get("connections", []):
-            source = connection.get("from", {})
-            target = connection.get("to", {})
-            source_label = (
-                f"{source.get('component', '')} ({source.get('port', '')})"
-            )
-            target_label = (
-                f"{target.get('component', '')} ({target.get('port', '')})"
-            )
-            connection_rows.append(
-                "<tr>"
-                f"<td>{escape(str(connection.get('id', '')))}</td>"
-                f"<td>{escape(str(source_label))}</td>"
-                f"<td>{escape(str(target_label))}</td>"
-                "</tr>"
-            )
-        connection_table = "".join(connection_rows) or (
-            "<tr><td colspan='3'>No connections in this netlist.</td></tr>"
-        )
-        html = f"""
-        <html>
-        <head>
-          <style>
-            body {{ font-family: sans-serif; font-size: 9pt; color: #1f2933; }}
-            h1, h2 {{ color: #006A4E; }}
-            h1 {{ margin: 0 0 6px; }}
-            h2 {{ margin: 8px 0 4px; }}
-            p {{ margin: 4px 0; }}
-            table {{ border-collapse: collapse; width: 100%; margin-bottom: 8px; }}
-            th, td {{ border: 1px solid #cbd2d9; padding: 4px; text-align: left; vertical-align: top; }}
-            th {{ background: #e8f1ed; }}
-            tr {{ page-break-inside: avoid; }}
-          </style>
-        </head>
-        <body>
-          <h1>Netlist: {escape(str(netlist.get('project_name', 'Untitled Project')))}</h1>
-          <p><b>Schema version:</b> {escape(str(netlist.get('schema_version', 'N/A')))}
-            &nbsp; <b>Components:</b> {len(netlist.get('components', []))}
-            &nbsp; <b>Connections:</b> {len(netlist.get('connections', []))}</p>
-          <h2>Components</h2>
-          <table>
-            <thead><tr>
-              <th>ID</th><th>Name</th><th>Type</th><th>Properties</th><th>Ports</th>
-            </tr></thead>
-            <tbody>{component_table}</tbody>
-          </table>
-          <h2>Connections</h2>
-          <table>
-            <thead><tr><th>ID</th><th>From</th><th>To</th></tr></thead>
-            <tbody>{connection_table}</tbody>
-          </table>
-        </body>
-        </html>
-        """
-
-        self._save_html_as_pdf(
-            "Save Netlist PDF", "netlist.pdf", html, "Netlist PDF saved"
-        )
 
     def _on_create_component_clicked(self):
         """

@@ -15,6 +15,7 @@ from gft_opto.gui.symbols import (
     JunctionItem,
     OneLineSymbolItem,
     refresh_symbol_labels,
+    batch_label_refresh,
 )
 
 # ---------------------------------------------------------------------------
@@ -316,12 +317,23 @@ class MoveEquipmentCommand(QUndoCommand):
         self.moves = [(item, QPointF(old), QPointF(new)) for item, old, new in moves]
 
     def redo(self):
-        for item, _old, new in self.moves:
-            item.setPos(new)
+        self._apply_positions(2)
 
     def undo(self):
-        for item, old, _new in self.moves:
-            item.setPos(old)
+        self._apply_positions(1)
+
+    def _apply_positions(self, index):
+        if not self.moves:
+            return
+        scene = self.moves[0][0].scene()
+        snap = OneLineSymbolItem.snap_to_grid_enabled
+        OneLineSymbolItem.snap_to_grid_enabled = False
+        try:
+            with batch_label_refresh(scene):
+                for move in self.moves:
+                    move[0].setPos(move[index])
+        finally:
+            OneLineSymbolItem.snap_to_grid_enabled = snap
 
 
 class ResizeEquipmentCommand(QUndoCommand):

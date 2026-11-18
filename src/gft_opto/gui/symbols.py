@@ -3,6 +3,7 @@
 """One-line equipment glyphs, junction dots, and the wires between them."""
 
 import math
+from contextlib import contextmanager
 from collections import defaultdict
 
 from PySide6.QtCore import Qt, QPointF, QRectF, QTimer
@@ -994,7 +995,7 @@ class ConnectionItem(QGraphicsPathItem):
         scene = self.scene()
         if scene is None and self.from_item is not None:
             scene = self.from_item.scene()
-        refresh_symbol_labels(scene, extra_wires=[self])
+        request_label_refresh(scene)
 
     def paint(self, painter: QPainter, option, widget=None):
         super().paint(painter, option, widget)
@@ -1018,6 +1019,36 @@ class ConnectionItem(QGraphicsPathItem):
 _LABEL_REFRESH_DEPTH = 0
 
 
+@contextmanager
+def batch_label_refresh(scene):
+    """Refresh labels once after a complete set of wire changes."""
+    if scene is None:
+        yield
+        return
+    scene._label_batch_depth = getattr(scene, "_label_batch_depth", 0) + 1
+    try:
+        yield
+    finally:
+        scene._label_batch_depth -= 1
+        if not scene._label_batch_depth:
+            refresh_symbol_labels(scene)
+
+
+def request_label_refresh(scene):
+    """Coalesce repeated wire updates while editing into one label pass."""
+    if scene is None or getattr(scene, "_label_batch_depth", 0):
+        return
+    if getattr(scene, "_label_refresh_pending", False):
+        return
+    scene._label_refresh_pending = True
+
+    def refresh():
+        scene._label_refresh_pending = False
+        refresh_symbol_labels(scene)
+
+    QTimer.singleShot(0, scene, refresh)
+
+
 def refresh_symbol_labels(
     scene: QGraphicsScene | None,
     extra_wires: list | None = None,
@@ -1025,6 +1056,8 @@ def refresh_symbol_labels(
     """Move component names that a wire now crosses."""
     global _LABEL_REFRESH_DEPTH
     if scene is None or _LABEL_REFRESH_DEPTH:
+        return
+    if getattr(scene, "_label_batch_depth", 0):
         return
     _LABEL_REFRESH_DEPTH += 1
     try:

@@ -168,6 +168,7 @@ def populate_ribbon(window):
     grid = RibbonGroup(view, "Grid")
     grid.controls.addWidget(window.grid_snap_cb, 0, 0)
     grid.controls.addWidget(window.grid_opacity_controls, 1, 0)
+    grid.add_action(window.align_grid_action, 1, icon.SP_FileDialogDetailedView)
 
     analysis = ribbon.add_page("&Analysis")
     validation = RibbonGroup(analysis, "Connectivity")

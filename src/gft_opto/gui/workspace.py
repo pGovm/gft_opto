@@ -214,11 +214,6 @@ class WorkspaceView(QGraphicsView):
     def set_snap_to_grid(self, enabled: bool):
         self._snap_to_grid = enabled
         OneLineSymbolItem.snap_to_grid_enabled = enabled
-        scn = self.scene()
-        if scn is not None:
-            for item in scn.items():
-                if isinstance(item, ConnectionItem):
-                    item.update_path()
 
     def _assign_snap_ports(self, items: list[OneLineSymbolItem], scene_pos: QPointF):
         self._clear_snap_ports()

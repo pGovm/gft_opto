@@ -203,6 +203,8 @@ def validate_zones(zones: list[dict]) -> None:
         _text(zone.get("seed"), f"{ident}: seed", empty=True)
         if not isinstance(zone.get("confirmed"), bool):
             raise ValueError(messages.PROTECTION_STUDY_CONFIRMED_MUST_BE_TRUE_OR_FALSE.format(ident))
+        if "demonstration_complete" in zone and not isinstance(zone["demonstration_complete"], bool):
+            raise ValueError(f"{ident}: demonstration completion must be true or false.")
         boundaries = zone.get("boundary_cts")
         if not isinstance(boundaries, list):
             raise ValueError(messages.PROTECTION_STUDY_BOUNDARY_CTS_MUST_BE_A_LIST.format(ident))
@@ -592,8 +594,17 @@ def _stage_key(stage: str):
 def _evaluate_actions(zone: dict, graph: _Graph, voltage: float) -> tuple[list[dict], list[str]]:
     warnings = []
     grouped: dict[str, list[dict]] = defaultdict(list)
+    background = []
     for action in zone["actions"]:
-        grouped[action["stage"].strip()].append(action)
+        if "custom_load" in action:
+            background.append({**action, "supply": "DC 1", "units": 1})
+        else:
+            grouped[action["stage"].strip()].append(action)
+    if background:
+        if not grouped:
+            grouped["Background load"] = []
+        for actions in grouped.values():
+            actions.extend(background)
     if not grouped:
         return [], [messages.PROTECTION_STUDY_NO_OPERATING_LOADS_ASSIGNED_TO_THIS_ZONE]
     results = []
@@ -688,6 +699,9 @@ def evaluate_zones(netlist: dict, zones: list[dict]) -> dict:
     resolved = copy.deepcopy(zones)
     for zone in resolved:
         for action in zone["actions"]:
+            if "custom_load" in action:
+                action.update(supply="DC 1", units=1, operation="device")
+                continue
             component = graph.records.get(action["component"])
             if component is not None and kind(component) == "breaker" and (
                     "operation" in action or any(key in component.get("properties", {}) for key in SETTING_KEYS)):
@@ -710,7 +724,8 @@ def evaluate_zones(netlist: dict, zones: list[dict]) -> dict:
     if not valid_voltage:
         raise ValueError(messages.PROTECTION_STUDY_DC_VOLTAGE_MUST_BE_A_FINITE_POSITIVE_NUMBER)
     current_signature = topology_signature(netlist)
-    report = {"complete": False, "zones": [], "warnings": [], "supply_peaks": {},
+    report = {"demonstration_mode": bool(netlist.get("demonstration_mode", False)),
+              "complete": False, "zones": [], "warnings": [], "supply_peaks": {},
               "topology_regions": topology_records(graph.primary())}
     # A motor is one physical load even though inrush/run have different fields.
     assignments = defaultdict(lambda: defaultdict(set))
@@ -739,7 +754,7 @@ def evaluate_zones(netlist: dict, zones: list[dict]) -> dict:
         warnings.extend(conflicts[zone["id"]])
         warnings = list(dict.fromkeys(warnings))
         demonstration_complete = bool(
-            zone.get("demonstration_complete") and zone["name"].startswith("DEMO - ")
+            zone.get("demonstration_complete") and netlist.get("demonstration_mode", False)
             and zone["confirmed"]
             and zone.get("topology_signature") == current_signature
             and zone.get("configuration_signature") == configuration_signature(original)
