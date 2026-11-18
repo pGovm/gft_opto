@@ -27,7 +27,7 @@ from gft_opto.gui.layout_io import build_scene, scene_data, library_from_layout
 from gft_opto.gui.substation_gui import SubstationGuiMockup
 from gft_opto.gui.symbols import (
     BusItem, CircuitBreakerItem, ConnectionItem, EQUIPMENT_DEFS, OneLineSymbolItem,
-    make_user_equipment, CurrentTransformerItem, GroundItem,
+    make_user_equipment, CurrentTransformerItem, GroundItem, JunctionItem,
 )
 from gft_opto.logic.protection_study import topology_signature, configuration_signature
 from gft_opto.gui.zone_dialog import ZoneDialog
@@ -274,7 +274,12 @@ class GuiWorkflows(unittest.TestCase):
 
     def test_netlist_pdf_export(self):
         w = self.window
-        self.add_breaker()
+        breaker = self.add_breaker()
+        breaker.properties.update(trip_coil_1_a=12.0, coil_current_basis="per_mechanism",
+                                  trip_coil_1_supply="DC 1", symbol_type="breaker")
+        junction = JunctionItem()
+        w.workspace_scene.addItem(junction)
+        w.workspace_scene.addItem(ConnectionItem(breaker, "right", junction, "node"))
         path = Path(self.temp.name) / "netlist.pdf"
         with patch("gft_opto.gui.substation_gui.QFileDialog.getSaveFileName", return_value=(str(path), "")):
             w._on_save_netlist_pdf()
@@ -282,8 +287,17 @@ class GuiWorkflows(unittest.TestCase):
         with pymupdf.open(path) as document:
             text = "".join(page.get_text() for page in document)
         self.assertIn("Netlist:", text)
-        self.assertIn("Components", text)
+        self.assertIn("Components: 1", text)
         self.assertNotIn("•", text)
+        # Equipment only: no junction dots and no wiring list.
+        self.assertNotIn(junction.instance_id, text)
+        self.assertNotIn("Connections", text)
+        # Readable property names with units in parentheses, readable values.
+        for readable in ("Trip Coil 1 (A): 12", "Coil current basis: Per mechanism",
+                         "Trip Coil 1 supply: DC 1", "Symbol: Circuit Breaker"):
+            self.assertIn(readable, text)
+        for raw in ("trip_coil_1_a", "per_mechanism", "symbol_type"):
+            self.assertNotIn(raw, text)
         self.assertIn("Netlist PDF saved:", w.footer_status_label.text())
 
     def test_netlist_json_import_rebuilds_diagram(self):

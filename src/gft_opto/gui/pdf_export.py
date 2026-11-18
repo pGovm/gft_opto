@@ -6,8 +6,46 @@ from PySide6.QtGui import QTextDocument
 from PySide6.QtPrintSupport import QPrinter
 from PySide6.QtWidgets import QFileDialog, QMessageBox
 from gft_opto.gui import messages
+from gft_opto.gui.symbols import BUILTIN_SYMBOLS
 from html import escape
 from pathlib import Path
+
+# Netlist PDF: readable property names (units in parentheses) and setting values.
+PROPERTY_LABELS = {
+    "symbol_type": "Symbol", "status": "Status", "rating_kv": "Rating (kV)",
+    "trip_coil_1_a": "Trip Coil 1 (A)", "trip_coil_2_a": "Trip Coil 2 (A)", "close_coil_a": "Close Coil (A)",
+    "motor_inrush_a": "Motor Inrush (A)", "motor_run_a": "Motor Run (A)",
+    "coil_current_basis": "Coil current basis", "mechanism_arrangement": "Mechanisms", "pole_count": "Poles",
+    "trip_coil_1_supply": "Trip Coil 1 supply", "trip_coil_2_supply": "Trip Coil 2 supply",
+    "close_coil_supply": "Close Coil supply", "motor_supply": "Motor supply",
+}
+SETTING_VALUES = {
+    "whole_breaker": "Whole breaker", "per_mechanism": "Per mechanism",
+    "shared": "Shared mechanism", "independent": "Independent per pole",
+}
+UNIT_SUFFIXES = (("_kv", "kV"), ("_a", "A"))
+
+
+def property_label(key):
+    if key in PROPERTY_LABELS:
+        return PROPERTY_LABELS[key]
+    text, unit = str(key), ""
+    for suffix, name in UNIT_SUFFIXES:
+        if text.endswith(suffix):
+            text, unit = text[: -len(suffix)], f" ({name})"
+            break
+    text = text.replace("_", " ").strip()
+    return (text[:1].upper() + text[1:] + unit) if text else str(key)
+
+
+def property_value(key, value):
+    if isinstance(value, bool):
+        return "Yes" if value else "No"
+    if isinstance(value, (int, float)):
+        return f"{value:g}"
+    if key == "symbol_type":
+        return BUILTIN_SYMBOLS.get(value, {}).get("label", "Custom" if value == "custom" else str(value))
+    return SETTING_VALUES.get(value, str(value))
 
 
 class PdfExportMixin:
@@ -240,12 +278,14 @@ class PdfExportMixin:
     def _on_save_netlist_pdf(self):
         netlist = self._build_current_netlist()
         self.last_netlist = netlist
+        # Junction dots are wire-drawing helpers, not equipment, and wiring
+        # detail is left out of this equipment list.
+        components = [c for c in netlist.get("components", []) if c.get("type") != "junction"]
         component_rows = []
-        for component in netlist.get("components", []):
+        for component in components:
             properties = component.get("properties") or {}
             property_text = "<br>".join(
-                f"<b>{escape(str(key))}:</b> "
-                f"{escape(str(value))}"
+                f"<b>{escape(property_label(key))}:</b> {escape(property_value(key, value))}"
                 for key, value in properties.items()
             ) or "None"
             ports = ", ".join(str(port) for port in component.get("ports", []))
@@ -260,27 +300,6 @@ class PdfExportMixin:
             )
         component_table = "".join(component_rows) or (
             "<tr><td colspan='5'>No components in this netlist.</td></tr>"
-        )
-
-        connection_rows = []
-        for connection in netlist.get("connections", []):
-            source = connection.get("from", {})
-            target = connection.get("to", {})
-            source_label = (
-                f"{source.get('component', '')} ({source.get('port', '')})"
-            )
-            target_label = (
-                f"{target.get('component', '')} ({target.get('port', '')})"
-            )
-            connection_rows.append(
-                "<tr>"
-                f"<td>{escape(str(connection.get('id', '')))}</td>"
-                f"<td>{escape(str(source_label))}</td>"
-                f"<td>{escape(str(target_label))}</td>"
-                "</tr>"
-            )
-        connection_table = "".join(connection_rows) or (
-            "<tr><td colspan='3'>No connections in this netlist.</td></tr>"
         )
         html = f"""
         <html>
@@ -300,19 +319,13 @@ class PdfExportMixin:
         <body>
           <h1>Netlist: {escape(str(netlist.get('project_name', 'Untitled Project')))}</h1>
           <p><b>Schema version:</b> {escape(str(netlist.get('schema_version', 'N/A')))}
-            &nbsp; <b>Components:</b> {len(netlist.get('components', []))}
-            &nbsp; <b>Connections:</b> {len(netlist.get('connections', []))}</p>
+            &nbsp; <b>Components:</b> {len(components)}</p>
           <h2>Components</h2>
           <table>
             <thead><tr>
               <th>ID</th><th>Name</th><th>Type</th><th>Properties</th><th>Ports</th>
             </tr></thead>
             <tbody>{component_table}</tbody>
-          </table>
-          <h2>Connections</h2>
-          <table>
-            <thead><tr><th>ID</th><th>From</th><th>To</th></tr></thead>
-            <tbody>{connection_table}</tbody>
           </table>
         </body>
         </html>
