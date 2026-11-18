@@ -197,6 +197,10 @@ class SuppliedLayout(unittest.TestCase):
 
     def test_old_demo_confirmation_needs_explicit_review(self):
         net, zones = self.fixture()
+        # Exercise an old approval independently of the fixture's current status.
+        for zone in zones:
+            zone["confirmed"] = True
+            zone["topology_signature"] = "ct-study-v1:retired-approval"
         before = copy.deepcopy((net, zones))
         result = study.evaluate_zones(net, zones)
         self.assertFalse(result["complete"])
