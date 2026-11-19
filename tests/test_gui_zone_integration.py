@@ -172,7 +172,8 @@ class GuiZoneIntegration(unittest.TestCase):
         self.assertEqual({index.row() for index in dialog.actions.selectedIndexes()}, {0, 2})
         focus = self.app.focusWidget()
         self.assertTrue(focus is dialog.actions or dialog.actions.isAncestorOf(focus))
-        QTest.keyClick(focus, Qt.Key.Key_Delete)
+        with patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes):
+            QTest.keyClick(focus, Qt.Key.Key_Delete)
         self.assertEqual(dialog.actions.rowCount(), 1)
         dialog.capture()
         action = dialog.zones[0]["actions"][0]
@@ -184,6 +185,76 @@ class GuiZoneIntegration(unittest.TestCase):
         stage = report["zones"][0]["scenarios"][0]
         self.assertEqual(stage["peak_current_A"], 7.25)
         self.assertEqual(stage["loads"][0]["name"], "Panel heater DC")
+
+    def test_shift_click_selects_load_range_and_ctrl_click_adds_a_row(self):
+        self.example()
+        dialog = self.dialog()
+        self.show_active(dialog)
+        for _ in range(4):
+            dialog.add_action()
+        QTest.mouseClick(dialog.load_rows[0].multiplier, Qt.MouseButton.LeftButton)
+        QTest.mouseClick(dialog.load_rows[3].multiplier, Qt.MouseButton.LeftButton,
+                         Qt.KeyboardModifier.ShiftModifier)
+        self.assertEqual({i.row() for i in dialog.actions.selectedIndexes()}, {0, 1, 2, 3})
+        # A second Shift-click still uses the original anchor.
+        QTest.mouseClick(dialog.load_rows[1].multiplier, Qt.MouseButton.LeftButton,
+                         Qt.KeyboardModifier.ShiftModifier)
+        self.assertEqual({i.row() for i in dialog.actions.selectedIndexes()}, {0, 1})
+        header = dialog.actions.verticalHeader()
+        position = QPoint(header.width() // 2,
+                          header.sectionViewportPosition(4) + header.sectionSize(4) // 2)
+        with patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes) as prompt:
+            QTest.mouseClick(header.viewport(), Qt.MouseButton.LeftButton,
+                             Qt.KeyboardModifier.ControlModifier, position)
+            prompt.assert_not_called()
+            self.assertEqual({i.row() for i in dialog.actions.selectedIndexes()}, {0, 1, 4})
+            self.assertTrue(dialog.delete_loads_button.isEnabled())
+            QTest.mouseClick(dialog.delete_loads_button, Qt.MouseButton.LeftButton)
+        prompt.assert_called_once()
+        self.assertEqual(dialog.actions.rowCount(), 2)
+
+    def test_row_number_clicks_select_without_opening_delete_confirmation(self):
+        self.example()
+        dialog = self.dialog()
+        self.show_active(dialog)
+        for _ in range(3):
+            dialog.add_action()
+        header = dialog.actions.verticalHeader()
+        with patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.No) as prompt:
+            for row, modifiers in ((0, Qt.KeyboardModifier.NoModifier),
+                                   (2, Qt.KeyboardModifier.ShiftModifier)):
+                point = QPoint(10, header.sectionViewportPosition(row) + header.sectionSize(row) // 2)
+                QTest.mouseClick(header.viewport(), Qt.MouseButton.LeftButton, modifiers, point)
+            prompt.assert_not_called()
+            self.assertEqual({i.row() for i in dialog.actions.selectedIndexes()}, {0, 1, 2})
+            self.assertEqual(dialog.actions.rowCount(), 4)
+            QTest.keyClick(dialog.actions, Qt.Key.Key_Delete)
+            prompt.assert_called_once()
+            self.assertEqual(dialog.actions.rowCount(), 4)
+
+    def test_selected_rows_are_highlighted_and_deleted_together(self):
+        self.example()
+        dialog = self.dialog()
+        self.show_active(dialog)
+        dialog.add_action()
+        dialog.add_action()
+        self.app.processEvents()
+        header = dialog.actions.verticalHeader()
+        for row, modifiers in ((0, Qt.KeyboardModifier.NoModifier),
+                               (2, Qt.KeyboardModifier.ControlModifier)):
+            point = QPoint(10, header.sectionViewportPosition(row) + header.sectionSize(row) // 2)
+            QTest.mouseClick(header.viewport(), Qt.MouseButton.LeftButton, modifiers, point)
+        self.assertEqual(dialog._selected_load_rows(), {0, 2})
+        self.assertEqual(dialog.actions.verticalHeader().selected_rows, {0, 2})
+        for row in (0, 2):
+            self.assertTrue(dialog.load_rows[row].equipment.property("loadSelected"))
+            self.assertTrue(dialog.load_rows[row].multiplier.property("loadSelected"))
+        self.assertFalse(dialog.load_rows[1].equipment.property("loadSelected"))
+        self.assertEqual(dialog.delete_loads_button.text(), "Delete Selected Loads (2)")
+        with patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes) as prompt:
+            QTest.mouseClick(dialog.delete_loads_button, Qt.MouseButton.LeftButton)
+        prompt.assert_called_once()
+        self.assertEqual(dialog.actions.rowCount(), 1)
 
     def test_delete_and_backspace_inside_load_text_fields_edit_text_not_rows(self):
         self.example()
@@ -212,7 +283,7 @@ class GuiZoneIntegration(unittest.TestCase):
         self.assertEqual(supply.text(), "DC 1")
         self.assertEqual(dialog.actions.rowCount(), rows)
 
-    def test_minus_on_a_row_number_deletes_only_that_load_and_needs_review(self):
+    def test_delete_button_confirms_selected_load_and_preserves_cancelled_row(self):
         self.example()
         dialog = self.dialog()
         dialog.show()
@@ -225,6 +296,14 @@ class GuiZoneIntegration(unittest.TestCase):
         middle = header.sectionViewportPosition(1) + header.sectionSize(1) // 2
         QTest.mouseClick(header.viewport(), Qt.MouseButton.LeftButton,
                          Qt.KeyboardModifier.NoModifier, QPoint(header.width() // 2, middle))
+        with patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.No) as prompt:
+            dialog.delete_loads_button.click()
+        prompt.assert_called_once()
+        self.assertEqual(prompt.call_args.args[-1], QMessageBox.StandardButton.No)
+        self.assertEqual(dialog.actions.rowCount(), 3)
+        self.assertTrue(dialog.confirmed.isChecked())
+        with patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes):
+            dialog.delete_loads_button.click()
         self.assertEqual(dialog.actions.rowCount(), 2)
         self.assertFalse(dialog.confirmed.isChecked())
         dialog.capture()

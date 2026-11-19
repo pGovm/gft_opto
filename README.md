@@ -142,9 +142,9 @@ be reviewed after pasting. Copy/paste inside text fields still edits text normal
    configured operating stage in that zone. A 10 A trip stage plus a 5 A Other
    load totals 15 A. A zone containing only Other loads has a **Background load**
    stage. Legacy miscellaneous entries use the same background behavior.
-   Hover over a row number to reveal **−**, then click it to delete that load.
-   The table supports cell selection and column-header selection, with Shift
-   and Ctrl for selecting multiple cells. Press **Delete** or **Backspace** to
+   Click row numbers to select loads. Shift-click selects a range and Ctrl-click
+   adds or removes individual rows. **Delete Selected Loads** asks for confirmation
+   before removing the selection. Press **Delete** or **Backspace** to
    remove every load row with a selected cell; inside a text field these keys
    edit the text as usual.
 6. Check the verification box for each zone after reviewing its assignments,

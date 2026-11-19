@@ -180,3 +180,6 @@ PROTECTION_ZONES_BOUNDARY_TYPES_MUST_CONTAIN_CLASSES = 'boundary_types must cont
 PROTECTION_ZONES_EXPECTED_A_CONNECTIONS_METHOD = '{0}: expected a connections() method'
 PROTECTION_ZONES_EVERY_ZONE_MUST_HAVE_A_NONEMPTY_STRING_ZONE_ID = 'Every zone must have a nonempty string zone_id'
 PROTECTION_ZONES_CORE_AND_BOUNDARY_COMPONENTS_MUST_BE_DISJOINT = '{0}: core and boundary components must be disjoint'
+ZONE_DIALOG_DELETE_LOADS_TITLE = "Delete Operating Loads"
+ZONE_DIALOG_DELETE_ONE_LOAD = "Delete the operating load in row {0}?"
+ZONE_DIALOG_DELETE_MULTIPLE_LOADS = "Delete the {0} selected operating loads?"

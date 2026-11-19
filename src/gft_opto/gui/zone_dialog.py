@@ -6,7 +6,7 @@ from gft_opto.gui import messages
 import copy
 import uuid
 
-from PySide6.QtCore import Qt, QEvent, QPoint, QItemSelectionModel, Signal
+from PySide6.QtCore import Qt, QEvent, QPoint, QItemSelectionModel
 from PySide6.QtGui import QColor, QKeySequence, QPalette, QShortcut
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QHBoxLayout,
@@ -24,43 +24,20 @@ from gft_opto.gui.theme import SCROLLBAR_STYLE
 from gft_opto.gui.operating_loads import OperatingLoadRow
 
 
-class _LoadRowHeader(QHeaderView):
-    delete_requested = Signal(int)
-
+class _SelectedLoadHeader(QHeaderView):
     def __init__(self, parent):
         super().__init__(Qt.Orientation.Vertical, parent)
-        self.hovered_row = -1
-        self.setMouseTracking(True)
-        self.setToolTip("Click the minus sign to delete this load, or select loads and press Delete")
-
-    def mouseMoveEvent(self, event):
-        self.hovered_row = self.logicalIndexAt(event.position().toPoint())
-        self.viewport().update()
-        super().mouseMoveEvent(event)
-
-    def leaveEvent(self, event):
-        self.hovered_row = -1
-        self.viewport().update()
-        super().leaveEvent(event)
+        self.selected_rows = set()
 
     def paintSection(self, painter, rect, logical_index):
-        super().paintSection(painter, rect, logical_index)
-        if logical_index == self.hovered_row:
-            painter.save()
-            painter.fillRect(rect.adjusted(1, 1, -1, -1), QColor("#fde8e8"))
-            painter.setPen(QColor("#9b1c1c"))
-            painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, "\u2212")
-            painter.restore()
-
-    def mousePressEvent(self, event):
-        row = self.logicalIndexAt(event.position().toPoint())
-        if event.button() == Qt.MouseButton.LeftButton and row >= 0:
-            self.hovered_row = -1
-            self.delete_requested.emit(row)
-            self.viewport().update()
-            event.accept()
+        if logical_index not in self.selected_rows:
+            super().paintSection(painter, rect, logical_index)
             return
-        super().mousePressEvent(event)
+        painter.save()
+        painter.fillRect(rect, QColor("#006a4e"))
+        painter.setPen(QColor("#ffffff"))
+        painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, str(logical_index + 1))
+        painter.restore()
 
 
 class ZoneDialog(QDialog):
@@ -201,13 +178,12 @@ class ZoneDialog(QDialog):
         settings_layout.addWidget(self.cts)
         loads_layout.addWidget(QLabel(messages.ZONE_DIALOG_OPERATING_LOADS_USE_A_SEPARATE_STAGE_FOR_RECLOSE_MOTOR))
         self.load_rows = []
+        self._load_selection_anchor = None
         self.actions = QTableWidget(0, 6)
-        row_header = _LoadRowHeader(self.actions)
-        self.actions.setVerticalHeader(row_header)
-        row_header.delete_requested.connect(self._delete_load_row)
+        self.actions.setVerticalHeader(_SelectedLoadHeader(self.actions))
         self.actions.setHorizontalHeaderLabels(["Equipment", "Load", "Stage", "DC supply", "Operation", "Multiplier"])
         self.actions.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-        self.actions.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectItems)
+        self.actions.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         # Delete or Backspace removes the selected load rows. Text fields in the
         # table claim these keys first, so typing still edits the text.
         for key in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
@@ -216,6 +192,7 @@ class ZoneDialog(QDialog):
             shortcut.activated.connect(self.remove_action)
         self.actions.horizontalHeader().setSectionsClickable(True)
         self.actions.verticalHeader().setSectionsClickable(True)
+        self.actions.verticalHeader().viewport().installEventFilter(self)
         self.actions.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.actions.verticalHeader().setDefaultSectionSize(44)
         self.actions.ensurePolished()
@@ -234,6 +211,11 @@ class ZoneDialog(QDialog):
         add_load = QPushButton("Add Load")
         add_load.clicked.connect(lambda: self.add_action())
         row.addWidget(add_load)
+        self.delete_loads_button = QPushButton("Delete Selected Loads")
+        self.delete_loads_button.setEnabled(False)
+        self.delete_loads_button.clicked.connect(self.remove_action)
+        self.actions.itemSelectionChanged.connect(self._sync_delete_load_button)
+        row.addWidget(self.delete_loads_button)
         right.addLayout(row)
         self.confirmed = QCheckBox("I have verified this zone's CT boundaries and operating actions")
         right.addWidget(self.confirmed)
@@ -293,6 +275,11 @@ class ZoneDialog(QDialog):
             QDoubleSpinBox QLineEdit {
                 background-color: #ffffff; color: #1f2933;
                 selection-background-color: #006a4e; selection-color: #ffffff;
+            }
+            QWidget[loadSelected="true"], QLineEdit[loadSelected="true"],
+            QComboBox[loadSelected="true"], QDoubleSpinBox[loadSelected="true"] {
+                background-color: #d9eee5; color: #1f2933;
+                border: 1px solid #006a4e;
             }
             QTableCornerButton::section, QHeaderView::section {
                 background-color: #e8edf2; color: #1f2933;
@@ -455,6 +442,7 @@ class ZoneDialog(QDialog):
 
     def select_zone(self, index):
         self.capture()
+        self._load_selection_anchor = None
         self.active = index
         if index < 0:
             return
@@ -597,23 +585,49 @@ class ZoneDialog(QDialog):
         self.unconfirm()
 
     def eventFilter(self, watched, event):
-        if event.type() in (QEvent.Type.FocusIn, QEvent.Type.MouseButtonPress) and hasattr(self, "actions"):
+        if event.type() == QEvent.Type.MouseButtonPress and hasattr(self, "actions"):
+            header = self.actions.verticalHeader()
+            if watched is header.viewport():
+                row = header.logicalIndexAt(event.position().toPoint())
+                if row >= 0 and event.button() == Qt.MouseButton.LeftButton:
+                    self._select_load_rows(row, event.modifiers())
+                    return True
             index = self.actions.indexAt(watched.mapTo(self.actions.viewport(), QPoint(0, 0)))
             if index.isValid():
                 flags = QItemSelectionModel.SelectionFlag.NoUpdate
                 if event.type() == QEvent.Type.MouseButtonPress:
-                    if event.modifiers() & Qt.KeyboardModifier.ShiftModifier and self.actions.currentRow() >= 0:
-                        self.actions.setRangeSelected(QTableWidgetSelectionRange(
-                            min(index.row(), self.actions.currentRow()),
-                            min(index.column(), self.actions.currentColumn()),
-                            max(index.row(), self.actions.currentRow()),
-                            max(index.column(), self.actions.currentColumn())), True)
-                    else:
-                        flags = (QItemSelectionModel.SelectionFlag.Toggle
-                                 if event.modifiers() & Qt.KeyboardModifier.ControlModifier
-                                 else QItemSelectionModel.SelectionFlag.ClearAndSelect)
-                self.actions.setCurrentCell(index.row(), index.column(), flags)
+                    if event.button() == Qt.MouseButton.LeftButton and event.modifiers() & (
+                            Qt.KeyboardModifier.ShiftModifier | Qt.KeyboardModifier.ControlModifier):
+                        self._select_load_rows(index.row(), event.modifiers())
+                        return True
+                    self._load_selection_anchor = index.row()
+                    flags = QItemSelectionModel.SelectionFlag.ClearAndSelect
+                self.actions.selectionModel().setCurrentIndex(index, QItemSelectionModel.SelectionFlag.NoUpdate)
+                self.actions.selectionModel().select(index, flags | QItemSelectionModel.SelectionFlag.Rows)
         return super().eventFilter(watched, event)
+
+    def _select_load_rows(self, row, modifiers):
+        selection = self.actions.selectionModel().selection()
+        self.actions.setFocus()
+        self.actions.selectionModel().setCurrentIndex(
+            self.actions.model().index(row, 0), QItemSelectionModel.SelectionFlag.NoUpdate)
+        self.actions.selectionModel().select(selection, QItemSelectionModel.SelectionFlag.ClearAndSelect)
+        if modifiers & Qt.KeyboardModifier.ShiftModifier:
+            anchor = self._load_selection_anchor
+            if anchor is None or anchor >= self.actions.rowCount():
+                anchor = row
+                self._load_selection_anchor = row
+            if not modifiers & Qt.KeyboardModifier.ControlModifier:
+                self.actions.clearSelection()
+            self.actions.setRangeSelected(QTableWidgetSelectionRange(
+                min(row, anchor), 0, max(row, anchor), self.actions.columnCount() - 1), True)
+        else:
+            index = self.actions.model().index(row, 0)
+            flags = (QItemSelectionModel.SelectionFlag.Toggle
+                     if modifiers & Qt.KeyboardModifier.ControlModifier
+                     else QItemSelectionModel.SelectionFlag.ClearAndSelect)
+            self.actions.selectionModel().select(index, flags | QItemSelectionModel.SelectionFlag.Rows)
+            self._load_selection_anchor = row
 
     def _update_action_preview(self, equipment, load, operation, supply, multiplier):
         component = self.components.get(equipment.currentData())
@@ -648,20 +662,49 @@ class ZoneDialog(QDialog):
             multiplier.setToolTip(str(error))
 
     def remove_action(self):
-        rows = {index.row() for index in self.actions.selectedIndexes()}
-        if not rows and self.actions.currentRow() >= 0:
-            rows.add(self.actions.currentRow())
+        self._confirm_delete_loads(self._selected_load_rows())
+
+    def _selected_load_rows(self):
+        return {index.row() for index in self.actions.selectionModel().selectedRows()}
+
+    def _sync_delete_load_button(self, *_):
+        selected = self._selected_load_rows()
+        count = len(selected)
+        self.delete_loads_button.setEnabled(count > 0)
+        self.delete_loads_button.setText(f"Delete Selected Loads ({count})" if count else "Delete Selected Loads")
+        header = self.actions.verticalHeader()
+        header.selected_rows = selected
+        header.viewport().update()
+        for row in range(self.actions.rowCount()):
+            for column in range(6):
+                cell = self.actions.cellWidget(row, column)
+                if cell is None:
+                    continue
+                for widget in [cell, *cell.findChildren(QWidget)]:
+                    active = row in selected
+                    if widget.property("loadSelected") != active:
+                        widget.setProperty("loadSelected", active)
+                        widget.style().unpolish(widget)
+                        widget.style().polish(widget)
+                        widget.update()
+
+    def _confirm_delete_loads(self, rows):
+        if not rows:
+            return
+        prompt = (messages.ZONE_DIALOG_DELETE_ONE_LOAD.format(next(iter(rows)) + 1)
+                  if len(rows) == 1 else messages.ZONE_DIALOG_DELETE_MULTIPLE_LOADS.format(len(rows)))
+        answer = QMessageBox.question(
+            self, messages.ZONE_DIALOG_DELETE_LOADS_TITLE, prompt,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No)
+        if answer != QMessageBox.StandardButton.Yes:
+            return
         for row in sorted(rows, reverse=True):
             self.actions.removeRow(row)
             self.load_rows.pop(row)
-        if rows:
-            self.unconfirm()
-
-    def _delete_load_row(self, row):
-        if 0 <= row < self.actions.rowCount():
-            self.actions.removeRow(row)
-            self.load_rows.pop(row)
-            self.unconfirm()
+        self._load_selection_anchor = None
+        self._sync_delete_load_button()
+        self.unconfirm()
 
     def add_zone(self):
         self.capture()
