@@ -29,7 +29,7 @@ from gft_opto.logic.protection_zones import (
 LOADS = dict(NETLIST_PROPERTY_LOAD_MAP)
 STAGES = ("Primary trip", "Backup trip", "Breaker failure", "Reclose", "Motor inrush", "Motor run")
 ZONE_KINDS = ("Bus", "Transformer", "Line", "Manual")
-_PASSIVE = {"ct", "pt", "ground", "junction", "bus", "surge_arrester", "incoming_line", "line_trap"}
+_PASSIVE = {"ct", "pt", "ground", "junction", "bus", "surge_arrester", "incoming_line", "line_trap", "xfmr_2w", "xfmr_3w"}
 
 
 def kind(component: dict) -> str:
