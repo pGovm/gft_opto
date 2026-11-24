@@ -75,19 +75,6 @@ uv sync --locked
 uv run gft-opto
 ```
 
-## Try it
-
-1. Click **Open** and choose `tests/layouts/two_zone_demo.json`.
-2. On the **Analysis** tab, click **Run Evaluation**.
-3. Click **Export Results** on the **File** tab to save the PDF report.
-
-The other sample layouts in `tests/layouts` are rebuilt from real one-line
-drawings and use assigned sample currents, not manufacturer data.
-
-For your own station: **Import PDF**, draw and connect the equipment, enter the
-currents in the properties panel, then use **Configure Zones** to review and
-verify each zone before running the evaluation.
-
 ## User guide
 
 ### The ribbon
@@ -110,6 +97,8 @@ verify each zone before running the evaluation.
   positions, sizes, rotations, bus taps, connections and grid settings.
   Opening it restores everything exactly as saved.
 - You're asked to save unsaved changes before closing or replacing a layout.
+- A new layout starts with an empty **Equipment Library**. Add equipment with
+  **Create Component**, then drag it from the library onto the drawing.
 - Opening a layout adds its components to the **Equipment Library**, with their
   electrical and breaker settings. Identical components are listed once.
   Junction dots are wire-editing helpers and are not added.
@@ -150,8 +139,10 @@ verify each zone before running the evaluation.
 
 ### Running a study
 
-**1. Draw the one-line.** Import the PDF, rebuild the drawing with connected
-equipment, and enter coil and motor currents in the properties panel.
+**1. Draw the one-line.** Click **New**, then **Import PDF**. A new layout's
+Equipment Library is empty, so use **Create Component** (Edit tab) to add each
+type of equipment, then drag it from the library onto the drawing. Connect the
+equipment and enter coil and motor currents in the properties panel.
 
 **2. Run Evaluation.** If the layout has no zones yet, the tool proposes bus,
 transformer and line zones (see [How zones are detected](#how-zones-are-detected)).
