@@ -36,7 +36,7 @@ cat > "$desktop_file" <<EOF
 
 [Desktop Entry]
 Type=Application
-Name=GFT_OPTO
+Name=GFT_Analysis_Tool
 Comment=Substation Momentary DC Load Calculator
 Exec="$root/.venv/bin/gft-opto"
 Path=$root
@@ -58,4 +58,4 @@ if [ -d "$desktop_dir" ]; then
     gio set "$desktop_dir/gft-opto.desktop" metadata::trusted true 2>/dev/null || true
 fi
 
-echo "Setup complete. Start GFT_OPTO from the applications menu or desktop, or run: uv run gft-opto"
+echo "Setup complete. Start GFT_Analysis_Tool from the applications menu or desktop, or run: uv run gft-opto"

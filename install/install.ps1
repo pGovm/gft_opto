@@ -1,4 +1,4 @@
-# install.ps1 - sets up GFT_OPTO on Windows
+# install.ps1 - sets up GFT_Analysis_Tool on Windows
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
@@ -8,7 +8,7 @@ function Assert-LastExit($step) {
     if ($LASTEXITCODE -ne 0) { throw "$step failed (exit code $LASTEXITCODE)." }
 }
 
-Write-Host "== GFT_OPTO setup ==" -Foreground Cyan
+Write-Host "== GFT_Analysis_Tool setup ==" -Foreground Cyan
 
 # 1. uv: the package manager. It also downloads Python if none is installed.
 if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
@@ -35,7 +35,9 @@ Assert-LastExit "Import check"
 
 #4. Desktop shortcut. pythonw.exe starts the app without a console window
 $desktop = [Environment]::GetFolderPath('Desktop')
-$shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path $desktop 'GFT_OPTO.lnk'))
+# Replace the shortcut created under the app's previous name.
+Remove-Item (Join-Path $desktop 'GFT_OPTO.lnk') -ErrorAction SilentlyContinue
+$shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path $desktop 'GFT_Analysis_Tool.lnk'))
 $shortcut.TargetPath        = Join-Path $root '.venv\Scripts\pythonw.exe'
 $shortcut.Arguments         = '-m gft_opto.gui.substation_gui'
 $shortcut.WorkingDirectory  = $root
@@ -45,4 +47,4 @@ $shortcut.Save()
 
 Write-Host ""
 Write-Host "Setup Complete!" -ForegroundColor Green
-Write-Host "Start the app from the 'GFT_OPTO' desktop shortcut, or run: uv run gft-opto"
+Write-Host "Start the app from the 'GFT_Analysis_Tool' desktop shortcut, or run: uv run gft-opto"

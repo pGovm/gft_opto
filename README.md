@@ -1,4 +1,4 @@
-# Substation Momentary DC Load Calculator
+# GFT_Analysis_Tool
 
 A desktop tool for working out the momentary DC current a substation's station
 battery must supply when protection operates. You rebuild the station's one-line
@@ -35,7 +35,7 @@ uv sync --locked --group package
 .venv/Scripts/python.exe install/build_portable.py
 ```
 
-Extract `dist/GFT-OPTO-Windows-Portable.zip` and launch **GFT OPTO.exe** inside
+Extract `dist/GFT_Analysis_Tool-Windows-Portable.zip` and launch **GFT_Analysis_Tool.exe** inside
 the extracted folder. Keep `_internal` beside the executable. Runtime use needs
 no Python installation, PowerShell setup, or package downloads. Save work to a
 writable folder. The package is unsigned; organizational execution policies may
@@ -53,7 +53,7 @@ application source, and the installed libraries' supplied notices.
    use an approved portable package.
 4. Wait for "Setup Complete!". The first run needs an internet connection and
    can take a few minutes; Python is downloaded automatically if needed.
-5. Start the app from the new **GFT_OPTO** shortcut on your desktop. After setup,
+5. Start the app from the new **GFT_Analysis_Tool** shortcut on your desktop. After setup,
    the app works offline.
 
 ### Linux
@@ -64,7 +64,7 @@ Extract the zip, open a terminal in the extracted folder and run:
 bash install/install.sh
 ```
 
-Then start **GFT_OPTO** from the applications menu or desktop.
+Then start **GFT_Analysis_Tool** from the applications menu or desktop.
 
 ### Running from source
 

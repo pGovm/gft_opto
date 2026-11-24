@@ -4,7 +4,7 @@ from gft_opto.gui.project_files import ProjectFilesMixin
 # Builds the main application window and connects editing, layout files, zone studies, and report export.
 
 """
-AI-Assisted Substation Design Tool — main window.
+GFT_Analysis_Tool — main window.
 
 The canvas, symbols, wires, and undo commands live in sibling modules.
 This file builds the panels around the workspace and starts the application.
@@ -220,7 +220,7 @@ class SubstationGuiMockup(ProjectFilesMixin, EvaluationViewMixin, PdfExportMixin
         self._zone_overlays = []
         self._zone_report = None
         self._zones_visible = True
-        self.setWindowTitle("AI-Assisted Substation Design Tool")
+        self.setWindowTitle("GFT_Analysis_Tool")
         self.setWindowIcon(QIcon(str(GFT_ICON_PATH)))
         self.setMinimumSize(1000, 700)
         self._apply_stylesheet()
@@ -447,7 +447,7 @@ class SubstationGuiMockup(ProjectFilesMixin, EvaluationViewMixin, PdfExportMixin
         if self._loading:
             return
         data = self._layout_data()
-        self.setWindowTitle(f"{data['project']}{' *' if data != self._saved_snapshot else ''} — Substation Design Tool")
+        self.setWindowTitle(f"{data['project']}{' *' if data != self._saved_snapshot else ''} — GFT_Analysis_Tool")
         if self.last_result is not None and data != self._evaluated_snapshot:
             self._invalidate_results()
 
@@ -560,7 +560,7 @@ class SubstationGuiMockup(ProjectFilesMixin, EvaluationViewMixin, PdfExportMixin
         logo.setToolTip("GFT Inc")
         logo.setStyleSheet("background: transparent; border: none;")
 
-        title = QLabel("AI-Assisted Substation Protection & Control Design")
+        title = QLabel("GFT_Analysis_Tool")
         title.setObjectName("appTitle")
         title.setWordWrap(True)
         title.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)

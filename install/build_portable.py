@@ -38,8 +38,8 @@ def main():
         )))
         subprocess.run([sys.executable, "-m", "PyInstaller", "--clean", "--noconfirm",
                         "gft-opto-portable.spec"], cwd=ROOT, env=build_env, check=True)
-    bundle = ROOT / "dist" / "GFT OPTO Portable"
-    if not (bundle / "GFT OPTO.exe").is_file():
+    bundle = ROOT / "dist" / "GFT_Analysis_Tool_Portable"
+    if not (bundle / "GFT_Analysis_Tool.exe").is_file():
         raise FileNotFoundError("Build the portable application first.")
     layouts = bundle / "One-Line Layouts"
     layouts.mkdir(exist_ok=True)
@@ -83,7 +83,7 @@ def main():
         "layouts": len(LAYOUTS), "signed": False,
     }
     (bundle / "BUILD INFO.json").write_text(json.dumps(info, indent=2), encoding="utf-8")
-    output = Path(shutil.make_archive(str(ROOT / "dist" / "GFT-OPTO-Windows-Portable"),
+    output = Path(shutil.make_archive(str(ROOT / "dist" / "GFT_Analysis_Tool-Windows-Portable"),
                                      "zip", root_dir=bundle.parent, base_dir=bundle.name))
     with output.open("rb") as handle:
         digest = hashlib.file_digest(handle, "sha256").hexdigest()

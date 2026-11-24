@@ -18,7 +18,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='GFT OPTO',
+    name='GFT_Analysis_Tool',
     icon='src/gft_opto/assets/gft_icon.ico',
     debug=False,
     strip=False,
@@ -31,5 +31,5 @@ coll = COLLECT(
     a.datas,
     strip=False,
     upx=False,
-    name='GFT OPTO Portable',
+    name='GFT_Analysis_Tool_Portable',
 )

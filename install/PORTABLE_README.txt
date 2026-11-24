@@ -1,9 +1,9 @@
-GFT OPTO - Portable Windows Application
+GFT_Analysis_Tool - Portable Windows Application
 
 STARTING THE APPLICATION
 1. Extract the entire ZIP to a folder your organization allows you to run from.
-2. Open the extracted "GFT OPTO Portable" folder.
-3. Double-click "GFT OPTO.exe".
+2. Open the extracted "GFT_Analysis_Tool_Portable" folder.
+3. Double-click "GFT_Analysis_Tool.exe".
 
 Keep the executable and its _internal folder together. Do not run inside the ZIP.
 Python, uv, PowerShell, administrator access, and Internet downloads are not
@@ -33,4 +33,4 @@ From the repository, install packaging dependencies:
   uv sync --locked --group package
 Then build and package:
   .venv\Scripts\python.exe install\build_portable.py
-The resulting ZIP is dist\GFT-OPTO-Windows-Portable.zip.
+The resulting ZIP is dist\GFT_Analysis_Tool-Windows-Portable.zip.
