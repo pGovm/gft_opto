@@ -254,9 +254,31 @@ def _label(item) -> str:
     return str(method() if callable(method) else item.instance_id)
 
 
+def is_transfer_bus(component: dict) -> bool:
+    if kind(component) != "bus":
+        return False
+    properties = component.get("properties", {})
+    label = component.get("label") or component.get("display_id") or component.get("name", "")
+    return properties.get("bus_role") == "transfer" or "transfer bus" in str(label).lower()
+
+
+def _transfer_only_region(region):
+    assets = []
+    for item in region.core_items:
+        record = getattr(item, "record", None)
+        if record is None:
+            record = {"type": getattr(item, "equip_type", ""),
+                      "properties": getattr(item, "properties", {}), "label": _label(item)}
+        if kind(record) in {"bus", "xfmr_2w", "xfmr_3w"}:
+            assets.append(record)
+    return bool(assets) and all(is_transfer_bus(component) for component in assets)
+
+
 def topology_records(primary: list[Zone], composite: list[Zone] | None = None) -> list[dict]:
     """JSON-safe display catalog; accepts actual GUI Zone objects as well."""
     composite = generate_composite_zones(primary) if composite is None else composite
+    primary = [region for region in primary if not _transfer_only_region(region)]
+    composite = [region for region in composite if not _transfer_only_region(region)]
     regions = primary + composite
     parents = find_enclosed_zones(regions)
     result = []
@@ -461,7 +483,8 @@ def propose_zones(netlist: dict) -> list[dict]:
     """
     graph = _Graph(netlist)
     primary = graph.primary()
-    seeds = [i for i in graph.items.values() if kind(i.record) in {"bus", "xfmr_2w", "xfmr_3w"}]
+    seeds = [i for i in graph.items.values() if kind(i.record) in {"bus", "xfmr_2w", "xfmr_3w"}
+             and not is_transfer_bus(i.record)]
     line_seeds = []
     for region in primary:
         if not region.boundary_items or any(kind(i.record) in {"bus", "xfmr_2w", "xfmr_3w"}
@@ -477,7 +500,8 @@ def propose_zones(netlist: dict) -> list[dict]:
                 and not any(kind(i.record) in {"bus", "xfmr_2w", "xfmr_3w"} for i in candidate.core_items)
                 and any(kind(i.record) == "breaker" and not is_open_switch(i) for i in candidate.core_items)):
             line_seeds.extend(terminals)
-    if not seeds:
+    if not seeds and not any(kind(item.record) in {"bus", "xfmr_2w", "xfmr_3w"}
+                             for item in graph.items.values()):
         seeds = [i for i in graph.items.values()
                  if kind(i.record) == "breaker" and not is_open_switch(i)]
         # Prefer the actual line endpoint over a separate breaker-only event.
@@ -531,6 +555,7 @@ def propose_zones(netlist: dict) -> list[dict]:
             # whether they form one scheme or need separate fault events.
             buses = sorted((i for i in region.core_items if kind(i.record) == "bus"),
                            key=lambda item: item.instance_id)
+            buses = [bus for bus in buses if not is_transfer_bus(bus.record)]
             proposal.update({
                 "id": "study-" + _digest(zone_signature(region))[:20],
                 "name": ", ".join(_label(bus) for bus in buses) + " Bus Zone",
@@ -654,6 +679,8 @@ def evaluate_zones(netlist: dict, zones: list[dict]) -> dict:
     """
     validate_zones(zones)
     graph = _Graph(netlist)
+    zones = [zone for zone in zones if not (zone["kind"] == "Bus"
+             and is_transfer_bus(graph.records.get(zone["seed"], {})))]
     original_zones = {zone["id"]: zone for zone in zones}
     resolved = copy.deepcopy(zones)
     for zone in resolved:
@@ -747,7 +774,8 @@ def evaluate_zones(netlist: dict, zones: list[dict]) -> dict:
         inner["enclosed_by"].sort()
     covered = {i for row in report["zones"] for i in row["core"]}
     uncovered = sorted(i for i, c in graph.records.items()
-                       if kind(c) in {"bus", "xfmr_2w", "xfmr_3w"} and i not in covered)
+                       if kind(c) in {"bus", "xfmr_2w", "xfmr_3w"}
+                       and not is_transfer_bus(c) and i not in covered)
     if uncovered:
         report["warnings"].append(messages.PROTECTION_STUDY_PROTECTED_EQUIPMENT_NOT_COVERED_BY_A_CONFIGURED_ZONE.format(", ".join(uncovered)))
     if not zones:

@@ -683,7 +683,7 @@ class SubstationGuiMockup(ProjectFilesMixin, EvaluationViewMixin, PdfExportMixin
         self.prop_status_label = QLabel("Status:")
         properties_layout.addWidget(self.prop_status_label, 2, 0)
         self.prop_status = QComboBox()
-        self.prop_status.addItems(["Closed", "Open", "Maintenance"])
+        self.prop_status.addItems(["Closed", "Open", "Normally Open", "Maintenance"])
         self.prop_status.currentTextChanged.connect(self._on_property_status_changed)
         properties_layout.addWidget(self.prop_status, 2, 1)
 

@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
 
 from gft_opto.logic.protection_study import (
     LOADS, STAGES, kind, propose_zones, validate_zones, topology_signature,
-    configuration_signature, analyze_topology, evaluate_zones,
+    configuration_signature, analyze_topology, evaluate_zones, is_transfer_bus,
 )
 from gft_opto.logic.breaker_settings import breaker_settings, resolve_breaker_action, SUPPLY_KEYS
 from gft_opto.gui.theme import SCROLLBAR_STYLE
@@ -50,6 +50,9 @@ class ZoneDialog(QDialog):
         netlist = self.netlist
         validate_zones(zones)
         self.zones = copy.deepcopy(zones)
+        records = {component["id"]: component for component in netlist["components"]}
+        self.zones = [zone for zone in self.zones if not (zone["kind"] == "Bus"
+                      and is_transfer_bus(records.get(zone["seed"], {})))]
         self.detected_regions = analyze_topology(netlist)
         signature = topology_signature(netlist)
         for zone in self.zones:

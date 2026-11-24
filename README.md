@@ -112,6 +112,10 @@ be reviewed after pasting. Copy/paste inside text fields still edits text normal
    not extra fault events or automatically assigned operating loads.
    Explicitly open breakers, disconnects, and motor-operated switches separate
    the regions at their terminals; normally open bypasses do not join bus sections.
+   **Normally Open** is available in the selected component's Status dropdown.
+   Transfer buses remain on the drawing, but their standalone zones are excluded
+   from proposals, configuration, evaluation, and topology overlays. Transfer buses
+   are recognized by their name or a saved `bus_role` of `transfer`.
    Missing or unrecognized status values retain the connected behavior. Trip
    suggestions stop at open switches and omit open breakers. Existing operating
    assignments remain available for explicit review. Proposals of the same kind

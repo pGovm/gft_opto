@@ -3,6 +3,7 @@ import copy
 import functools
 import json
 import pymupdf
+from gft_opto.logic.protection_study import is_transfer_bus
 
 from PySide6.QtCore import QRectF, Qt
 from PySide6.QtGui import QPixmap
@@ -260,9 +261,14 @@ class ProjectFilesMixin:
         self._clear_zone_highlights()
         self._zone_report = None
         self.protection_zones = copy.deepcopy(data.get("zones", []))
+        records = {component["id"]: component for component in data["components"]}
+        self.protection_zones = [zone for zone in self.protection_zones
+            if not (zone["kind"] == "Bus" and is_transfer_bus(records.get(zone["seed"], {})))]
         # Migrate older saved demos once. New settings explicitly choose the mode.
         self.demonstration_mode = data["settings"].get("demonstration_mode",
             any(zone["name"].startswith("DEMO - ") for zone in self.protection_zones))
+        for zone in self.protection_zones:
+            zone["name"] = zone["name"].removeprefix("DEMO - ")
         view = self.workspace_view
         view._cancel_pending()
         view._clear_drop_preview()
