@@ -112,39 +112,32 @@ class PolishGui(unittest.TestCase):
         self.assertGreaterEqual(dialog.actions.viewport().height(),
                                 4 * dialog.actions.rowHeight(0))
 
-    def test_demo_mode_is_explicit_and_can_be_saved_and_undone(self):
+    def test_legacy_demo_flags_cannot_bypass_validation(self):
         _, dialog = self.editor()
-        dialog.demo_mode.setChecked(True)
-        dialog.zones[0]["name"] = "Ordinary name"
-        dialog.name.setText("Ordinary name")
-        dialog.actions.setRowCount(0)
-        dialog.load_rows.clear()
-        dialog.verify_all.click()
-        dialog.accept()
-        self.assertEqual(dialog.result(), dialog.DialogCode.Accepted)
-        with patch("gft_opto.gui.substation_gui.ZoneDialog", return_value=dialog), patch.object(
-                dialog, "exec", return_value=dialog.DialogCode.Accepted):
-            self.window._configure_protection_zones()
-        self.assertTrue(self.window.demonstration_mode)
-        self.assertTrue(self.window._zone_report["zones"][0]["demonstration_complete"])
-        self.window.undo_stack.undo()
-        self.assertFalse(self.window.demonstration_mode)
-        self.window.undo_stack.redo()
-        with tempfile.TemporaryDirectory() as folder:
-            path = Path(folder) / "demo.json"
-            self.assertTrue(self.window.save_layout(path))
-            self.assertTrue(self.window.open_layout(path))
-            self.assertTrue(self.window.demonstration_mode)
-            self.assertEqual(self.window.protection_zones[0]["name"], "Ordinary name")
-
-    def test_demo_prefix_alone_does_not_enable_completion(self):
-        _, dialog = self.editor()
-        dialog.name.setText("DEMO - renamed ordinary project")
+        dialog.netlist["demonstration_mode"] = True
+        dialog.zones[0]["demonstration_complete"] = True
         dialog.actions.setRowCount(0)
         dialog.load_rows.clear()
         dialog.verify_all.click()
         self.assertFalse(dialog.zones[0]["confirmed"])
-        self.assertFalse(dialog.demo_mode.isChecked())
+        report = evaluate_zones(dialog.netlist, dialog.zones)
+        self.assertFalse(report["zones"][0]["complete"])
+        self.assertNotIn("demonstration_mode", report)
+        self.assertNotIn("demonstration_complete", report["zones"][0])
+
+    def test_saved_layout_drops_legacy_demo_metadata(self):
+        data = json.loads((Path(__file__).parent / "layouts/1P-1L01-Model.json").read_text())
+        data["settings"]["demonstration_mode"] = True
+        data["zones"][0]["demonstration_complete"] = True
+        data["zones"][0]["name"] = "DEMO - Old zone"
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "layout.json"
+            path.write_text(json.dumps(data), encoding="utf-8")
+            self.assertTrue(self.window.open_layout(path))
+            saved = self.window._layout_data()
+            self.assertNotIn("demonstration_mode", saved["settings"])
+            self.assertNotIn("demonstration_complete", saved["zones"][0])
+            self.assertEqual(saved["zones"][0]["name"], "Old zone")
 
     def test_background_load_appears_in_exported_calculation(self):
         import pymupdf

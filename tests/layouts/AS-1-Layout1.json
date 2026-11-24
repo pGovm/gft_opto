@@ -3,7 +3,7 @@
   "project": "Ashbottom - 14 kV Section 4",
   "pdf": null,
   "scene_rect": [0,0,5600,3800],
-  "settings": {"demonstration_mode":true,"grid_visible":true,"grid_opacity":15,"snap":true,"pdf_visible":false},
+  "settings": {"grid_visible":true,"grid_opacity":15,"snap":true,"pdf_visible":false},
   "library": {},
   "components": [
     {"id":"breaker_13","symbol":"breaker","name":"PCB52","display_id":"PCB52","properties":{"symbol_type":"breaker","motor_run_a":4.6,"motor_inrush_a":18.5,"trip_coil_1_a":4.5,"trip_coil_2_a":8.2,"close_coil_a":11.2},"position":[4800.0,957.0],"scale":1.0,"rotation":90.0,"ports":{"left":[-32.0,0.0],"right":[32.0,0.0]}},

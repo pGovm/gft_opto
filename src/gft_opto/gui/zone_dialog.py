@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QHBoxLayout,
     QLabel, QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPushButton,
     QSpinBox, QTableWidget, QVBoxLayout, QWidget, QHeaderView, QAbstractItemView, QDoubleSpinBox,
-    QTableWidgetSelectionRange, QStackedWidget, QSplitter, QScrollArea, QFrame,
+    QTableWidgetSelectionRange, QStackedWidget, QSplitter, QScrollArea, QFrame, QAbstractSpinBox,
 )
 
 from gft_opto.logic.protection_study import (
@@ -100,17 +100,13 @@ class ZoneDialog(QDialog):
             self.guidance.setText(self.guidance.text() + messages.ZONE_DIALOG_LEGACY_SUPPLY_CONFLICTS.format(", ".join(sorted(conflicts)))
                 + messages.ZONE_DIALOG_REVIEW_THESE_BREAKER_S_SUPPLY_SETTINGS_BEFORE_CONFIRMING)
         self._base_guidance = self.guidance.text()
-        self.demo_mode = QCheckBox("Demonstration mode (allow incomplete demo zones)")
-        self.demo_mode.setChecked(bool(self.netlist.get("demonstration_mode", False)))
-        outer.addWidget(self.demo_mode)
-        self.demo_mode.toggled.connect(self._change_demo_mode)
         body = QHBoxLayout()
         outer.addLayout(body, 1)
         left = QVBoxLayout()
         self.verify_all = QCheckBox("Verify all zones")
         self.verify_all.setToolTip(
             "Confirm all zones that pass validation. Incomplete zones stay "
-            "as drafts so they do not prevent saving the demonstration."
+            "as drafts so they do not prevent saving the project."
         )
         self.verification_summary = QLabel()
         self.verification_summary.setWordWrap(True)
@@ -328,8 +324,6 @@ class ZoneDialog(QDialog):
                     zone["configuration_signature"] = configuration_signature(zone)
                 report = evaluate_zones(self.netlist, candidate)
                 eligible = {zone["id"] for zone in report["zones"] if zone["complete"]}
-                demo_ids = {zone["id"] for zone in candidate} if self.netlist.get("demonstration_mode") else set()
-                eligible.update(demo_ids)
                 skipped = [zone for zone in report["zones"] if zone["id"] not in eligible]
             else:
                 eligible, skipped = set(), []
@@ -341,8 +335,6 @@ class ZoneDialog(QDialog):
             return
         for zone in self.zones:
             zone["confirmed"] = zone["id"] in eligible
-            if self.netlist.get("demonstration_mode"):
-                zone["demonstration_complete"] = bool(checked)
         self.confirmed.blockSignals(True)
         self.confirmed.setChecked(self.zones[self.active]["confirmed"]
                                   if 0 <= self.active < len(self.zones) else False)
@@ -356,10 +348,6 @@ class ZoneDialog(QDialog):
         )
         self.verification_summary.setToolTip("\n\n".join(
             zone["name"] + ": " + "; ".join(zone["warnings"]) for zone in skipped))
-
-    def _change_demo_mode(self, enabled):
-        self.netlist["demonstration_mode"] = enabled
-        self._verify_all_zones(False)
 
     def _custom_boundary_changed(self, *_):
         if self.loading:
@@ -552,6 +540,7 @@ class ZoneDialog(QDialog):
         multiplier = QLineEdit()
         multiplier.setReadOnly(True)
         other_amps = QDoubleSpinBox()
+        other_amps.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
         other_amps.setRange(0, 1000000)
         other_amps.setDecimals(3)
         other_amps.setSuffix(" A")
@@ -732,7 +721,7 @@ class ZoneDialog(QDialog):
             report = evaluate_zones(self.netlist, candidate)
             confirmed_ids = {z["id"] for z in candidate if z["confirmed"]}
             errors = [messages.DIAGNOSTIC_WITH_CONTEXT.format(row['name'], message) for row in report["zones"]
-                      if row["id"] in confirmed_ids and not row.get("demonstration_complete")
+                      if row["id"] in confirmed_ids
                       for message in row["warnings"]]
             if errors:
                 raise ValueError("\n".join(errors) + messages.ZONE_DIALOG_UNCHECK_CONFIRMATION_TO_SAVE_THESE_SETTINGS_AS_A_DRAFT)

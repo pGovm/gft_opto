@@ -45,24 +45,12 @@ The Project field names
 the current layout. Layout JSON files preserve equipment definitions, component
 properties, positions, sizes, rotations, bus taps, connections, and grid settings.
 Unsaved changes are checked before closing or replacing a layout.
-The 11 provided one-line JSON layouts contain randomized demonstration currents
-for breakers and motor-operated switches. These are sample values, not manufacturer ratings.
-For a demonstration, open one of these layouts, click **Run Evaluation**, then
-**Export Results**. Saved `DEMO` scenarios include the random currents and
-per-stage totals in the calculation PDF. Both trip coils operate together in
-the demonstration's Primary trip stage on DC 1; closing, motor inrush, and
-motor running are separate stages. Nearby breakers use automatically proposed
-zone boundaries. Devices without a suggested zone action have separate Manual
-independent-operation scenarios, which do not assert additional protection zones.
-Demonstration scenarios initially open as unconfirmed drafts. In **Configure Zones**,
-enable **Demonstration mode** and use **Verify all zones** to mark scenarios complete
-for demonstration purposes even when boundary CTs or operating loads are missing.
-The PDF labels these scenarios **COMPLETE (DEMO)** and retains a demonstration
-notice. Empty scenarios contribute no calculated loads. Demo completion represents
-assumed settings, rather than engineering approval of the operating sequence.
-Demonstration mode is an explicit project setting saved in the layout and can
-be changed in Configure Zones. Older demo layouts migrate their `DEMO - ...`
-names to this setting on first opening. Subsequent renaming has no effect on mode.
+The provided one-line JSON layouts retain assigned sample currents for breakers
+and motor-operated switches. These values are not manufacturer ratings.
+Run Evaluation and Export Results show assigned currents and per-stage totals.
+Review CT boundaries and operating actions in Configure Zones before confirming
+a zone. Verify all zones confirms only zones that pass validation; incomplete
+zones remain drafts and their calculation results are marked provisional.
 Opening a layout also populates the Equipment Library from the components in
 the drawing, preserving their saved electrical and breaker settings alongside
 any existing templates. Identical definitions are reused; junction dots remain
@@ -154,7 +142,7 @@ be reviewed after pasting. Copy/paste inside text fields still edits text normal
 6. Check the verification box for each zone after reviewing its assignments,
    or use **Verify all zones** below it, then Save. Bulk verification confirms
    valid zones and leaves incomplete ordinary zones as drafts, with details in
-   the verification summary's tooltip. The demo exception is described above.
+   the verification summary's tooltip.
    Editing zone settings clears that zone's verification. Wiring,
    equipment, and switch-status changes require reconfirmation. Older layouts
    approved before the switch-aware detector also require reconfirmation. They
@@ -199,6 +187,21 @@ without zone configuration still open normally.
 
 ## Desktop executable
 
+For a portable Windows x64 ZIP containing Python, dependencies, and the provided
+one-line layouts, build on Windows:
+
+```powershell
+uv sync --locked --group package
+.venv/Scripts/python.exe install/build_portable.py
+```
+
+Extract `dist/GFT-OPTO-Windows-Portable.zip` and launch **GFT OPTO.exe** inside
+the extracted folder. Keep `_internal` beside the executable. Runtime use needs
+no Python installation, PowerShell setup, or package downloads. Save work to a
+writable folder. The package is unsigned; organizational execution policies may
+require IT approval. The ZIP includes launch instructions, build information,
+application source, and the installed libraries' supplied notices.
+
 Close the application, then rebuild the Windows executable from the project
 folder. The `package` group installs PyInstaller when needed:
 
@@ -227,4 +230,4 @@ Remove-Item Env:QT_QPA_PLATFORM
 
 GitHub Actions runs this suite on Windows with the native Qt platform and on
 Linux with the offscreen Qt platform. Calculation, import/export, load editing,
-demo-mode persistence, and grid-alignment regressions are covered.
+legacy-layout validation, and grid-alignment regressions are covered.

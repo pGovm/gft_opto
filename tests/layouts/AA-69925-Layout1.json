@@ -3,7 +3,7 @@
   "project": "Ashbottom - 138 kV Sections 1 and 2",
   "pdf": null,
   "scene_rect": [0,0,7800,3600],
-  "settings": {"demonstration_mode":true,"grid_visible":true,"grid_opacity":15,"snap":true,"pdf_visible":false},
+  "settings": {"grid_visible":true,"grid_opacity":15,"snap":true,"pdf_visible":false},
   "library": {},
   "components": [
     {"id":"breaker_15","symbol":"breaker","name":"PCB9","display_id":"PCB9","properties":{"symbol_type":"breaker","motor_run_a":3.3,"motor_inrush_a":11.9,"trip_coil_1_a":7.4,"trip_coil_2_a":7.1,"close_coil_a":11.6},"position":[1700.0,807.0],"scale":1.0,"rotation":90.0,"ports":{"left":[-32.0,0.0],"right":[32.0,0.0]}},

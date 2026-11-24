@@ -22,6 +22,7 @@ from PySide6.QtGui import (
     QAction, QColor, QPen, QBrush, QPalette, QPainterPath, QPainterPathStroker, QDrag, QIcon, QImage, QKeySequence, QPixmap, QUndoStack,
 )
 from PySide6.QtWidgets import (
+    QAbstractSpinBox,
     QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFrame, QGraphicsScene, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QSlider, QTextEdit, QVBoxLayout, QWidget, QGraphicsRectItem, QGraphicsPathItem, QSpinBox, QScrollArea, QSizePolicy,
 )
 
@@ -216,7 +217,6 @@ class SubstationGuiMockup(ProjectFilesMixin, EvaluationViewMixin, PdfExportMixin
         self.last_netlist: dict | None = None
         self.last_result: dict | None = None
         self.protection_zones = []
-        self.demonstration_mode = False
         self._zone_overlays = []
         self._zone_report = None
         self._zones_visible = True
@@ -753,6 +753,7 @@ class SubstationGuiMockup(ProjectFilesMixin, EvaluationViewMixin, PdfExportMixin
                 field.currentIndexChanged.connect(lambda _index, key=key: self._on_breaker_setting_changed(key))
             elif key == "pole_count":
                 field = QSpinBox()
+                field.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
                 field.setRange(1, 3)
                 field.valueChanged.connect(lambda _value, key=key: self._on_breaker_setting_changed(key))
             else:
@@ -846,7 +847,6 @@ class SubstationGuiMockup(ProjectFilesMixin, EvaluationViewMixin, PdfExportMixin
     def _protection_netlist(self):
         netlist = netlist_from_scene(self.workspace_scene,
             system_name=self.project_box.text().strip() or "Untitled Project")
-        netlist["demonstration_mode"] = self.demonstration_mode
         labels = {item.instance_id: item.visible_id() for item in self.workspace_scene.items()
                   if isinstance(item, OneLineSymbolItem)}
         for component in netlist["components"]:
@@ -880,12 +880,11 @@ class SubstationGuiMockup(ProjectFilesMixin, EvaluationViewMixin, PdfExportMixin
                     props = dialog.components[item.instance_id]["properties"]
                     changes.extend((item, key, props[key]) for key in SETTING_KEYS
                                    if key in props and getattr(item, "properties", {}).get(key) != props[key])
-            demo_mode = dialog.demo_mode.isChecked()
-            if changes or self.protection_zones != dialog.zones or demo_mode != self.demonstration_mode:
+            if changes or self.protection_zones != dialog.zones:
                 self.undo_stack.beginMacro("Configure protection zones and breaker settings")
                 self.undo_stack.push(ReplaceZonesCommand(
-                    {"zones": self.protection_zones, "demonstration_mode": self.demonstration_mode},
-                    {"zones": dialog.zones, "demonstration_mode": demo_mode}, self._apply_study_settings))
+                    {"zones": self.protection_zones},
+                    {"zones": dialog.zones}, self._apply_study_settings))
                 for item, key, value in changes:
                     self.undo_stack.push(EditPropertyCommand(item, key, value, self._on_selection_changed))
                 self.undo_stack.endMacro()
@@ -893,7 +892,6 @@ class SubstationGuiMockup(ProjectFilesMixin, EvaluationViewMixin, PdfExportMixin
             self._on_run_evaluation_clicked()
 
     def _apply_study_settings(self, settings):
-        self.demonstration_mode = settings["demonstration_mode"]
         self._apply_protection_zones(settings["zones"])
 
     def _apply_protection_zones(self, zones):

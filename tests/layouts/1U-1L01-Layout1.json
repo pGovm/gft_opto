@@ -3,7 +3,7 @@
   "project": "Falling Branch - 138 / 12 kV",
   "pdf": null,
   "scene_rect": [0,0,6500,6100],
-  "settings": {"demonstration_mode":true,"grid_visible":true,"grid_opacity":15,"snap":true,"pdf_visible":false},
+  "settings": {"grid_visible":true,"grid_opacity":15,"snap":true,"pdf_visible":false},
   "library": {},
   "components": [
     {"id":"breaker_16","symbol":"breaker","name":"L","display_id":"L","properties":{"symbol_type":"breaker","motor_run_a":2.2,"motor_inrush_a":7.0,"trip_coil_1_a":7.8,"trip_coil_2_a":9.4,"close_coil_a":11.7},"position":[5200.0,957.0],"scale":1.0,"rotation":90.0,"ports":{"left":[-32.0,0.0],"right":[32.0,0.0]}},

@@ -362,21 +362,20 @@ class GuiZoneIntegration(unittest.TestCase):
         warning.assert_not_called()
         self.assertEqual(dialog.result(), QDialog.DialogCode.Accepted)
 
-    def test_verify_all_can_complete_demo_drafts_without_inventing_loads_or_cts(self):
+    def test_verify_all_keeps_incomplete_drafts_unconfirmed(self):
         *_, zone = self.example()
-        self.window.demonstration_mode = True
         zone.update(name="incomplete bus", actions=[], boundary_cts=[], confirmed=False)
         dialog = self.dialog([zone])
         dialog.verify_all.click()
-        self.assertTrue(dialog.verify_all.isChecked())
+        self.assertFalse(dialog.verify_all.isChecked())
         with patch.object(QMessageBox, "warning") as warning:
             dialog.accept()
         warning.assert_not_called()
         self.assertEqual(dialog.result(), QDialog.DialogCode.Accepted)
         from gft_opto.logic.protection_study import evaluate_zones
         row = evaluate_zones(dialog.netlist, dialog.zones)["zones"][0]
-        self.assertTrue(row["complete"])
-        self.assertTrue(row["demonstration_complete"])
+        self.assertFalse(row["complete"])
+        self.assertNotIn("demonstration_complete", row)
         self.assertTrue(row["warnings"])
         self.assertEqual(row["scenarios"], [])
         self.assertEqual(row["boundaries"], [])

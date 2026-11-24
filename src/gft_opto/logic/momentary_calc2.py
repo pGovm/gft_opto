@@ -357,37 +357,6 @@ def evaluate_scene(scene, system_name: str = "Netlist Study", voltage_V: float =
     return scenario.calculate()
 
 
-def run_demo():
-    calc = MomentaryLoadCalculator("GFT 230/33 kV Substation — 125 V DC Bus")
-
-    # 1st scenario
-    s1 = calc.new_scenario("S1 - Routine CB Switching")
-    s1.add_load(Load("CB close operation", 12.0, quantity=2))
-    s1.add_load(Load("CB trip operation",  10.0, quantity=2))
-
-    # 2nd scenario
-    s2 = calc.new_scenario("S2 - Maximum Fault Clearance")
-    s2.add_load(Load("Main CB trip phase A", 18.0))
-    s2.add_load(Load("Main CB trip phase B", 18.0))
-    s2.add_load(Load("Main CB trip phase C", 18.0))
-    s2.add_load(Load("Backup CB trip",       16.0, note="Backup protection"))
-    s2.add_load(Load("Load shed breakers",   14.0, quantity=4))
-    s2.add_load(Load("Auto-reclose attempt", 15.0))
-
-    # 3rd scenario
-    s3 = calc.new_scenario("S3 - Busbar Fault All Feeders Trip")
-    s3.add_load(Load("Bus-zone CB trips",      20.0, quantity=8,
-                     note="All 8 feeders trip at the same time"))
-    s3.add_load(Load("Bus coupler trip",       22.0))
-    s3.add_load(Load("Transfer bus isolation", 16.0, quantity=3))
-
-    results = calc.run_all()
-    calc.print_summary(results)
-
-    calc.save_json(results, "momentary_results.json")
-    calc.save_csv(results,  "momentary_results.csv")
-    print()
-
 
 def run_from_netlist_file(path):
     calc = calculator_from_netlist_file(path)
@@ -403,4 +372,4 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         run_from_netlist_file(sys.argv[1])
     else:
-        run_demo()
+        raise SystemExit("Usage: python -m gft_opto.logic.momentary_calc2 <netlist.json>")

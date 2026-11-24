@@ -11,7 +11,7 @@
     {"id":"demo-operation-mos_35","name":"A00794 independent operation","kind":"Manual","seed":"mos_35","boundary_cts":[],"actions":[{"component":"mos_35","load":"motor_inrush_a","stage":"Motor inrush","operation":"device","supply":"DC 1"},{"component":"mos_35","load":"motor_run_a","stage":"Motor run","operation":"device","supply":"DC 1"}],"confirmed":false}
   ],
   "library": {},
-  "settings": {"demonstration_mode":true,"grid_visible":true,"grid_opacity":15,"snap":true,"pdf_visible":false},
+  "settings": {"grid_visible":true,"grid_opacity":15,"snap":true,"pdf_visible":false},
   "components": [
     {"id":"breaker_15","symbol":"breaker","name":"A009D5","display_id":"A009D5","properties":{"symbol_type":"breaker","motor_run_a":3.4,"motor_inrush_a":15.6,"trip_coil_1_a":8.7,"trip_coil_2_a":8.2,"close_coil_a":9.7},"position":[2107.0,750.0],"scale":1.0,"rotation":0.0,"ports":{"left":[-32.0,0.0],"right":[32.0,0.0]}},
     {"id":"breaker_22","symbol":"breaker","name":"A009D8","display_id":"A009D8","properties":{"symbol_type":"breaker","motor_run_a":4.5,"motor_inrush_a":14.7,"trip_coil_1_a":5.6,"trip_coil_2_a":6.4,"close_coil_a":11.6},"position":[3407.0,750.0],"scale":1.0,"rotation":0.0,"ports":{"left":[-32.0,0.0],"right":[32.0,0.0]}},

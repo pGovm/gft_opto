@@ -203,8 +203,6 @@ def validate_zones(zones: list[dict]) -> None:
         _text(zone.get("seed"), f"{ident}: seed", empty=True)
         if not isinstance(zone.get("confirmed"), bool):
             raise ValueError(messages.PROTECTION_STUDY_CONFIRMED_MUST_BE_TRUE_OR_FALSE.format(ident))
-        if "demonstration_complete" in zone and not isinstance(zone["demonstration_complete"], bool):
-            raise ValueError(f"{ident}: demonstration completion must be true or false.")
         boundaries = zone.get("boundary_cts")
         if not isinstance(boundaries, list):
             raise ValueError(messages.PROTECTION_STUDY_BOUNDARY_CTS_MUST_BE_A_LIST.format(ident))
@@ -710,8 +708,7 @@ def evaluate_zones(netlist: dict, zones: list[dict]) -> dict:
     if not valid_voltage:
         raise ValueError(messages.PROTECTION_STUDY_DC_VOLTAGE_MUST_BE_A_FINITE_POSITIVE_NUMBER)
     current_signature = topology_signature(netlist)
-    report = {"demonstration_mode": bool(netlist.get("demonstration_mode", False)),
-              "complete": False, "zones": [], "warnings": [], "supply_peaks": {},
+    report = {"complete": False, "zones": [], "warnings": [], "supply_peaks": {},
               "topology_regions": topology_records(graph.primary())}
     # A motor is one physical load even though inrush/run have different fields.
     assignments = defaultdict(lambda: defaultdict(set))
@@ -739,12 +736,6 @@ def evaluate_zones(netlist: dict, zones: list[dict]) -> dict:
         warnings.extend(action_warnings)
         warnings.extend(conflicts[zone["id"]])
         warnings = list(dict.fromkeys(warnings))
-        demonstration_complete = bool(
-            zone.get("demonstration_complete") and netlist.get("demonstration_mode", False)
-            and zone["confirmed"]
-            and zone.get("topology_signature") == current_signature
-            and zone.get("configuration_signature") == configuration_signature(original)
-        )
         report["zones"].append({
             "id": zone["id"], "name": zone["name"], "kind": zone["kind"],
             "members": sorted(i.instance_id for i in region.all_items) if region else [],
@@ -752,8 +743,7 @@ def evaluate_zones(netlist: dict, zones: list[dict]) -> dict:
             "boundaries": sorted(zone["boundary_cts"]),
             "connections": _json(zone_signature(region)["connections"]) if region else [],
             "wire_only": region.is_wire_only if region else False,
-            "complete": not warnings or demonstration_complete,
-            "demonstration_complete": demonstration_complete,
+            "complete": not warnings,
             "warnings": warnings, "scenarios": scenarios,
             "enclosed_by": [],
         })

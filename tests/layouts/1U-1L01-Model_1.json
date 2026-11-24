@@ -3,7 +3,7 @@
   "project": "Elsa - 138 / 12.47 kV",
   "pdf": null,
   "scene_rect": [0,0,7000,6100],
-  "settings": {"demonstration_mode":true,"grid_visible":true,"grid_opacity":15,"snap":true,"pdf_visible":false},
+  "settings": {"grid_visible":true,"grid_opacity":15,"snap":true,"pdf_visible":false},
   "library": {},
   "components": [
     {"id":"breaker_14","symbol":"breaker","name":"677","display_id":"677","properties":{"symbol_type":"breaker","motor_run_a":3.2,"motor_inrush_a":11.6,"trip_coil_1_a":5.5,"trip_coil_2_a":4.1,"close_coil_a":10.5},"position":[2700.0,1157.0],"scale":1.0,"rotation":90.0,"ports":{"left":[-32.0,0.0],"right":[32.0,0.0]}},

@@ -71,19 +71,11 @@ class PdfExportMixin:
         result = self.last_result
         report = result.get("protection_analysis") or {}
         study_status = "COMPLETE" if report.get("complete") else messages.SUBSTATION_GUI4_INCOMPLETE_PROVISIONAL_STUDY
-        demo_notice = (
-            "<p><b>DEMONSTRATION — sample currents and assumed operating actions.</b> "
-            "Demonstration mode allows incomplete zone settings to be marked complete. "
-            "Background loads are added to each operating stage on DC 1. "
-            "Verify the currents and operating actions before engineering use.</p>"
-            if report.get("demonstration_mode") else ""
-        )
 
         zone_summary_rows = []
         review_rows = []
         for zone in report.get("zones", []):
-            status = ("COMPLETE (DEMO)" if zone.get("demonstration_complete") else
-                      "COMPLETE" if zone.get("complete") else "REVIEW REQUIRED — PROVISIONAL")
+            status = "COMPLETE" if zone.get("complete") else "REVIEW REQUIRED — PROVISIONAL"
             status_class = "complete" if zone.get("complete") else "incomplete"
             stage_totals = []
             for scenario in zone.get("scenarios", []):
@@ -93,8 +85,7 @@ class PdfExportMixin:
                         "<b class='incomplete'>Not calculated</b>"
                     )
                     continue
-                qualifier = ("Demo" if zone.get("demonstration_complete") else
-                             "Confirmed" if zone.get("complete") else "PROVISIONAL")
+                qualifier = "Confirmed" if zone.get("complete") else "PROVISIONAL"
                 stage_totals.append(
                     f"{escape(str(scenario.get('stage', 'Unspecified stage')))}: "
                     f"<b class='{status_class}'>{qualifier} "
@@ -166,7 +157,6 @@ class PdfExportMixin:
         <body>
           <h1>Calculation Results</h1>
           <p><b>{escape(study_status)}</b></p>
-          {demo_notice}
           <p><b>System:</b> {escape(str(result.get('scenario_name', 'N/A')))}
             &nbsp; <b>Voltage:</b> {escape(str(result.get('voltage_V', 'N/A')))} V</p>
 

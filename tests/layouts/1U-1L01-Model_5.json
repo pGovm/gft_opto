@@ -3,7 +3,7 @@
   "project": "Hinton - 138 kV",
   "pdf": null,
   "scene_rect": [0,0,6500,4800],
-  "settings": {"demonstration_mode":true,"grid_visible":true,"grid_opacity":15,"snap":true,"pdf_visible":false},
+  "settings": {"grid_visible":true,"grid_opacity":15,"snap":true,"pdf_visible":false},
   "library": {},
   "components": [
     {"id":"breaker_13","symbol":"breaker","name":"A009R5","display_id":"A009R5","properties":{"symbol_type":"breaker","motor_run_a":5.0,"motor_inrush_a":24.0,"trip_coil_1_a":6.1,"trip_coil_2_a":7.8,"close_coil_a":7.8},"position":[3957.0,1450.0],"scale":1.0,"rotation":0.0,"ports":{"left":[-32.0,0.0],"right":[32.0,0.0]}},

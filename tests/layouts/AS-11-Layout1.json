@@ -3,7 +3,7 @@
   "project": "Ashbottom - 69 kV",
   "pdf": null,
   "scene_rect": [0,0,6500,4600],
-  "settings": {"demonstration_mode":true,"grid_visible":true,"grid_opacity":15,"snap":true,"pdf_visible":false},
+  "settings": {"grid_visible":true,"grid_opacity":15,"snap":true,"pdf_visible":false},
   "library": {},
   "components": [
     {"id":"breaker_14","symbol":"breaker","name":"PCB2","display_id":"PCB2","properties":{"symbol_type":"breaker","motor_run_a":2.2,"motor_inrush_a":8.4,"trip_coil_1_a":7.7,"trip_coil_2_a":8.3,"close_coil_a":8.8},"position":[1800.0,807.0],"scale":1.0,"rotation":90.0,"ports":{"left":[-32.0,0.0],"right":[32.0,0.0]}},

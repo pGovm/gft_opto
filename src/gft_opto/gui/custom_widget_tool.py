@@ -1,7 +1,7 @@
 # Provides the Create Component dialog for defining equipment symbols and electrical properties.
 
 """
-Create-Component dialog and a small standalone demo widget.
+Create-Component dialog.
 
 Used by substation_gui.py when the user clicks "Create Component".
 Symbol type keys must stay in sync with EQUIPMENT_DEFS there.
@@ -9,12 +9,7 @@ Symbol type keys must stay in sync with EQUIPMENT_DEFS there.
 
 from __future__ import annotations
 
-import sys
-
-from PySide6.QtCore import Qt, QRect, Slot
-from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import (
-    QApplication,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -23,12 +18,8 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QLabel,
     QLineEdit,
-    QPushButton,
-    QVBoxLayout,
-    QWidget,
 )
 
-from gft_opto.gui.theme import ui_font
 
 
 # ---------------------------------------------------------------------------
@@ -237,73 +228,3 @@ class ComponentDialog(QDialog):
                 "MotorRunCurrent": self.motor_run_spin.value(),
             })
         return data
-
-
-# ---------------------------------------------------------------------------
-# Standalone demo widget (optional — run this file directly)
-# ---------------------------------------------------------------------------
-
-class ComponentWidget(QWidget):
-    """Tiny preview widget used only when launching this module alone."""
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setFixedSize(400, 400)
-        self._state = False
-        self._color_on = QColor(0, 255, 0)
-        self._color_off = QColor(100, 100, 100)
-        self._component_data = None
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setFont(ui_font(20))
-        rect = QRect(30, 30, 350, 350)
-
-        if self._state and self._component_data:
-            name_line = f"Component: {self._component_data['name']}"
-            if "Rating" in self._component_data:
-                detail_line = f"Rating: {self._component_data['Rating']} kV"
-            else:
-                detail_line = (
-                    f"Trip Coil 1: {self._component_data['TripCoil1']} A"
-                )
-            painter.drawText(
-                rect,
-                Qt.AlignmentFlag.AlignCenter,
-                f"{name_line}\n\n\n{detail_line}",
-            )
-        else:
-            painter.setBrush(self._color_off)
-            painter.setPen(QPen(QColor(0, 0, 0), 2))
-            painter.drawEllipse(rect)
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            self.toggle()
-
-    def toggle(self):
-        self._state = not self._state
-        self.update()
-
-    @Slot()
-    def open_dialog(self):
-        dialog = ComponentDialog(self)
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            self._component_data = dialog.component_data()
-            self._state = True
-            self.update()
-
-
-if __name__ == "__main__":
-    app = QApplication(sys.argv)
-    window = QWidget()
-    window.setWindowTitle("Create Component demo")
-    layout = QVBoxLayout(window)
-    preview = ComponentWidget()
-    configure_btn = QPushButton("Configure")
-    configure_btn.clicked.connect(preview.open_dialog)
-    layout.addWidget(preview)
-    layout.addWidget(configure_btn)
-    window.show()
-    sys.exit(app.exec())

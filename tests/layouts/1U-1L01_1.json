@@ -3,7 +3,7 @@
   "project": "Coffee Port - 138 kV",
   "pdf": null,
   "scene_rect": [0,0,6000,4300],
-  "settings": {"demonstration_mode":true,"grid_visible":true,"grid_opacity":15,"snap":true,"pdf_visible":false},
+  "settings": {"grid_visible":true,"grid_opacity":15,"snap":true,"pdf_visible":false},
   "library": {},
   "components": [
     {"id":"breaker_10","symbol":"breaker","name":"T023M2","display_id":"T023M2","properties":{"symbol_type":"breaker","motor_run_a":4.0,"motor_inrush_a":14.3,"trip_coil_1_a":5.3,"trip_coil_2_a":9.0,"close_coil_a":6.7},"position":[1000.0,1507.0],"scale":1.0,"rotation":90.0,"ports":{"left":[-32.0,0.0],"right":[32.0,0.0]}},

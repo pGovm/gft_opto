@@ -122,8 +122,6 @@ def build_scene(data):
     for key in ("grid_visible", "snap", "pdf_visible"):
         if not isinstance(settings[key], bool):
             raise ValueError(messages.LAYOUT_IO_INVALID_SETTING.format(key))
-    if "demonstration_mode" in settings and not isinstance(settings["demonstration_mode"], bool):
-        raise ValueError("Demonstration mode must be true or false.")
     if data.get("pdf") is not None and not isinstance(data["pdf"], str):
         raise ValueError(messages.LAYOUT_IO_INVALID_PDF_REFERENCE)
     library = data["library"]

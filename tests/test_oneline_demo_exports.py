@@ -24,7 +24,7 @@ class OneLineDemoExportTests(unittest.TestCase):
                 QMessageBox, 'critical', side_effect=lambda *args: self.fail(str(args[2]))):
             for stem in stems:
                 with self.subTest(layout=stem):
-                    print('Checking demo export: ' + stem, flush=True)
+                    print('Checking layout export: ' + stem, flush=True)
                     source = Path(__file__).parent / 'layouts' / (stem + '.json')
                     original = source.read_bytes()
                     data = json.loads(original)
@@ -64,8 +64,8 @@ class OneLineDemoExportTests(unittest.TestCase):
                             self.assertIn(row['stage'], text)
                             self.assertIn(row['supply'], text)
                         self.assertIn('PROVISIONAL', text)
-                        self.assertIn('DEMO', text)
-                        self.assertIn('DEMONSTRATION', text)
+                        self.assertNotIn('DEMO', text)
+                        self.assertNotIn('DEMONSTRATION', text)
                         self.assertIn('Motor inrush', text)
                         self.assertIn('Motor run', text)
                         self.assertEqual(source.read_bytes(), original)

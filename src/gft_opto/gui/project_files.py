@@ -29,8 +29,7 @@ class ProjectFilesMixin:
             "pdf": self.pdf_path,
             "zones": copy.deepcopy(self.protection_zones),
             "library": {key: meta["definition"] for key, meta in EQUIPMENT_DEFS.items()},
-            "settings": {"demonstration_mode": self.demonstration_mode,
-                         "grid_visible": self.grid_show_cb.isChecked(),
+            "settings": {"grid_visible": self.grid_show_cb.isChecked(),
                          "grid_opacity": self.grid_opacity_slider.value(),
                          "snap": self.grid_snap_cb.isChecked(),
                          "pdf_visible": self.pdf_show_cb.isChecked()},
@@ -264,10 +263,8 @@ class ProjectFilesMixin:
         records = {component["id"]: component for component in data["components"]}
         self.protection_zones = [zone for zone in self.protection_zones
             if not (zone["kind"] == "Bus" and is_transfer_bus(records.get(zone["seed"], {})))]
-        # Migrate older saved demos once. New settings explicitly choose the mode.
-        self.demonstration_mode = data["settings"].get("demonstration_mode",
-            any(zone["name"].startswith("DEMO - ") for zone in self.protection_zones))
         for zone in self.protection_zones:
+            zone.pop("demonstration_complete", None)
             zone["name"] = zone["name"].removeprefix("DEMO - ")
         view = self.workspace_view
         view._cancel_pending()

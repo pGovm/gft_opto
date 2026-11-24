@@ -3,7 +3,7 @@
   "project": "Ashbottom - TR3 / 14 kV Section 3",
   "pdf": null,
   "scene_rect": [0,0,6000,4400],
-  "settings": {"demonstration_mode":true,"grid_visible":true,"grid_opacity":15,"snap":true,"pdf_visible":false},
+  "settings": {"grid_visible":true,"grid_opacity":15,"snap":true,"pdf_visible":false},
   "library": {},
   "components": [
     {"id":"breaker_10","symbol":"breaker","name":"PCB30","display_id":"PCB30","properties":{"symbol_type":"breaker","motor_run_a":4.9,"motor_inrush_a":19.3,"trip_coil_1_a":8.7,"trip_coil_2_a":8.4,"close_coil_a":8.9},"position":[5000.0,1407.0],"scale":1.0,"rotation":90.0,"ports":{"left":[-32.0,0.0],"right":[32.0,0.0]}},

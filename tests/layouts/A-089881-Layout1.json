@@ -3,7 +3,7 @@
   "project": "Ashbottom - PCB13",
   "pdf": null,
   "scene_rect": [0,0,3200,2800],
-  "settings": {"demonstration_mode":true,"grid_visible":true,"grid_opacity":15,"snap":true,"pdf_visible":false},
+  "settings": {"grid_visible":true,"grid_opacity":15,"snap":true,"pdf_visible":false},
   "library": {},
   "components": [
     {"id":"breaker_6","symbol":"breaker","name":"PCB13","display_id":"PCB13","properties":{"symbol_type":"breaker","motor_run_a":2.6,"motor_inrush_a":10.3,"trip_coil_1_a":6.7,"trip_coil_2_a":9.5,"close_coil_a":11.0},"position":[1100.0,857.0],"scale":1.0,"rotation":90.0,"ports":{"left":[-32.0,0.0],"right":[32.0,0.0]}},
