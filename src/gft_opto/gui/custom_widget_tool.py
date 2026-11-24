@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
+    QAbstractSpinBox,
     QFormLayout,
     QLabel,
     QLineEdit,
@@ -198,6 +199,7 @@ class ComponentDialog(QDialog):
     @staticmethod
     def _make_spin(default: float = 0):
         spin = QDoubleSpinBox()
+        spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
         spin.setRange(0, 100000)
         spin.setDecimals(2)
         spin.setValue(default)
