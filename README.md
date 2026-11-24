@@ -1,34 +1,82 @@
 # Substation Momentary DC Load Calculator
 
-## App Overview
-This desktop application builds substation one-line diagrams and evaluates
-momentary DC loads for configured protection-zone scenarios. It runs locally
-and does not require an internet connection. Battery capacity sizing is outside
-the project scope.
-The main features are:
-- Customize and make your own electrical components.
-- Import the desired One-line diagram as a PDF that will show up in the background.
-- Draw and connect equipment, edit electrical properties, and undo or redo edits.
-- Save editable layouts and export momentary current reports.
+A desktop tool for working out the momentary DC current a substation's station
+battery must supply when protection operates. You rebuild the station's one-line
+diagram over the original PDF, the tool finds the protection zones bounded by
+CTs, and it totals the trip coil, close coil and motor currents for each zone,
+operating stage and DC supply.
 
-## Setup and launch
+## What it does
 
-From the project folder on Windows, run `install\install.bat`, or run the
-PowerShell installer with `powershell -ExecutionPolicy Bypass -File install/install.ps1`.
-The installer sets up uv, installs the project dependencies, and creates a desktop shortcut.
-Initial setup requires internet access to download missing tools and dependencies.
+- **Draw the one-line:** import the one-line PDF as a background, then place and
+  connect breakers, switches, CTs, buses, transformers and other equipment.
+- **Enter equipment data:** coil and motor currents, open/closed status, breaker
+  pole arrangement, and which DC supply feeds each coil.
+- **Find protection zones:** bus, transformer and line zones are proposed
+  automatically from the CT boundaries and can be reviewed and edited.
+- **Calculate loads:** for each zone and stage (primary trip, reclose, motor
+  inrush, ...), the currents that operate together are summed, and each DC
+  supply's peak current is reported.
+- **Export results:** save the layout and export a PDF calculation report.
 
-With uv already installed, start the source application with:
+Results stay marked as provisional until every zone has been reviewed and
+verified. The tool reports momentary current only; it does not size battery
+capacity (amp-hours).
 
-```powershell
+## Getting started
+
+### Windows
+
+1. Right-click the downloaded zip and choose **Extract All**. Extract it to the
+   folder where you want to keep it: the shortcut points to this folder, so
+   don't move it afterwards.
+2. Open the extracted folder, then the `install` folder, and double-click
+   **`install.bat`**.
+3. If Windows shows "Windows protected your PC", click **More info**, then
+   **Run anyway**.
+4. Wait for "Setup Complete!". The first run needs an internet connection and
+   can take a few minutes; Python is downloaded automatically if needed.
+5. Start the app from the new **GFT_OPTO** shortcut on your desktop. After setup,
+   the app works offline.
+
+### Linux
+
+Extract the zip, open a terminal in the extracted folder and run:
+
+```bash
+bash install/install.sh
+```
+
+Then start **GFT_OPTO** from the applications menu or desktop.
+
+### Running from source
+
+With [uv](https://docs.astral.sh/uv/) installed, from the project folder:
+
+```bash
 uv sync --locked
 uv run gft-opto
 ```
 
-The project requires Python 3.12 or newer. Linux users can run `bash install/install.sh`
-to install dependencies, followed by `uv run gft-opto`.
+## Try it
 
-## Layouts and properties
+1. Click **Open** and choose `tests/layouts/two_zone_demo.json`.
+2. On the **Analysis** tab, click **Run Evaluation**.
+3. Click **Export Results** on the **File** tab to save the PDF report.
+
+The other sample layouts in `tests/layouts` are rebuilt from real one-line
+drawings and use randomised demonstration currents, not manufacturer data.
+
+For your own station: **Import PDF**, draw and connect the equipment, enter the
+currents in the properties panel, then use **Configure Zones** to review and
+verify each zone before running the evaluation.
+
+## User guide
+
+Detailed reference for every feature, the evaluation rules, building the
+Windows executable and running the tests.
+
+### Layouts and properties
 
 The top command bar groups controls into **File**, **Edit**, **View**, and
 **Analysis** tabs. File contains **New**, **Open** (`Ctrl+O`), **Save**
@@ -78,9 +126,11 @@ nonnegative; bus voltage must be positive or blank. Select one component at a
 time to edit its properties.
 
 **Create Component** shows fields according to the selected symbol. Breakers
-offer coil and motor currents, motor-operated switches offer motor currents,
-and buses offer a voltage rating. Passive symbols such as Ground have no
-operating-current fields. Custom components offer all coil and motor inputs.
+and custom components offer coil and motor currents. Motor-operated switches,
+transformers, and potential transformers offer motor inrush and running
+currents; transformer and PT currents are recorded but are not included in the
+DC calculation. Buses offer a voltage rating. Ground and other passive symbols
+have no operating-current fields.
 
 Select components in the workspace and press **Ctrl+C**, then **Ctrl+V** to
 duplicate them, or use **Copy** and **Paste** on the Edit tab. Ctrl-click
@@ -92,7 +142,7 @@ and "CB-A (3)". Paste supports
 Undo/Redo as one edit. Protection-zone assignments are not duplicated and should
 be reviewed after pasting. Copy/paste inside text fields still edits text normally.
 
-## Evaluation
+### Evaluation
 
 1. Import the one-line PDF and rebuild it with connected equipment. Enter
    the relevant coil and motor currents in the properties panel.
@@ -197,7 +247,7 @@ using **Export Results** on the File tab to export a PDF. Draft exports are expl
 marked incomplete. Zone configuration is saved in layout JSON; older layouts
 without zone configuration still open normally.
 
-## Desktop executable
+### Desktop executable
 
 Close the application, then rebuild the Windows executable from the project
 folder. The `package` group installs PyInstaller when needed:
@@ -215,7 +265,7 @@ The executable and app window use the GFT logo from `src/gft_opto/assets/gft_ico
 For an existing desktop shortcut with a manually selected icon, open its
 **Properties → Change Icon** and select that icon file or the rebuilt executable.
 
-## Regression checks
+### Regression checks
 
 With the project dependencies installed, run:
 
@@ -223,6 +273,12 @@ With the project dependencies installed, run:
 $env:QT_QPA_PLATFORM = "offscreen"
 .venv/Scripts/python.exe -m unittest discover -s tests -p 'test_*.py' -v
 Remove-Item Env:QT_QPA_PLATFORM
+```
+
+On Linux or macOS:
+
+```bash
+QT_QPA_PLATFORM=offscreen .venv/bin/python -m unittest discover -s tests -p 'test_*.py' -v
 ```
 
 GitHub Actions runs this suite on Windows with the native Qt platform and on
