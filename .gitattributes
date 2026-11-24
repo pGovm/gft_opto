@@ -1,0 +1,14 @@
+# Store text files with LF line endings, whatever editor or OS saves them.
+# This keeps diffs to real changes and keeps install.sh runnable on Linux
+# after it has been edited on Windows.
+* text=auto eol=lf
+
+# Windows command scripts are checked out with CRLF.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary files: never convert.
+*.pdf binary
+*.png binary
+*.ico binary
+*.zip binary
