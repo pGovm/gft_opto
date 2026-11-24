@@ -1,3 +1,7 @@
+
+from gft_opto.gui import messages
+# Defines DC loads and scenarios, totals their momentary currents, and supports netlist conversion and CSV/JSON results.
+
 # ============================================================
 # Momentary DC Battery Load Calculator
 # Substation worst-case scenario analysis (up to 12 scenarios)
@@ -40,34 +44,53 @@ class Scenario:
         warnings = []
 
         if len(self.loads) == 0:
-            warnings.append("No loads added to this scenario!")
+            warnings.append(messages.MOMENTARY_CALC2_NO_LOADS_ADDED_TO_THIS_SCENARIO)
 
         # peak current = sum of all loads firing at once (worst case)
         peak_amps = sum(load.total_amps() for load in self.loads)
 
         if peak_amps > 1000:
             warnings.append(
-                f"Peak current is {peak_amps:.1f} A — that's over 1000 A, please double-check your inputs."
+                messages.MOMENTARY_CALC2_PEAK_CURRENT_IS_A_THAT_S_OVER_1000_A.format(peak_amps)
             )
         for load in self.loads:
             if load.current_A <= 0:
-                warnings.append(f"'{load.name}' has zero or negative amps — please check.")
+                warnings.append(messages.MOMENTARY_CALC2_HAS_ZERO_OR_NEGATIVE_AMPS_PLEASE_CHECK.format(load.name))
 
         load_details = []
+        calculation_steps = [
+            "Each load total = quantity × current per unit."
+        ]
         for load in self.loads:
+            total_amps = load.total_amps()
             load_details.append({
                 "name"         : load.name,
                 "amps_per_unit": load.current_A,
                 "quantity"     : load.quantity,
-                "total_amps"   : round(load.total_amps(), 4),
+                "total_amps"   : round(total_amps, 4),
                 "note"         : load.note,
             })
+            calculation_steps.append(
+                f"{load.name}: {load.quantity:g} × {load.current_A:g} A "
+                f"= {total_amps:g} A"
+            )
+
+        if load_details:
+            load_totals = " + ".join(
+                f"{load['total_amps']:g} A" for load in load_details
+            )
+            calculation_steps.append(
+                f"Peak current = {load_totals} = {peak_amps:g} A."
+            )
+        else:
+            calculation_steps.append("Peak current = 0 A (no loads).")
 
         return {
             "scenario_name" : self.name,
             "voltage_V"     : self.voltage,
             "loads"         : load_details,
             "peak_current_A": round(peak_amps, 4),
+            "calculation_steps": calculation_steps,
             "warnings"      : warnings,
             "timestamp"     : datetime.now().isoformat(),
         }
@@ -85,8 +108,7 @@ class MomentaryLoadCalculator:
 
         if len(self.scenarios) >= MAX_SCENARIOS:
             raise Exception(
-                f"You've reached the maximum of {MAX_SCENARIOS} scenarios. "
-                "Remove one before adding another."
+                messages.MOMENTARY_CALC2_YOU_VE_REACHED_THE_MAXIMUM_OF_SCENARIOS_REMOVE_ONE.format(MAX_SCENARIOS)
             )
 
         scenario = Scenario(name, voltage)
@@ -97,8 +119,7 @@ class MomentaryLoadCalculator:
         """Attach an already-built Scenario (e.g. from scenario_from_netlist)."""
         if len(self.scenarios) >= MAX_SCENARIOS:
             raise Exception(
-                f"You've reached the maximum of {MAX_SCENARIOS} scenarios. "
-                "Remove one before adding another."
+                messages.MOMENTARY_CALC2_YOU_VE_REACHED_THE_MAXIMUM_OF_SCENARIOS_REMOVE_ONE.format(MAX_SCENARIOS)
             )
         self.scenarios.append(scenario)
         return scenario
@@ -227,7 +248,7 @@ def loads_from_component(component: dict) -> list:
     return loads
 
 
-def scenario_from_netlist(netlist: dict, name: str = None, voltage: float = None) -> Scenario:
+def scenario_from_netlist(netlist: dict, name: str | None = None, voltage: float | None = None) -> Scenario:
     """
     Build a single worst-case Scenario directly from a GUI-exported
     netlist dict (every listed current firing at once).
@@ -242,14 +263,14 @@ def scenario_from_netlist(netlist: dict, name: str = None, voltage: float = None
     return scenario
 
 
-def calculator_from_netlist(netlist: dict, system_name: str = None) -> MomentaryLoadCalculator:
+def calculator_from_netlist(netlist: dict, system_name: str | None = None) -> MomentaryLoadCalculator:
     """Wrap a netlist dict as a one-scenario MomentaryLoadCalculator."""
     calc = MomentaryLoadCalculator(system_name or netlist.get("system_name", "Netlist Study"))
     calc.add_scenario(scenario_from_netlist(netlist))
     return calc
 
 
-def calculator_from_netlist_file(path: str, system_name: str = None) -> MomentaryLoadCalculator:
+def calculator_from_netlist_file(path: str, system_name: str | None = None) -> MomentaryLoadCalculator:
     """Load a netlist JSON file from disk and wrap it as a calculator run."""
     with open(path) as f:
         netlist = json.load(f)
@@ -268,7 +289,13 @@ def netlist_from_scene(scene, system_name: str = "Netlist Study", voltage_V: flo
     connections = []
     seen_connections = set()
 
-    for item in scene.items():
+    # Snapshot once and use object identity for membership in this exact scene.
+    # An off-scene endpoint can share an ID with an in-scene object after reload.
+    items = list(scene.items())
+    symbol_objects = {id(item) for item in items
+                      if hasattr(item, "instance_id") and hasattr(item, "equip_type")}
+
+    for item in items:
         
         if hasattr(item, "instance_id") and hasattr(item, "equip_type"):
             components.append({
@@ -283,16 +310,18 @@ def netlist_from_scene(scene, system_name: str = "Netlist Study", voltage_V: flo
         
         if all(hasattr(item, attr) for attr in ("from_item", "from_port", "to_item", "to_port")):
             from_item, to_item = item.from_item, item.to_item
-            if from_item is None or to_item is None:
+            if (from_item is None or to_item is None or
+                    id(from_item) not in symbol_objects or id(to_item) not in symbol_objects):
                 continue
             from_id = getattr(from_item, "instance_id", None)
             to_id = getattr(to_item, "instance_id", None)
             if from_id is None or to_id is None:
                 continue
-            key = tuple(sorted((
-                f"{from_id}:{item.from_port}",
-                f"{to_id}:{item.to_port}",
-            )))
+            # Keep ID and terminal as separate values. Concatenating with ':'
+            # can collapse distinct wires when either string contains ':'.
+            endpoints = ((from_id, item.from_port), (to_id, item.to_port))
+            key = tuple(sorted(endpoints, key=lambda endpoint: (
+                str(endpoint[0]), "" if endpoint[1] is None else str(endpoint[1]))))
             if key in seen_connections:
                 continue
             seen_connections.add(key)
@@ -328,37 +357,6 @@ def evaluate_scene(scene, system_name: str = "Netlist Study", voltage_V: float =
     return scenario.calculate()
 
 
-def run_demo():
-    calc = MomentaryLoadCalculator("GFT 230/33 kV Substation — 125 V DC Bus")
-
-    # 1st scenario
-    s1 = calc.new_scenario("S1 - Routine CB Switching")
-    s1.add_load(Load("CB close operation", 12.0, quantity=2))
-    s1.add_load(Load("CB trip operation",  10.0, quantity=2))
-
-    # 2nd scenario
-    s2 = calc.new_scenario("S2 - Maximum Fault Clearance")
-    s2.add_load(Load("Main CB trip phase A", 18.0))
-    s2.add_load(Load("Main CB trip phase B", 18.0))
-    s2.add_load(Load("Main CB trip phase C", 18.0))
-    s2.add_load(Load("Backup CB trip",       16.0, note="Backup protection"))
-    s2.add_load(Load("Load shed breakers",   14.0, quantity=4))
-    s2.add_load(Load("Auto-reclose attempt", 15.0))
-
-    # 3rd scenario
-    s3 = calc.new_scenario("S3 - Busbar Fault All Feeders Trip")
-    s3.add_load(Load("Bus-zone CB trips",      20.0, quantity=8,
-                     note="All 8 feeders trip at the same time"))
-    s3.add_load(Load("Bus coupler trip",       22.0))
-    s3.add_load(Load("Transfer bus isolation", 16.0, quantity=3))
-
-    results = calc.run_all()
-    calc.print_summary(results)
-
-    calc.save_json(results, "momentary_results.json")
-    calc.save_csv(results,  "momentary_results.csv")
-    print()
-
 
 def run_from_netlist_file(path):
     calc = calculator_from_netlist_file(path)
@@ -374,4 +372,4 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         run_from_netlist_file(sys.argv[1])
     else:
-        run_demo()
+        raise SystemExit("Usage: python -m gft_opto.logic.momentary_calc2 <netlist.json>")

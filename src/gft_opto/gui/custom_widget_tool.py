@@ -1,42 +1,41 @@
-"""
-Create-Component dialog and a small standalone demo widget.
+# Provides the Create Component dialog for defining equipment symbols and electrical properties.
 
-Used by substation_gui4.py when the user clicks "Create Component".
+"""
+Create-Component dialog.
+
+Used by substation_gui.py when the user clicks "Create Component".
 Symbol type keys must stay in sync with EQUIPMENT_DEFS there.
 """
 
 from __future__ import annotations
 
-import sys
-
-from PySide6.QtCore import Qt, QRect, Slot
-from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import (
-    QApplication,
     QComboBox,
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
+    QAbstractSpinBox,
     QFormLayout,
     QLabel,
     QLineEdit,
-    QPushButton,
-    QVBoxLayout,
-    QWidget,
 )
+
 
 
 # ---------------------------------------------------------------------------
 # Symbol types offered in the Create Component dialog
-# (keys match EQUIPMENT_DEFS in substation_gui4.py; "bus" uses the custom box)
+# (keys match BUILTIN_SYMBOLS in substation_gui.py)
 # ---------------------------------------------------------------------------
 
 SYMBOL_TYPE_CHOICES: list[tuple[str, str]] = [
     ("breaker", "Circuit Breaker"),
+    ("incoming_line", "Incoming AC Line"),
     ("disconnect", "Disconnect Switch"),
     ("mos", "Motor Operated Switch (MOS)"),
     ("ct", "Current Transformer (CT/BCT)"),
     ("pt", "Potential Transformer (PT/VT)"),
+    ("surge_arrester", "Surge Arrester"),
+    ("line_trap", "Line Trap"),
     ("xfmr_2w", "Transformer (2-winding)"),
     ("xfmr_3w", "Transformer (3-winding)"),
     ("ground", "Ground"),
@@ -176,11 +175,16 @@ class ComponentDialog(QDialog):
         self._update_fields_for_component()
 
     def _update_fields_for_component(self, _text: str = ""):
-        """Bus shows rating only; other types show coil / motor fields."""
-        is_bus = self._is_bus()
-        self.form.setRowVisible(self.rating_spin, is_bus)
-        for field_widget in self._non_bus_fields:
-            self.form.setRowVisible(field_widget, not is_bus)
+        """Show electrical inputs supported by the selected symbol."""
+        symbol = self.symbol_type_key()
+        # Arresters are rated by MCOV; the value is stored as rating_kv like a bus rating.
+        self.form.labelForField(self.rating_spin).setText(
+            "MCOV (kV):" if symbol == "surge_arrester" else "Rating (kV):")
+        self.form.setRowVisible(self.rating_spin, symbol in {"bus", "surge_arrester"})
+        for field_widget in (self.trip_coil_1_spin, self.trip_coil_2_spin, self.close_coil_spin):
+            self.form.setRowVisible(field_widget, symbol in {"breaker", "custom"})
+        for field_widget in (self.motor_inrush_spin, self.motor_run_spin):
+            self.form.setRowVisible(field_widget, symbol in {"breaker", "mos", "custom", "xfmr_2w", "xfmr_3w", "pt"})
         self.adjustSize()
 
     @staticmethod
@@ -190,6 +194,7 @@ class ComponentDialog(QDialog):
     @staticmethod
     def _make_spin(default: float = 0):
         spin = QDoubleSpinBox()
+        spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
         spin.setRange(0, 100000)
         spin.setDecimals(2)
         spin.setValue(default)
@@ -212,84 +217,18 @@ class ComponentDialog(QDialog):
             "symbol_type": self.symbol_type_key(),
             "tags": ["Manufacturer", "Year"],
         }
-        if self._is_bus():
+        symbol = self.symbol_type_key()
+        if symbol in {"bus", "surge_arrester"}:
             data["Rating"] = self.rating_spin.value()
-        else:
+        if symbol in {"breaker", "custom"}:
             data.update({
                 "TripCoil1": self.trip_coil_1_spin.value(),
                 "TripCoil2": self.trip_coil_2_spin.value(),
                 "CloseCoil": self.close_coil_spin.value(),
+            })
+        if symbol in {"breaker", "mos", "custom", "xfmr_2w", "xfmr_3w", "pt"}:
+            data.update({
                 "MotorInrushCurrent": self.motor_inrush_spin.value(),
                 "MotorRunCurrent": self.motor_run_spin.value(),
             })
         return data
-
-
-# ---------------------------------------------------------------------------
-# Standalone demo widget (optional — run this file directly)
-# ---------------------------------------------------------------------------
-
-class ComponentWidget(QWidget):
-    """Tiny preview widget used only when launching this module alone."""
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setFixedSize(400, 400)
-        self._state = False
-        self._color_on = QColor(0, 255, 0)
-        self._color_off = QColor(100, 100, 100)
-        self._component_data = None
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setFont(QFont("Sans-Serif", 20))
-        rect = QRect(30, 30, 350, 350)
-
-        if self._state and self._component_data:
-            name_line = f"Component: {self._component_data['name']}"
-            if "Rating" in self._component_data:
-                detail_line = f"Rating: {self._component_data['Rating']} kV"
-            else:
-                detail_line = (
-                    f"Trip Coil 1: {self._component_data['TripCoil1']} A"
-                )
-            painter.drawText(
-                rect,
-                Qt.AlignmentFlag.AlignCenter,
-                f"{name_line}\n\n\n{detail_line}",
-            )
-        else:
-            painter.setBrush(self._color_off)
-            painter.setPen(QPen(QColor(0, 0, 0), 2))
-            painter.drawEllipse(rect)
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            self.toggle()
-
-    def toggle(self):
-        self._state = not self._state
-        self.update()
-
-    @Slot()
-    def open_dialog(self):
-        dialog = ComponentDialog(self)
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            self._component_data = dialog.component_data()
-            self._state = True
-            self.update()
-
-
-if __name__ == "__main__":
-    app = QApplication(sys.argv)
-    window = QWidget()
-    window.setWindowTitle("Create Component demo")
-    layout = QVBoxLayout(window)
-    preview = ComponentWidget()
-    configure_btn = QPushButton("Configure")
-    configure_btn.clicked.connect(preview.open_dialog)
-    layout.addWidget(preview)
-    layout.addWidget(configure_btn)
-    window.show()
-    sys.exit(app.exec())

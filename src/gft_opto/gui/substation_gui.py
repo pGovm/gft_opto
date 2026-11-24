@@ -1,0 +1,1424 @@
+from gft_opto.gui.pdf_export import PdfExportMixin
+from gft_opto.gui.evaluation_view import EvaluationViewMixin
+from gft_opto.gui.project_files import ProjectFilesMixin
+# Builds the main application window and connects editing, layout files, zone studies, and report export.
+
+"""
+GFT_Analysis_Tool — main window.
+
+The canvas, symbols, wires, and undo commands live in sibling modules.
+This file builds the panels around the workspace and starts the application.
+"""
+
+from gft_opto.gui import messages
+
+import functools
+import sys
+import math
+
+import pymupdf
+from PySide6.QtCore import Qt, QByteArray, QMimeData, QRectF
+from PySide6.QtGui import (
+    QAction, QColor, QPen, QBrush, QPalette, QPainterPath, QPainterPathStroker, QDrag, QIcon, QImage, QKeySequence, QPixmap, QUndoStack,
+)
+from PySide6.QtWidgets import (
+    QAbstractSpinBox,
+    QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFrame, QGraphicsScene, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QSlider, QTextEdit, QVBoxLayout, QWidget, QGraphicsRectItem, QGraphicsPathItem, QSpinBox, QScrollArea, QSizePolicy,
+)
+
+from gft_opto.gui.circuit_check import check_circuit
+from gft_opto.gui.custom_widget_tool import ComponentDialog, SYMBOL_TYPE_CHOICES
+from gft_opto.gui.routing import (
+    DEFAULT_GRID_OPACITY,
+    DEFAULT_WORKSPACE_HEIGHT,
+    DEFAULT_WORKSPACE_WIDTH,
+    GFT_LOGO_HEIGHT,
+    GFT_LOGO_PATH,
+    GFT_ICON_PATH,
+    MIME_EQUIPMENT,
+    SCENE_UNITS_PER_INCH,
+    SYMBOL_ROTATION_STEP,
+    UI_ACCENT,
+)
+from gft_opto.gui.symbols import (
+    BUILTIN_SYMBOLS, EQUIPMENT_DEFS, BusItem, ConnectionItem, CurrentTransformerItem, OneLineSymbolItem, make_user_equipment,
+)
+from gft_opto.gui.workspace import WorkspaceView
+from gft_opto.gui.commands import EditPropertyCommand, ReplaceZonesCommand, MoveEquipmentCommand
+from gft_opto.gui.routing import default_snap_port, position_for_snapped_port
+from gft_opto.logic.momentary_calc2 import netlist_from_scene
+from gft_opto.logic.protection_zones import connection_key, identify_zones
+from gft_opto.logic.protection_study import propose_zones, topology_records
+from gft_opto.gui.zone_dialog import ZoneDialog
+from gft_opto.gui.theme import SCROLLBAR_STYLE, readable_palette, ui_font
+from gft_opto.gui.ribbon import RibbonBar, populate_ribbon
+from gft_opto.logic.breaker_settings import breaker_settings, SETTING_KEYS
+from pathlib import Path
+from collections import defaultdict
+
+from gft_opto.logic.netlist_manager import build_netlist
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+# Drag-and-drop mime type for the equipment library
+MIME_EQUIPMENT = "application/x-substation-equipment"
+
+
+class _ZoneShape(QGraphicsPathItem):
+    """Reference drawing footprint, independent of electrical membership."""
+
+    def paint(self, painter, option, widget=None):
+        background = QColor(self.brush().color())
+        background.setAlpha(24)
+        painter.fillPath(self.path(), background)
+        super().paint(painter, option, widget)
+
+
+class _ZoneRectangle(QGraphicsRectItem):
+    """Translucent fill and hatching behind equipment; no electrical meaning."""
+
+    def paint(self, painter, option, widget=None):
+        background = QColor(self.brush().color())
+        background.setAlpha(24)
+        painter.fillRect(self.rect(), background)
+        super().paint(painter, option, widget)
+
+# Port / wire hit testing
+PORT_HIT_RADIUS = 14.0       # px — cursor must be this close to grab a port
+PORT_DOT_RADIUS = 4.0        # px — drawn port handle size
+WIRE_DRAG_THRESHOLD = 6.0    # px — move this far before a wire drag starts
+WIRE_HIT_RADIUS = 10.0       # px — how close to a wire to tee into it
+BUS_DROP_RADIUS = 16.0       # px — how close to a bus bar to drop a new node
+MIN_BUS_LENGTH = 40.0        # base units — shortest a bus can be dragged
+
+# Default AEP/ANSI E landscape drawing sheet (48 in wide × 36 in high)
+AEP_SHEET_WIDTH_IN = 48.0
+AEP_SHEET_HEIGHT_IN = 36.0
+SCENE_UNITS_PER_INCH = 50.0
+DEFAULT_WORKSPACE_WIDTH = AEP_SHEET_WIDTH_IN * SCENE_UNITS_PER_INCH
+DEFAULT_WORKSPACE_HEIGHT = AEP_SHEET_HEIGHT_IN * SCENE_UNITS_PER_INCH
+
+# Alignment grid: half-inch divisions on the AEP sheet
+GRID_SPACING = SCENE_UNITS_PER_INCH / 2.0
+GRID_MAJOR_EVERY = 5         # every Nth line is drawn heavier
+DEFAULT_GRID_OPACITY = 0.25
+
+# Symbol resize / rotate handles
+RESIZE_HANDLE_SIZE = 8.0
+RESIZE_HANDLE_HIT = 12.0
+MIN_SYMBOL_SCALE = 0.5
+MAX_SYMBOL_SCALE = 3.0
+SYMBOL_SCALE_STEP = 0.25     # snap resize to this increment
+SYMBOL_ROTATION_STEP = 90.0  # degrees — R / Shift+R and the Edit tab
+ROTATE_HANDLE_OFFSET = 28.0  # px above symbol AABB top edge
+ROTATE_HANDLE_RADIUS = 8.0
+ROTATE_HANDLE_HIT = 14.0
+ROTATE_DRAG_SNAP = 15.0      # degrees — snap while dragging the rotate handle
+
+# Branding / theme
+UI_ACCENT = "#006A4E"        # bottle green — primary GUI accent
+def _resource_root() -> Path:
+    """Package directory in a checkout, or the frozen bundle root in an .exe."""
+    bundled = getattr(sys, "_MEIPASS", None)
+    if bundled:
+        return Path(bundled)
+    return Path(__file__).resolve().parent.parent
+
+
+GFT_LOGO_PATH = _resource_root() / "assets" / "gft_logo.png"
+GFT_LOGO_HEIGHT = 34         # px — header wordmark height
+
+_instance_counters: dict[str, int] = defaultdict(int)
+
+
+# ---------------------------------------------------------------------------
+# Helpers — logo, IDs, grid snap, wire geometry
+# ---------------------------------------------------------------------------
+
+def load_gft_logo_pixmap(height: int = GFT_LOGO_HEIGHT) -> QPixmap:
+    """Load the GFT wordmark, clear near-white background, and size for the header."""
+    image = QImage(str(GFT_LOGO_PATH))
+    if image.isNull():
+        return QPixmap()
+
+    # Shrink first so chroma-keying stays cheap at startup.
+    work_h = max(height * 3, 96)
+    image = image.scaledToHeight(work_h, Qt.TransformationMode.SmoothTransformation)
+    image = image.convertToFormat(QImage.Format.Format_ARGB32)
+
+    width, height_px = image.width(), image.height()
+    min_x, min_y = width, height_px
+    max_x, max_y = -1, -1
+    for y in range(height_px):
+        for x in range(width):
+            c = image.pixelColor(x, y)
+            if c.red() > 220 and c.green() > 220 and c.blue() > 220:
+                c.setAlpha(0)
+                image.setPixelColor(x, y, c)
+            elif c.alpha() > 0:
+                min_x = min(min_x, x)
+                min_y = min(min_y, y)
+                max_x = max(max_x, x)
+                max_y = max(max_y, y)
+
+    if max_x >= min_x and max_y >= min_y:
+        pad = 2
+        image = image.copy(
+            max(0, min_x - pad),
+            max(0, min_y - pad),
+            min(width, max_x + pad + 1) - max(0, min_x - pad),
+            min(height_px, max_y + pad + 1) - max(0, min_y - pad),
+        )
+
+    return QPixmap.fromImage(image).scaledToHeight(
+        height, Qt.TransformationMode.SmoothTransformation
+    )
+
+
+class EquipmentList(QListWidget):
+    """List of equipment types; dragging an entry drops a new symbol on the canvas."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setDragEnabled(True)
+        self.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
+
+    def startDrag(self, supportedActions):
+        item = self.currentItem()
+        if not item:
+            return
+        equip_id = item.data(Qt.ItemDataRole.UserRole)
+        if not equip_id:
+            return
+
+        mime = QMimeData()
+        mime.setData(MIME_EQUIPMENT, QByteArray(str(equip_id).encode("utf-8")))
+
+        drag = QDrag(self)
+        drag.setMimeData(mime)
+        drag.exec(Qt.DropAction.CopyAction)
+
+
+# ---------------------------------------------------------------------------
+# Main window
+# ---------------------------------------------------------------------------
+
+class SubstationGuiMockup(ProjectFilesMixin, EvaluationViewMixin, PdfExportMixin, QMainWindow):
+    """Top-level window assembling header, panels, canvas, and footer."""
+
+    def __init__(self):
+        super().__init__()
+        self.layout_path = None
+        self.pdf_path = None
+        self._loading = True
+        self._saved_snapshot = None
+        self.last_netlist: dict | None = None
+        self.last_result: dict | None = None
+        self.protection_zones = []
+        self._zone_overlays = []
+        self._zone_report = None
+        self._zones_visible = True
+        self.setWindowTitle("GFT_Analysis_Tool")
+        self.setWindowIcon(QIcon(str(GFT_ICON_PATH)))
+        self.setMinimumSize(1000, 700)
+        self._apply_stylesheet()
+        self._build_ui()
+        self._setup_undo_redo()
+        self._setup_actions()
+        populate_ribbon(self)
+        self._loading = False
+        self._saved_snapshot = self._layout_data()
+        self.project_box.editingFinished.connect(self._mark_modified)
+        for control in (self.grid_show_cb, self.grid_snap_cb, self.pdf_show_cb):
+            control.toggled.connect(self._mark_modified)
+        self.grid_opacity_slider.valueChanged.connect(self._mark_modified)
+        self._on_selection_changed()
+
+    def _apply_stylesheet(self):
+        self.setFont(ui_font())
+        self.setPalette(readable_palette(self.palette()))
+        self.setStyleSheet("""
+    QWidget { font-size: 10pt; font-weight: normal; }
+    QMainWindow { background-color: #f4f6f8; }
+    QLabel#appTitle { font-size: 11pt; font-weight: 600; }
+
+    QMenuBar, QMenu {
+        background-color: #ffffff;
+        color: #1f2933;
+        font-size: 10pt;
+    }
+    QMenuBar::item { background: transparent; padding: 6px 12px; }
+    QMenuBar::item:selected, QMenu::item:selected {
+        background-color: #006A4E;
+        color: #ffffff;
+    }
+    QMenu::item { padding: 7px 24px; }
+    QMenu::item:disabled { color: #64748b; }
+
+    QLabel, QGroupBox { color: #1f2933; }
+
+    QCheckBox {
+        color: #1f2933;
+        spacing: 8px;
+        font-size: 10pt;
+        font-weight: normal;
+    }
+
+    QCheckBox::indicator {
+        width: 18px;
+        height: 18px;
+        border: 1px solid #cbd2d9;
+        border-radius: 4px;
+        background: white;
+    }
+
+    QCheckBox::indicator:checked {
+        background: #006A4E;
+        border-color: #006A4E;
+    }
+    QCheckBox:disabled { color: #64748b; }
+
+    QSlider::groove:horizontal {
+        height: 6px;
+        background: #d9e2ec;
+        border-radius: 3px;
+    }
+
+    QSlider::handle:horizontal {
+        width: 14px;
+        margin: -5px 0;
+        border-radius: 7px;
+        background: #006A4E;
+    }
+
+    QGroupBox {
+        background: white;
+        border: 1px solid #d9e2ec;
+        border-radius: 12px;
+        margin-top: 20px;
+        font-weight: bold;
+        font-size: 11pt;
+        padding-top: 25px;
+    }
+
+    QGroupBox::title {
+        subcontrol-origin: margin;
+        left: 16px;
+        padding: 0 8px;
+        color: #1f2933;
+    }
+
+    QPushButton {
+        background-color: #006A4E; color: white; border: none;
+        border-radius: 8px; padding: 8px 16px; font-weight: 600;
+    }
+
+    QPushButton:disabled {
+        background-color: #9fb3c8;
+        color: #e4e7eb;
+    }
+
+    QLineEdit, QTextEdit, QComboBox, QListWidget, QSpinBox {
+        background: white; border: 1px solid #cbd2d9;
+        border-radius: 8px; padding: 8px; color: #1f2933;
+        selection-background-color: #006a4e; selection-color: #ffffff;
+    }
+    QComboBox QAbstractItemView {
+        background-color: #ffffff; color: #1f2933;
+        selection-background-color: #006a4e; selection-color: #ffffff;
+        font-size: 10pt; font-weight: normal;
+    }
+    QGroupBox#selectedProperties QWidget {
+        color: #1f2933;
+        font-size: 10pt; font-weight: normal;
+    }
+    QGroupBox#selectedProperties QLabel { background-color: transparent; }
+    QGroupBox#selectedProperties QLineEdit,
+    QGroupBox#selectedProperties QComboBox,
+    QGroupBox#selectedProperties QSpinBox {
+        background-color: #ffffff; color: #1f2933;
+        selection-background-color: #006a4e; selection-color: #ffffff;
+        padding: 6px; min-height: 20px;
+    }
+    QGroupBox#selectedProperties QComboBox:disabled {
+        background-color: #f4f6f8; color: #52606d;
+    }
+    QScrollArea#propertiesScroll { border: none; background-color: #f4f6f8; }
+    QFrame#canvasFrame { background: white; border: 2px dashed #9fb3c8; border-radius: 14px; }
+    QFrame#toolbarFrame { background: white; border: 1px solid #d9e2ec; border-radius: 12px; }
+    QToolTip { background: #ffffff; color: #1f2933; border: 1px solid #cbd2d9; padding: 4px; }
+
+    QMessageBox {
+        background-color: #ffffff;
+    }
+    QMessageBox QLabel {
+        color: #1f2933;
+        background-color: transparent;
+        font-size: 10pt;
+    }
+""" + SCROLLBAR_STYLE)
+
+    # --- Undo / redo wiring -------------------------------------------------
+
+    def _setup_undo_redo(self):
+        self.undo_stack = QUndoStack(self)
+        if hasattr(self, "workspace_view"):
+            self.workspace_view.undo_stack = self.undo_stack
+
+        self.undo_action = self.undo_stack.createUndoAction(self, "Undo")
+        self.undo_action.setShortcut(QKeySequence.StandardKey.Undo)
+        self.redo_action = self.undo_stack.createRedoAction(self, "Redo")
+        self.redo_action.setShortcut(QKeySequence.StandardKey.Redo)
+        self.addAction(self.undo_action)
+        self.addAction(self.redo_action)
+
+        self.undo_action.setIconText("Undo")
+        self.redo_action.setIconText("Redo")
+
+        self.undo_stack.indexChanged.connect(self._on_undo_index_changed)
+
+    def _on_undo_index_changed(self, _index: int):
+        self._mark_modified()
+        if not hasattr(self, "footer_status_label"):
+            return
+        text = self.undo_stack.undoText() if self.undo_stack.canUndo() else ""
+        self.footer_status_label.setText(
+            f"Ready — last action: {text}" if text else "Ready"
+        )
+
+    def _setup_actions(self):
+        # All command buttons use these actions, including shortcut and enabled
+        # state. Clipboard/delete/rotate shortcuts remain local to the workspace
+        # so that text fields retain their normal editing behavior.
+        for name, title, caption, shortcut, callback in (
+            ("new_layout", "New Layout", "New", "Ctrl+N", self.new_layout),
+            ("open_layout", "Open Layout…", "Open", "Ctrl+O", self.open_layout),
+            ("save_layout", "Save Layout", "Save", "Ctrl+S", self.save_layout),
+            ("save_as", "Save Layout As…", "Save As", "Ctrl+Shift+S", lambda: self.save_layout(save_as=True)),
+            ("import_pdf", "Import PDF", "Import PDF", None, self.on_import_pdf_clicked),
+            ("import_netlist", "Import Netlist JSON", "Import Netlist", None, self.import_netlist_json),
+            ("export_results", "Save Calculation PDF", "Export Results", None, self._on_save_results_clicked),
+            ("save_netlist_pdf", "Save Netlist PDF", "Netlist PDF", None, self._on_save_netlist_pdf),
+            ("copy", "Copy Selected Components", "Copy", None, self.workspace_view.copy_selected),
+            ("paste", "Paste Components", "Paste", None, self.workspace_view.paste_components),
+            ("delete", "Delete Selected", "Delete", None, self.workspace_view.delete_selected),
+            ("rotate", "Rotate Selected 90°", "Rotate 90°", None, self.workspace_view.rotate_selected),
+            ("create_component", "Create Component", "Create Component", None, self._on_create_component_clicked),
+            ("validate", "Validate Circuit", "Validate", None, self._on_check_circuit_clicked),
+            ("configure_zones", "Configure Protection Zones", "Configure Zones", None, self._configure_protection_zones),
+            ("align_grid", "Align to Grid", "Align to Grid", None, self._align_to_grid),
+            ("evaluate", "Run Evaluation", "Run Evaluation", None, self._on_run_evaluation_clicked),
+            ("expand_analysis", "Expand Analysis", "Expand Analysis", None, self._expand_zone_analysis),
+        ):
+            action = QAction(title, self)
+            action.setIconText(caption)
+            action.setToolTip(f"{title} ({shortcut})" if shortcut else title)
+            if shortcut:
+                action.setShortcut(QKeySequence(shortcut))
+            action.triggered.connect(lambda checked=False, callback=callback: callback())
+            setattr(self, name + "_action", action)
+            self.addAction(action)
+        self.export_results_action.setEnabled(False)
+        self.import_netlist_action.setToolTip(
+            "Replace the current drawing with a validated netlist JSON file"
+        )
+        self.copy_action.setToolTip("Copy selected components (Ctrl+C in workspace)")
+        self.paste_action.setToolTip("Paste components (Ctrl+V in workspace)")
+
+    def _align_to_grid(self):
+        items = [item for item in self.workspace_scene.selectedItems() if isinstance(item, OneLineSymbolItem)]
+        if not items:
+            items = [item for item in self.workspace_scene.items() if isinstance(item, OneLineSymbolItem)]
+        moves = []
+        for item in items:
+            port = default_snap_port(item)
+            position = position_for_snapped_port(item.pos(), item.port_scene_pos(port) - item.pos())
+            if position != item.pos():
+                moves.append((item, item.pos(), position))
+        if moves:
+            command = MoveEquipmentCommand(moves)
+            command.setText("Align to Grid")
+            self.undo_stack.push(command)
+
+
+    def _mark_modified(self, *_args):
+        if self._loading:
+            return
+        data = self._layout_data()
+        self.setWindowTitle(f"{data['project']}{' *' if data != self._saved_snapshot else ''} — GFT_Analysis_Tool")
+        if self.last_result is not None and data != self._evaluated_snapshot:
+            self._invalidate_results()
+
+
+# import JSON netlist file function
+
+
+    # --- Layout assembly ----------------------------------------------------
+
+    def _build_ui(self):
+        central = QWidget()
+        self.setCentralWidget(central)
+
+        main_layout = QVBoxLayout(central)
+        main_layout.setContentsMargins(16, 12, 16, 12)
+        main_layout.setSpacing(12)
+
+        main_layout.addWidget(self._build_header())
+        main_layout.addLayout(self._build_content())
+        main_layout.addWidget(self._build_footer())
+
+        if hasattr(self, "workspace_view"):
+            self.workspace_view.status_callback = self.footer_status_label.setText
+        self._setup_grid_controls()
+
+    def _setup_grid_controls(self):
+        self.grid_show_cb = QCheckBox("Show Grid")
+        self.grid_show_cb.setChecked(True)
+        self.grid_show_cb.toggled.connect(self.workspace_view.set_grid_visible)
+
+        self.pdf_show_cb = QCheckBox("Show PDF")
+        self.pdf_show_cb.setChecked(True)
+        self.pdf_show_cb.setEnabled(False)
+        self.pdf_show_cb.setToolTip("Import a PDF first to enable this option")
+        self.pdf_show_cb.toggled.connect(self.workspace_view.set_pdf_visible)
+
+        self.zones_show_cb = QCheckBox("Show Zones")
+        self.zones_show_cb.setChecked(self._zones_visible)
+        self.zones_show_cb.setToolTip("Show or hide zone shading without changing the study")
+        self.zones_show_cb.toggled.connect(self._set_zones_visible)
+
+        self.circuit_show_cb = QCheckBox("Show Circuit")
+        self.circuit_show_cb.setChecked(True)
+        self.circuit_show_cb.setToolTip("Show or hide drawn equipment and wires without deleting them")
+        self.circuit_show_cb.toggled.connect(self._sync_circuit_visibility)
+
+        self.grid_snap_cb = QCheckBox("Snap to Grid")
+        self.grid_snap_cb.setChecked(True)
+        self.grid_snap_cb.toggled.connect(self.workspace_view.set_snap_to_grid)
+
+        self.grid_opacity_controls = QWidget()
+        opacity_row = QHBoxLayout(self.grid_opacity_controls)
+        opacity_row.setContentsMargins(0, 0, 0, 0)
+        opacity_row.setSpacing(4)
+        opacity_row.addWidget(QLabel("Grid Opacity:"))
+        self.grid_opacity_slider = QSlider(Qt.Orientation.Horizontal)
+        self.grid_opacity_slider.setRange(0, 100)
+        self.grid_opacity_slider.setFixedWidth(120)
+        self.grid_opacity_slider.setAccessibleName("Grid opacity")
+        self.grid_opacity_label = QLabel(f"{self.grid_opacity_slider.value()}%")
+        opacity_row.addWidget(self.grid_opacity_slider)
+        opacity_row.addWidget(self.grid_opacity_label)
+        opacity_row.addStretch(1)
+
+        def _on_opacity_changed(value: int):
+            self.grid_opacity_label.setText(f"{value}%")
+            self.workspace_view.set_grid_opacity(value)
+
+        self.grid_opacity_slider.valueChanged.connect(_on_opacity_changed)
+        self.grid_opacity_slider.setValue(round(DEFAULT_GRID_OPACITY * 100))
+
+    def _build_footer(self):
+        footer = QFrame()
+        footer.setStyleSheet(
+            "QFrame { background: white; border: 1px solid #d9e2ec; border-radius: 10px; }"
+            "QLabel { color: #52606d; }"
+        )
+        footer_layout = QHBoxLayout(footer)
+        footer_layout.setContentsMargins(12, 6, 12, 6)
+
+        self.response_time_label = QLabel("Response time: -- ms")
+        self.footer_status_label = QLabel("Ready")
+
+        footer_layout.addWidget(self.response_time_label)
+        footer_layout.addStretch(1)
+        footer_layout.addWidget(self.footer_status_label)
+        return footer
+
+    def _build_header(self):
+        frame = QFrame()
+        frame.setObjectName("toolbarFrame")
+        layout = QHBoxLayout(frame)
+        layout.setContentsMargins(12, 8, 12, 8)
+        layout.setSpacing(16)
+
+        identity = QWidget()
+        identity.setObjectName("headerIdentity")
+        identity.setMaximumWidth(480)
+        identity.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+        identity_layout = QHBoxLayout(identity)
+        identity_layout.setContentsMargins(0, 0, 0, 0)
+        identity_layout.setSpacing(6)
+
+        logo = QLabel()
+        logo.setObjectName("headerLogo")
+        logo_pix = load_gft_logo_pixmap(height=40)
+        if not logo_pix.isNull():
+            logo.setPixmap(logo_pix)
+            logo.setFixedSize(logo_pix.size())
+        logo.setToolTip("GFT Inc")
+        logo.setStyleSheet("background: transparent; border: none;")
+
+        title = QLabel("GFT_Analysis_Tool")
+        title.setObjectName("appTitle")
+        title.setWordWrap(True)
+        title.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        title.setMinimumWidth(156)
+        title.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+
+        project_box = QLineEdit("Untitled Project")
+        project_box.setMinimumWidth(180)
+        project_box.setMaximumWidth(320)
+        project_box.setAccessibleName("Project name")
+        self.project_box = project_box
+
+        project_row = QHBoxLayout()
+        project_row.setSpacing(6)
+        project_row.addWidget(QLabel("Project:"))
+        project_row.addWidget(project_box, 1)
+        identity_layout.addWidget(logo)
+        identity_layout.addWidget(title, 1)
+        layout.addWidget(identity, 1)
+
+        self.ribbon = RibbonBar()
+        layout.addWidget(self.ribbon, 2)
+        layout.addLayout(project_row)
+        return frame
+
+    def _build_content(self):
+        layout = QHBoxLayout()
+        layout.setSpacing(18)
+        layout.addWidget(self._build_left_panel(), 2)
+        layout.addWidget(self._build_center_panel(), 5)
+        layout.addWidget(self._build_right_panel(), 3)
+        return layout
+
+    def _build_left_panel(self):
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setSpacing(16)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        # Equipment palette
+        palette_group = QGroupBox("Equipment Library")
+        palette_layout = QVBoxLayout(palette_group)
+
+        search = QLineEdit()
+        self.equipment_search = search
+        search.setPlaceholderText("Search equipment...")
+        palette_layout.addWidget(search)
+
+        self.equipment_list = EquipmentList()
+        for equip_id, meta in EQUIPMENT_DEFS.items():
+            item = QListWidgetItem(meta["label"])
+            item.setData(Qt.ItemDataRole.UserRole, equip_id)
+            self.equipment_list.addItem(item)
+        palette_layout.addWidget(self.equipment_list)
+
+        def _filter_equipment(text: str):
+            t = (text or "").strip().lower()
+            for i in range(self.equipment_list.count()):
+                it = self.equipment_list.item(i)
+                it.setHidden(t not in (it.text() or "").lower())
+
+        search.textChanged.connect(_filter_equipment)
+
+        layout.addWidget(palette_group, 1)
+        return container
+
+    def _build_center_panel(self):
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setSpacing(16)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        canvas = QFrame()
+        canvas.setObjectName("canvasFrame")
+        canvas_layout = QVBoxLayout(canvas)
+
+        self.workspace_scene = QGraphicsScene(self)
+        self.workspace_scene.changed.connect(self._sync_circuit_visibility)
+        self.workspace_scene.setSceneRect(
+            QRectF(0, 0, DEFAULT_WORKSPACE_WIDTH, DEFAULT_WORKSPACE_HEIGHT)
+        )
+        self.workspace_view = WorkspaceView(self.workspace_scene, self)
+        self.workspace_view.setStyleSheet("QGraphicsView { background: white; border: none; }")
+
+        self._workspace_original = None
+        canvas_layout.addWidget(self.workspace_view, 1)
+
+        layout.addWidget(canvas, 1)
+        return container
+
+    def _build_right_panel(self):
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setSpacing(16)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        # Properties for the selected symbol or connection
+        properties_group = QGroupBox("Selected Element Properties")
+        properties_group.setObjectName("selectedProperties")
+        palette = QPalette(properties_group.palette())
+        for role, color in ((QPalette.ColorRole.Window, "#ffffff"), (QPalette.ColorRole.Base, "#ffffff"),
+                            (QPalette.ColorRole.Text, "#1f2933"), (QPalette.ColorRole.WindowText, "#1f2933"),
+                            (QPalette.ColorRole.ButtonText, "#1f2933"), (QPalette.ColorRole.Button, "#ffffff"),
+                            (QPalette.ColorRole.Highlight, "#006a4e"), (QPalette.ColorRole.HighlightedText, "#ffffff")):
+            palette.setColor(role, QColor(color))
+        properties_group.setPalette(palette)
+        properties_layout = QGridLayout(properties_group)
+        properties_layout.setHorizontalSpacing(16)
+        properties_layout.setVerticalSpacing(12)
+
+        properties_layout.addWidget(QLabel("Type:"), 0, 0)
+        self.prop_type = QLineEdit("—")
+        self.prop_type.setReadOnly(True)
+        properties_layout.addWidget(self.prop_type, 0, 1)
+        properties_layout.addWidget(QLabel("ID:"), 1, 0)
+        self.prop_name = QLineEdit("—")
+        self.prop_name.editingFinished.connect(lambda: self._on_property_id_changed(self.prop_name.text()))
+        properties_layout.addWidget(self.prop_name, 1, 1)
+
+        self.prop_status_label = QLabel("Status:")
+        properties_layout.addWidget(self.prop_status_label, 2, 0)
+        self.prop_status = QComboBox()
+        self.prop_status.addItems(["Closed", "Open", "Normally Open", "Maintenance"])
+        self.prop_status.currentTextChanged.connect(self._on_property_status_changed)
+        properties_layout.addWidget(self.prop_status, 2, 1)
+
+        self.prop_trip_coil_1_label = QLabel("Trip Coil 1 (A):")
+        properties_layout.addWidget(self.prop_trip_coil_1_label, 3, 0)
+        self.prop_trip_coil_1 = QLineEdit("—")
+        self.prop_trip_coil_1.editingFinished.connect(
+            lambda: self._on_numeric_property_changed("trip_coil_1_a", self.prop_trip_coil_1.text())
+        )
+        properties_layout.addWidget(self.prop_trip_coil_1, 3, 1)
+
+        self.prop_trip_coil_2_label = QLabel("Trip Coil 2 (A):")
+        properties_layout.addWidget(self.prop_trip_coil_2_label, 4, 0)
+        self.prop_trip_coil_2 = QLineEdit("—")
+        self.prop_trip_coil_2.editingFinished.connect(
+            lambda: self._on_numeric_property_changed("trip_coil_2_a", self.prop_trip_coil_2.text())
+        )
+        properties_layout.addWidget(self.prop_trip_coil_2, 4, 1)
+
+        self.prop_close_coil_label = QLabel("Close Coil (A):")
+        properties_layout.addWidget(self.prop_close_coil_label, 5, 0)
+        self.prop_close_coil = QLineEdit("—")
+        self.prop_close_coil.editingFinished.connect(
+            lambda: self._on_numeric_property_changed("close_coil_a", self.prop_close_coil.text())
+        )
+        properties_layout.addWidget(self.prop_close_coil, 5, 1)
+
+        self.prop_motor_inrush_label = QLabel("Motor Inrush Current (A):")
+        properties_layout.addWidget(self.prop_motor_inrush_label, 6, 0)
+        self.prop_motor_inrush = QLineEdit("—")
+        self.prop_motor_inrush.editingFinished.connect(
+            lambda: self._on_numeric_property_changed("motor_inrush_a", self.prop_motor_inrush.text())
+        )
+        properties_layout.addWidget(self.prop_motor_inrush, 6, 1)
+
+        self.prop_motor_run_label = QLabel("Motor Run Current (A):")
+        properties_layout.addWidget(self.prop_motor_run_label, 7, 0)
+        self.prop_motor_run = QLineEdit("—")
+        self.prop_motor_run.editingFinished.connect(
+            lambda: self._on_numeric_property_changed("motor_run_a", self.prop_motor_run.text())
+        )
+        properties_layout.addWidget(self.prop_motor_run, 7, 1)
+
+        self.prop_voltage_label = QLabel("Voltage (kV):")
+        properties_layout.addWidget(self.prop_voltage_label, 8, 0)
+        self.prop_voltage = QLineEdit("—")
+        self.prop_voltage.setPlaceholderText("kV")
+        self.prop_voltage.editingFinished.connect(lambda: self._on_property_voltage_changed(self.prop_voltage.text()))
+        properties_layout.addWidget(self.prop_voltage, 8, 1)
+
+        self.breaker_fields = {}
+        self._breaker_widgets = []
+        choices = {
+            "coil_current_basis": [("Whole breaker", "whole_breaker"), ("Per mechanism", "per_mechanism")],
+            "mechanism_arrangement": [("Shared mechanism", "shared"), ("Independent per pole", "independent")],
+        }
+        labels = {"coil_current_basis": "Coil current basis:", "mechanism_arrangement": "Mechanisms:",
+                  "pole_count": "Breaker poles:", "trip_coil_1_supply": "Trip Coil 1 supply:",
+                  "trip_coil_2_supply": "Trip Coil 2 supply:", "close_coil_supply": "Close Coil supply:",
+                  "motor_supply": "Motor supply:"}
+        for row, key in enumerate(SETTING_KEYS, 9):
+            label = QLabel(labels[key])
+            if key in choices:
+                field = QComboBox()
+                for text, value in choices[key]:
+                    field.addItem(text, value)
+                field.currentIndexChanged.connect(lambda _index, key=key: self._on_breaker_setting_changed(key))
+            elif key == "pole_count":
+                field = QSpinBox()
+                field.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
+                field.setRange(1, 3)
+                field.valueChanged.connect(lambda _value, key=key: self._on_breaker_setting_changed(key))
+            else:
+                field = QLineEdit()
+                field.editingFinished.connect(lambda key=key: self._on_breaker_setting_changed(key))
+            properties_layout.addWidget(label, row, 0)
+            properties_layout.addWidget(field, row, 1)
+            self.breaker_fields[key] = field
+            self._breaker_widgets.extend((label, field))
+        self.breaker_fields["coil_current_basis"].setToolTip(
+            "Applies to trip and close coils. Motor currents are always entered for the whole device."
+        )
+        # Pack the rows at the top. Without this, spare height is shared between
+        # rows, so selections with few fields (transformer, PT, bus) spread out.
+        properties_layout.setRowStretch(properties_layout.rowCount(), 1)
+
+        self._non_bus_property_widgets = [
+            self.prop_status_label,
+            self.prop_status,
+            self.prop_trip_coil_1_label,
+            self.prop_trip_coil_1,
+            self.prop_trip_coil_2_label,
+            self.prop_trip_coil_2,
+            self.prop_close_coil_label,
+            self.prop_close_coil,
+            self.prop_motor_inrush_label,
+            self.prop_motor_inrush,
+            self.prop_motor_run_label,
+            self.prop_motor_run,
+        ]
+        self._set_bus_property_mode(False)
+
+        analysis_group = QGroupBox("Analysis Output")
+        analysis_layout = QVBoxLayout(analysis_group)
+        self.zone_view = QComboBox()
+        self.zone_view.addItem("Run Evaluation to display zones")
+        self.zone_view.currentIndexChanged.connect(self._show_zone_highlights)
+        analysis_layout.addWidget(self.zone_view)
+        self.output_box = QTextEdit()
+        self.output_box.setPlaceholderText("Analysis results will appear here...")
+        self.output_box.setReadOnly(True)
+        analysis_layout.addWidget(self.output_box)
+
+        properties_scroll = QScrollArea()
+        properties_scroll.setObjectName("propertiesScroll")
+        properties_scroll.viewport().setAutoFillBackground(True)
+        properties_scroll.viewport().setPalette(palette)
+        properties_scroll.setWidgetResizable(True)
+        properties_scroll.setWidget(properties_group)
+        properties_scroll.setMinimumHeight(180)
+        layout.addWidget(properties_scroll, 3)
+        layout.addWidget(analysis_group, 4)
+
+        if hasattr(self, "workspace_scene"):
+            self.workspace_scene.selectionChanged.connect(self._on_selection_changed)
+
+        return container
+
+    # --- Event handlers -----------------------------------------------------
+
+    def _on_check_circuit_clicked(self):
+        """Report open terminals and short circuits in the drawn one-line."""
+        if not hasattr(self, "workspace_scene"):
+            return
+        report = check_circuit(self.workspace_scene)
+        lines = [
+            "Circuit check: OK" if report["ok"] else messages.SUBSTATION_GUI4_CIRCUIT_PROBLEMS,
+            "",
+        ]
+        open_ends = report["open_ends"]
+        shorts = report["shorts"]
+        lines.append(messages.SUBSTATION_GUI4_OPEN_ENDS if open_ends else "Open ends: none")
+        for issue in open_ends:
+            lines.append(f"  • {issue}")
+        lines.append("")
+        lines.append(messages.SUBSTATION_GUI4_SHORT_CIRCUITS if shorts else messages.SUBSTATION_GUI4_SHORT_CIRCUITS_NONE)
+        for issue in shorts:
+            lines.append(f"  • {issue}")
+        if hasattr(self, "footer_status_label"):
+            if report["ok"]:
+                self.footer_status_label.setText("Circuit check passed")
+            elif open_ends == [messages.CIRCUIT_CHECK_NO_COMPONENTS_ON_THE_CANVAS]:
+                self.footer_status_label.setText(messages.SUBSTATION_GUI4_PLACE_COMPONENTS_BEFORE_CHECK)
+            else:
+                self.footer_status_label.setText(
+                    messages.SUBSTATION_GUI4_CIRCUIT_COUNTS.format(len(open_ends), len(shorts))
+                )
+        message = "\n".join(lines)
+        if report["ok"]:
+            QMessageBox.information(self, "Validate", message)
+        else:
+            QMessageBox.warning(self, messages.SUBSTATION_GUI4_VALIDATE, message)
+
+    def _protection_netlist(self):
+        netlist = netlist_from_scene(self.workspace_scene,
+            system_name=self.project_box.text().strip() or "Untitled Project")
+        labels = {item.instance_id: item.visible_id() for item in self.workspace_scene.items()
+                  if isinstance(item, OneLineSymbolItem)}
+        for component in netlist["components"]:
+            component["label"] = labels[component["id"]]
+        return netlist
+
+    def _build_current_netlist(self):
+        return build_netlist(
+            self.workspace_scene,
+            project_name=self.project_box.text().strip() or "Untitled Project",
+        )
+
+    def _scene_topology(self):
+        """Detect real scene components and conductors; never save live Zone objects."""
+        items = [item for item in self.workspace_scene.items()
+                 if isinstance(item, OneLineSymbolItem)]
+        primary = identify_zones(items, (CurrentTransformerItem,), respect_switch_state=True)
+        return topology_records(primary)
+
+    def _configure_protection_zones(self):
+        try:
+            netlist = self._protection_netlist()
+            dialog = ZoneDialog(netlist, self.protection_zones or propose_zones(netlist), self)
+        except (ValueError, TypeError) as error:
+            QMessageBox.warning(self, messages.SUBSTATION_GUI4_PROTECTION_ZONE_SETTINGS, str(error))
+            return
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            changes = []
+            for item in self.workspace_scene.items():
+                if isinstance(item, OneLineSymbolItem) and item.equip_type == "breaker":
+                    props = dialog.components[item.instance_id]["properties"]
+                    changes.extend((item, key, props[key]) for key in SETTING_KEYS
+                                   if key in props and getattr(item, "properties", {}).get(key) != props[key])
+            if changes or self.protection_zones != dialog.zones:
+                self.undo_stack.beginMacro("Configure protection zones and breaker settings")
+                self.undo_stack.push(ReplaceZonesCommand(
+                    {"zones": self.protection_zones},
+                    {"zones": dialog.zones}, self._apply_study_settings))
+                for item, key, value in changes:
+                    self.undo_stack.push(EditPropertyCommand(item, key, value, self._on_selection_changed))
+                self.undo_stack.endMacro()
+            self._mark_modified()
+            self._on_run_evaluation_clicked()
+
+    def _apply_study_settings(self, settings):
+        self._apply_protection_zones(settings["zones"])
+
+    def _apply_protection_zones(self, zones):
+        self.protection_zones = zones
+        self._on_selection_changed()
+
+
+    def _sync_circuit_visibility(self, *_):
+        control = getattr(self, "circuit_show_cb", None)
+        visible = control.isChecked() if control is not None else True
+        for item in self.workspace_scene.items():
+            if isinstance(item, (OneLineSymbolItem, ConnectionItem)):
+                if not visible and item.isSelected():
+                    item.setSelected(False)
+                if item.isVisible() != visible:
+                    item.setVisible(visible)
+
+    def _set_zones_visible(self, visible):
+        self._zones_visible = visible
+        for overlay in self._zone_overlays:
+            overlay.setVisible(self._zones_visible)
+
+    def _clear_zone_highlights(self):
+        for overlay in self._zone_overlays:
+            if overlay.scene() is not None:
+                overlay.scene().removeItem(overlay)
+        self._zone_overlays = []
+
+    def _show_zone_highlights(self, *_):
+        self._clear_zone_highlights()
+        if self._zone_report is None:
+            return
+        selected = self.zone_view.currentData()
+        topology_mode = isinstance(selected, (tuple, list)) and selected[0] == "topology"
+        selected_id = selected[1] if topology_mode else selected
+        rows = self._zone_report["topology_regions"] if topology_mode else self._zone_report["zones"]
+        symbols = {item.instance_id: item for item in self.workspace_scene.items()
+                   if isinstance(item, OneLineSymbolItem)}
+        wires = [item for item in self.workspace_scene.items() if isinstance(item, ConnectionItem)]
+        colors = ("#0072b2", "#d55e00", "#009e73", "#cc79a7", "#e69f00", "#56b4e9")
+        for index, zone in enumerate(rows):
+            if selected_id and zone["id"] != selected_id:
+                continue
+            color = (QColor(colors[index]) if index < len(colors) else
+                     QColor.fromHsvF((index * 0.61803398875) % 1.0, 0.65, 0.8))
+            pen = QPen(color, 3)
+            if topology_mode:
+                pen.setStyle(Qt.PenStyle.DotLine)
+            elif not zone["complete"]:
+                pen.setStyle(Qt.PenStyle.DashLine)
+            tooltip = zone["name"] + (" (topology only; no automatic current)" if topology_mode else "")
+            if not topology_mode:
+                tooltip += f" ({zone.get('kind', 'Manual')} zone)"
+            # Follow primary geometry instead of filling its bounding rectangle.
+            # Labels and empty space between branches do not define coverage.
+            coverage = QPainterPath()
+            stroker = QPainterPathStroker()
+            stroker.setWidth(120)
+            stroker.setCapStyle(Qt.PenCapStyle.SquareCap)
+            stroker.setJoinStyle(Qt.PenJoinStyle.MiterJoin)
+            exact_keys = {tuple(tuple(endpoint) for endpoint in edge) for edge in zone["connections"]}
+            visible_members = set(zone["members"])
+            visible_wires = [wire for wire in wires if connection_key(wire) in exact_keys]
+            # Apply the same display rules to configured and detected regions.
+            # Use saved symbol metadata for equipment created from templates.
+            visible_members -= {ident for ident, symbol in symbols.items()
+                                if getattr(symbol, "properties", {}).get("symbol_type", symbol.equip_type)
+                                in {"pt", "surge_arrester", "ground"}
+                                or getattr(symbol, "properties", {}).get("circuit_role") == "voltage_measurement"}
+            while True:
+                visible_wires = [wire for wire in visible_wires
+                                 if wire.from_item.instance_id in visible_members
+                                 and wire.to_item.instance_id in visible_members]
+                degrees = defaultdict(int)
+                for wire in visible_wires:
+                    degrees[wire.from_item.instance_id] += 1
+                    degrees[wire.to_item.instance_id] += 1
+                leaves = {ident for ident in visible_members if ident in symbols
+                          and symbols[ident].equip_type == "junction" and degrees[ident] <= 1}
+                if not leaves:
+                    break
+                visible_members -= leaves
+            for ident in visible_members:
+                if ident in symbols:
+                    symbol = symbols[ident]
+                    body = symbol._local_transform().mapRect(symbol._rect)
+                    piece = QPainterPath()
+                    piece.addRect(symbol.mapRectToScene(body).adjusted(-50, -50, 50, 50))
+                    coverage = coverage.united(piece)
+            for wire in visible_wires:
+                coverage = coverage.united(stroker.createStroke(wire.mapToScene(wire.path())))
+            if coverage.isEmpty():
+                continue
+            footprint = next((z.get("display_polygon") for z in self.protection_zones
+                              if z["id"] == zone["id"]), None) if not topology_mode else None
+            if (isinstance(footprint, list) and len(footprint) >= 3
+                    and all(isinstance(p, list) and len(p) == 2
+                            and all(isinstance(v, (int, float)) and math.isfinite(v) for v in p)
+                            for p in footprint)):
+                path = QPainterPath()
+                path.moveTo(*footprint[0])
+                for point in footprint[1:]:
+                    path.lineTo(*point)
+                path.closeSubpath()
+                overlay = _ZoneShape(path)
+                tooltip += " — reference drawing footprint; verify CT boundaries separately"
+            else:
+                overlay = _ZoneShape(coverage.simplified())
+            overlay.setPen(pen)
+            fill = QColor(color)
+            fill.setAlpha(65)
+            overlay.setBrush(QBrush(fill, Qt.BrushStyle.BDiagPattern))
+            # A pale solid background plus hatching resembles the reference sheet.
+            overlay.setData(2, QColor(color).name())
+            overlay._zone_connection_keys = exact_keys
+            self._add_zone_overlay(overlay, tooltip, zone["id"])
+
+    def _add_zone_overlay(self, overlay, name, zone_id=None):
+        overlay.setZValue(-0.5)
+        overlay.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+        overlay.setToolTip(name)
+        overlay.setData(0, "protection-zone-overlay")
+        overlay.setData(1, zone_id)
+        self.workspace_scene.addItem(overlay)
+        overlay.setVisible(self._zones_visible)
+        self._zone_overlays.append(overlay)
+
+
+    def _on_create_component_clicked(self):
+        """
+        Open the Create Component popup (from customWidgetTool.py). On
+        accept, register the new component as an EQUIPMENT_DEFS entry (so
+        it appears in the Equipment Library) and add a matching list entry
+        so it can be dragged into the sandbox like any built-in symbol.
+        """
+        dialog = ComponentDialog(self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        data = dialog.component_data()
+        name = data["name"]
+        symbol_key = str(data.get("symbol_type", "custom"))
+        if not name:
+            QMessageBox.warning(self, messages.SUBSTATION_GUI4_CREATE_COMPONENT, messages.SUBSTATION_GUI4_PLEASE_ENTER_A_COMPONENT_NAME)
+            return
+
+        # Bus only sends Rating; other types send coil / motor currents.
+        # Use .get() so neither branch KeyErrors on the other's fields.
+        properties = {
+            "rating_kv": data.get("Rating", 0),
+            "trip_coil_1_a": data.get("TripCoil1", 0),
+            "trip_coil_2_a": data.get("TripCoil2", 0),
+            "close_coil_a": data.get("CloseCoil", 0),
+            "motor_inrush_a": data.get("MotorInrushCurrent", 0),
+            "motor_run_a": data.get("MotorRunCurrent", 0),
+            "symbol_type": symbol_key,
+        }
+        if not properties["rating_kv"]:
+            properties.pop("rating_kv")
+        if symbol_key == "surge_arrester":
+            properties = {key: value for key, value in properties.items()
+                          if key in {"rating_kv", "symbol_type"}}
+        elif symbol_key in {"xfmr_2w", "xfmr_3w", "pt"}:
+            properties = {key: value for key, value in properties.items()
+                          if key in {"motor_inrush_a", "motor_run_a", "symbol_type"}}
+        elif symbol_key == "incoming_line":
+            properties = {"symbol_type": symbol_key}
+
+        slug = "".join(ch if ch.isalnum() else "_" for ch in name.strip().lower())
+        equip_id = f"custom_{slug}" if slug else f"custom_{len(EQUIPMENT_DEFS)}"
+        base_id = equip_id
+        suffix = 1
+        while equip_id in EQUIPMENT_DEFS:
+            suffix += 1
+            equip_id = f"{base_id}_{suffix}"
+
+        EQUIPMENT_DEFS[equip_id] = {
+            "label": name,
+            "definition": {"symbol": symbol_key, "name": name, "properties": properties},
+            "factory": functools.partial(
+                make_user_equipment,
+                symbol_key,
+                name,
+                properties,
+            ),
+        }
+
+        item = QListWidgetItem(name)
+        item.setData(Qt.ItemDataRole.UserRole, equip_id)
+        self.equipment_list.addItem(item)
+        self._mark_modified()
+
+        glyph = next(
+            (label for key, label in SYMBOL_TYPE_CHOICES if key == symbol_key),
+            symbol_key,
+        )
+        if hasattr(self, "footer_status_label"):
+            self.footer_status_label.setText(
+                f"Added '{name}' ({glyph}) to the Equipment Library"
+            )
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, "workspace_view") and getattr(self, "_workspace_original", None):
+            self.workspace_view.fitInView(self.workspace_scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
+
+    def on_import_pdf_clicked(self):
+        """Render the first page of a PDF as the canvas background."""
+        pdf_path, _ = QFileDialog.getOpenFileName(self, "Select PDF", "", "PDF Files (*.pdf)")
+        if not pdf_path:
+            return
+
+        try:
+            doc = pymupdf.open(pdf_path)
+            try:
+                page = doc.load_page(0)
+                page_rect = page.rect
+                # PDF coordinates are points (72 points per inch). Converting
+                # them to the grid's scene scale makes a 48 × 36 inch AEP
+                # sheet exactly 2400 × 1800 scene units.
+                scene_width = (
+                    page_rect.width / 72.0 * SCENE_UNITS_PER_INCH
+                )
+                scene_height = (
+                    page_rect.height / 72.0 * SCENE_UNITS_PER_INCH
+                )
+                zoom = 2.0
+                mat = pymupdf.Matrix(zoom, zoom)
+                pix = page.get_pixmap(matrix=mat, alpha=False)
+                png_bytes = pix.tobytes("png")
+            finally:
+                doc.close()
+        except Exception as e:
+            if hasattr(self, "footer_status_label"):
+                self.footer_status_label.setText(messages.SUBSTATION_GUI4_IMPORT_FAILED.format(e))
+            return
+
+        pm = QPixmap()
+        if not pm.loadFromData(png_bytes):
+            if hasattr(self, "footer_status_label"):
+                self.footer_status_label.setText(messages.SUBSTATION_GUI4_IMPORT_FAILED_COULD_NOT_DECODE_RENDERED_PNG)
+            return
+
+        self._workspace_original = pm
+        self.pdf_path = str(Path(pdf_path).resolve())
+        fit_layout = any(isinstance(item, OneLineSymbolItem) for item in self.workspace_scene.items())
+        if hasattr(self, "workspace_view"):
+            self.workspace_view.set_background_pixmap(
+                pm,
+                scene_width=scene_width,
+                scene_height=scene_height,
+                fit_existing_sheet=fit_layout,
+            )
+        if hasattr(self, "pdf_show_cb"):
+            self.pdf_show_cb.setEnabled(True)
+            self.pdf_show_cb.setChecked(True)
+            self.pdf_show_cb.setToolTip("Show or hide the imported PDF background")
+        if hasattr(self, "footer_status_label"):
+            sheet_width = scene_width / SCENE_UNITS_PER_INCH
+            sheet_height = scene_height / SCENE_UNITS_PER_INCH
+            self.footer_status_label.setText(
+                f"Imported: {pdf_path} "
+                + ("(fitted to layout sheet)" if fit_layout else f"({sheet_width:g} × {sheet_height:g} in)")
+            )
+        self._mark_modified()
+
+    def _on_selection_changed(self):
+        """Update the properties panel when the user selects a symbol or wire."""
+        if not hasattr(self, "workspace_scene"):
+            return
+        items = self.workspace_scene.selectedItems()
+        breaker = items[0] if len(items) == 1 and isinstance(items[0], OneLineSymbolItem) and items[0].equip_type == "breaker" else None
+        for widget in self._breaker_widgets:
+            widget.setVisible(breaker is not None)
+        if breaker is not None:
+            settings = breaker_settings({"id": breaker.instance_id, "properties": self._symbol_properties(breaker)}, self.protection_zones)
+            for key, field in self.breaker_fields.items():
+                field.blockSignals(True)
+                if isinstance(field, QComboBox):
+                    field.setCurrentIndex(field.findData(settings[key]))
+                elif isinstance(field, QSpinBox):
+                    field.setValue(settings[key])
+                else:
+                    field.setText(settings[key])
+                field.blockSignals(False)
+        if len(items) != 1:
+            self.prop_type.setText("—")
+            self.prop_name.setReadOnly(True)
+            self.prop_name.setText("—")
+            self.prop_status.setEnabled(False)
+            self._set_bus_property_mode(False)
+            self._clear_custom_component_properties()
+            return
+
+        item = items[0]
+        if isinstance(item, OneLineSymbolItem):
+            self.prop_name.setReadOnly(False)
+            self.prop_name.blockSignals(True)
+            self.prop_name.setText(item.visible_id())
+            self.prop_name.blockSignals(False)
+        if isinstance(item, BusItem) or (isinstance(item, OneLineSymbolItem) and item.equip_type == "surge_arrester"):
+            self.prop_type.setText(
+                BUILTIN_SYMBOLS.get(item.equip_type, {}).get("label", "Bus")
+            )
+            self.prop_status.setEnabled(False)
+            self._set_bus_property_mode(True)
+            self.prop_voltage_label.setText("MCOV (kV):" if item.equip_type == "surge_arrester" else "Voltage (kV):")
+            props = getattr(item, "properties", None)
+            rating = props.get("rating_kv") if isinstance(props, dict) else None
+            self.prop_voltage.blockSignals(True)
+            self.prop_voltage.setText("" if rating is None else f"{rating:g}")
+            self.prop_voltage.blockSignals(False)
+        elif isinstance(item, OneLineSymbolItem):
+            self.prop_type.setText(item.label)
+            self.prop_status.setEnabled(True)
+            self._set_bus_property_mode(False)
+            self._set_custom_component_properties(self._symbol_properties(item))
+            symbol_type = getattr(item, "properties", {}).get("symbol_type", item.equip_type)
+            if item.equip_type == "incoming_line":
+                for widget in self._non_bus_property_widgets:
+                    widget.setVisible(False)
+            elif symbol_type in {"xfmr_2w", "xfmr_3w", "pt"}:
+                # Motor currents are recorded but never enter the DC calculation.
+                motor_widgets = (self.prop_motor_inrush_label, self.prop_motor_inrush,
+                                 self.prop_motor_run_label, self.prop_motor_run)
+                for widget in self._non_bus_property_widgets:
+                    widget.setVisible(widget in motor_widgets)
+        elif isinstance(item, ConnectionItem):
+            self.prop_type.setText("Connection")
+            self.prop_name.setReadOnly(True)
+            self.prop_status.setEnabled(False)
+            self.prop_name.setText(
+                f"{item.from_item.visible_id()}:{item.from_port} → "
+                f"{item.to_item.visible_id()}:{item.to_port}"
+            )
+            self._set_bus_property_mode(False)
+            self._clear_custom_component_properties()
+        else:
+            self.prop_type.setText(type(item).__name__)
+            self.prop_name.setReadOnly(True)
+            self.prop_status.setEnabled(False)
+            self._set_bus_property_mode(False)
+            self._clear_custom_component_properties()
+
+    def _on_property_id_changed(self, text: str):
+        """The id typed in the properties panel is drawn beside the symbol."""
+        if not hasattr(self, "workspace_scene"):
+            return
+        selected = self.workspace_scene.selectedItems()
+        if len(selected) != 1 or not isinstance(selected[0], OneLineSymbolItem):
+            return
+        new_id = text.strip()
+        if not new_id or new_id == "—":
+            self._on_selection_changed()
+            return
+        symbol = selected[0]
+        if new_id == symbol.visible_id():
+            return
+        self._edit_property(symbol, "display_id", new_id)
+
+    def _on_breaker_setting_changed(self, key):
+        symbol = self._selected_editable_symbol()
+        if symbol is None or symbol.equip_type != "breaker":
+            return
+        field = self.breaker_fields[key]
+        value = field.currentData() if isinstance(field, QComboBox) else field.value() if isinstance(field, QSpinBox) else field.text().strip()
+        if value is None or value == "":
+            self.footer_status_label.setText("Enter a DC supply name for this breaker load")
+            self._on_selection_changed()
+            return
+        settings = breaker_settings({"id": symbol.instance_id, "properties": self._symbol_properties(symbol)}, self.protection_zones)
+        settings[key] = value
+        # Materialize compatible legacy defaults together, making this equipment
+        # authoritative for every zone. One Undo restores the entire edit.
+        changes = [(name, val) for name, val in settings.items()
+                   if val != "" and symbol.properties.get(name) != val]
+        if changes:
+            self.undo_stack.beginMacro(f"Edit {symbol.visible_id()} breaker settings")
+            for name, val in changes:
+                self.undo_stack.push(EditPropertyCommand(symbol, name, val, self._on_selection_changed))
+            self.undo_stack.endMacro()
+
+    def _edit_property(self, symbol, key, value):
+        old = symbol.display_id if key == "display_id" else getattr(symbol, "properties", {}).get(key)
+        if old != value:
+            self.undo_stack.push(EditPropertyCommand(symbol, key, value, self._on_selection_changed))
+        else:
+            self._on_selection_changed()
+
+    def _symbol_properties(self, symbol: OneLineSymbolItem) -> dict:
+        props = getattr(symbol, "properties", None)
+        if not isinstance(props, dict):
+            props = {}
+            symbol.properties = props
+        return props
+
+    def _selected_editable_symbol(self) -> OneLineSymbolItem | None:
+        if not hasattr(self, "workspace_scene"):
+            return None
+        selected = self.workspace_scene.selectedItems()
+        if len(selected) != 1 or not isinstance(selected[0], OneLineSymbolItem):
+            return None
+        if isinstance(selected[0], BusItem):
+            return None
+        return selected[0]
+
+    def _on_property_status_changed(self, text: str):
+        """Store the status chosen for the selected component."""
+        symbol = self._selected_editable_symbol()
+        if symbol is None or text in ("", "—"):
+            return
+        self._edit_property(symbol, "status", text)
+
+    def _on_numeric_property_changed(self, key: str, text: str):
+        """Store a typed amp value on the selected component."""
+        symbol = self._selected_editable_symbol()
+        if symbol is None:
+            return
+        raw = text.strip()
+        try:
+            value = float(raw) if raw else 0.0
+            if not math.isfinite(value) or value < 0:
+                raise ValueError
+        except ValueError:
+            self.footer_status_label.setText(messages.SUBSTATION_GUI4_CURRENT_MUST_BE_A_FINITE_NUMBER_GREATER_THAN_OR)
+            self._on_selection_changed()
+            return
+        self._edit_property(symbol, key, value)
+
+    def _on_property_voltage_changed(self, text: str):
+        """Store a typed bus voltage and refresh the rating drawn on the bar."""
+        if not hasattr(self, "workspace_scene"):
+            return
+        selected = self.workspace_scene.selectedItems()
+        if len(selected) != 1 or not isinstance(selected[0], OneLineSymbolItem) or selected[0].equip_type not in {"bus", "surge_arrester"}:
+            return
+        bus = selected[0]
+        raw = text.strip().lower().removesuffix("kv").strip()
+        if not raw:
+            rating = None
+        else:
+            try:
+                rating = float(raw)
+                if not math.isfinite(rating) or rating <= 0:
+                    raise ValueError
+            except ValueError:
+                self.footer_status_label.setText(messages.SUBSTATION_GUI4_BUS_VOLTAGE_MUST_BE_A_FINITE_POSITIVE_NUMBER_OR)
+                self._on_selection_changed()
+                return
+        self._edit_property(bus, "rating_kv", rating)
+
+    def _set_bus_property_mode(self, is_bus: bool):
+        """A bus shows voltage only. Other selections keep the coil fields."""
+        for widget in self._non_bus_property_widgets:
+            widget.setVisible(not is_bus)
+        self.prop_voltage_label.setVisible(is_bus)
+        self.prop_voltage.setVisible(is_bus)
+        if not is_bus:
+            self.prop_voltage.blockSignals(True)
+            self.prop_voltage.setText("—")
+            self.prop_voltage.blockSignals(False)
+
+    def _set_custom_component_properties(self, properties: dict):
+        """Fill status and the current rows from the selected component."""
+        self._enable_component_property_fields()
+        status = str(properties.get("status", "Closed"))
+        fields = (
+            (self.prop_trip_coil_1, properties.get("trip_coil_1_a", 0)),
+            (self.prop_trip_coil_2, properties.get("trip_coil_2_a", 0)),
+            (self.prop_close_coil, properties.get("close_coil_a", 0)),
+            (self.prop_motor_inrush, properties.get("motor_inrush_a", 0)),
+            (self.prop_motor_run, properties.get("motor_run_a", 0)),
+        )
+        self.prop_status.blockSignals(True)
+        index = self.prop_status.findText(status)
+        self.prop_status.setCurrentIndex(index if index >= 0 else 0)
+        self.prop_status.blockSignals(False)
+        for field, value in fields:
+            field.blockSignals(True)
+            field.setText(f"{value:g}" if isinstance(value, (int, float)) else str(value))
+            field.blockSignals(False)
+
+    def _clear_custom_component_properties(self):
+        """Reset the Trip Coil / Motor Current rows for non-component selections."""
+        self.prop_status.blockSignals(True)
+        self.prop_status.setCurrentIndex(0)
+        self.prop_status.blockSignals(False)
+        for field in (
+            self.prop_trip_coil_1,
+            self.prop_trip_coil_2,
+            self.prop_close_coil,
+            self.prop_motor_inrush,
+            self.prop_motor_run,
+        ):
+            field.blockSignals(True)
+            field.setReadOnly(True)
+            field.setText("—")
+            field.blockSignals(False)
+
+    def _enable_component_property_fields(self):
+        for field in (
+            self.prop_trip_coil_1,
+            self.prop_trip_coil_2,
+            self.prop_close_coil,
+            self.prop_motor_inrush,
+            self.prop_motor_run,
+        ):
+            field.setReadOnly(False)
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+def main() -> None:
+    """Open the substation design window."""
+    app = QApplication(sys.argv)
+    app.setFont(ui_font())
+    app.setWindowIcon(QIcon(str(GFT_ICON_PATH)))
+
+    window = SubstationGuiMockup()
+    window.showMaximized()
+    sys.exit(app.exec())
+
+
+if __name__ == "__main__":
+    main()

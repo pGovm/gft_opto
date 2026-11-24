@@ -16,14 +16,14 @@ requires-python = ">= 3.12"
 authors = [
     {name = "Govind Menon", email = "pgovindmenon07@gmail.com"},
     {name = "Jon Hemrick", email = "jhemric1@charlotte.edu"},
-    {name = "Athens Taylor", email = "pgovindmenon07@gmail.com"},
-    {name = "Lauren Rouse", email = "pgovindmenon07@gmail.com"},
+    {name = "Athens Taylor", email = "athenst31323@yahoo.com"},
+    {name = "Lauren Rouse", email = "lrouse9@charlotte.edu"},
 ]
 
 maintainers = [
     {name = "Govind Menon", email = "pgovindmenon07@gmail.com"},
     {name = "Jon Hemrick", email = "jhemric1@charlotte.edu"},
-    {name = "Lauren Rouse", email = "pgovindmenon07@gmail.com"},
+    {name = "Lauren Rouse", email = "lrouse9@charlotte.edu"},
 ]
 
 readme = "README.md"
@@ -35,3 +35,17 @@ classifiers = [
 
 [project.urls]
 Repository = "https://github.com/pGovm/gft_opto.git"
+
+[project.scripts]
+gft-opto = "gft_opto.gui.substation_gui:main"
+
+[dependency-groups]
+
+test = [
+    "pytest>=9.0.0",
+    "pytest-cov>=7.0.0"
+]
+
+package = [
+    "pyinstaller>=6.22.0"
+]
