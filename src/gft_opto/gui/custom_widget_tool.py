@@ -188,7 +188,7 @@ class ComponentDialog(QDialog):
         for field_widget in (self.trip_coil_1_spin, self.trip_coil_2_spin, self.close_coil_spin):
             self.form.setRowVisible(field_widget, symbol in {"breaker", "custom"})
         for field_widget in (self.motor_inrush_spin, self.motor_run_spin):
-            self.form.setRowVisible(field_widget, symbol in {"breaker", "mos", "custom"})
+            self.form.setRowVisible(field_widget, symbol in {"breaker", "mos", "custom", "xfmr_2w", "xfmr_3w", "pt"})
         self.adjustSize()
 
     @staticmethod
@@ -229,7 +229,7 @@ class ComponentDialog(QDialog):
                 "TripCoil2": self.trip_coil_2_spin.value(),
                 "CloseCoil": self.close_coil_spin.value(),
             })
-        if symbol in {"breaker", "mos", "custom"}:
+        if symbol in {"breaker", "mos", "custom", "xfmr_2w", "xfmr_3w", "pt"}:
             data.update({
                 "MotorInrushCurrent": self.motor_inrush_spin.value(),
                 "MotorRunCurrent": self.motor_run_spin.value(),

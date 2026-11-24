@@ -525,7 +525,7 @@ class ZoneDialog(QDialog):
         other_id = action["component"] if action["component"].startswith("other:") else "other:" + uuid.uuid4().hex
         equipment.addItem("Other", other_id)
         for ident, component in self.components.items():
-            if kind(component) not in ("ct", "pt", "ground", "junction", "bus", "surge_arrester", "incoming_line"):
+            if kind(component) not in ("ct", "pt", "ground", "junction", "bus", "surge_arrester", "incoming_line", "line_trap", "xfmr_2w", "xfmr_3w"):
                 equipment.addItem(f"{component.get('label', ident)} [{ident}]", ident)
         if equipment.findData(action["component"]) < 0:
             equipment.addItem(messages.ZONE_DIALOG_MISSING.format(action['component']), action["component"])

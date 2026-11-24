@@ -1056,6 +1056,9 @@ class SubstationGuiMockup(ProjectFilesMixin, EvaluationViewMixin, PdfExportMixin
         if symbol_key == "surge_arrester":
             properties = {key: value for key, value in properties.items()
                           if key in {"rating_kv", "symbol_type"}}
+        elif symbol_key in {"xfmr_2w", "xfmr_3w", "pt"}:
+            properties = {key: value for key, value in properties.items()
+                          if key in {"motor_inrush_a", "motor_run_a", "symbol_type"}}
         elif symbol_key == "incoming_line":
             properties = {"symbol_type": symbol_key}
 
@@ -1208,9 +1211,16 @@ class SubstationGuiMockup(ProjectFilesMixin, EvaluationViewMixin, PdfExportMixin
             self.prop_status.setEnabled(True)
             self._set_bus_property_mode(False)
             self._set_custom_component_properties(self._symbol_properties(item))
+            symbol_type = getattr(item, "properties", {}).get("symbol_type", item.equip_type)
             if item.equip_type == "incoming_line":
                 for widget in self._non_bus_property_widgets:
                     widget.setVisible(False)
+            elif symbol_type in {"xfmr_2w", "xfmr_3w", "pt"}:
+                # Motor currents are recorded but never enter the DC calculation.
+                motor_widgets = (self.prop_motor_inrush_label, self.prop_motor_inrush,
+                                 self.prop_motor_run_label, self.prop_motor_run)
+                for widget in self._non_bus_property_widgets:
+                    widget.setVisible(widget in motor_widgets)
         elif isinstance(item, ConnectionItem):
             self.prop_type.setText("Connection")
             self.prop_name.setReadOnly(True)
