@@ -766,6 +766,9 @@ class SubstationGuiMockup(ProjectFilesMixin, EvaluationViewMixin, PdfExportMixin
         self.breaker_fields["coil_current_basis"].setToolTip(
             "Applies to trip and close coils. Motor currents are always entered for the whole device."
         )
+        # Pack the rows at the top. Without this, spare height is shared between
+        # rows, so selections with few fields (transformer, PT, bus) spread out.
+        properties_layout.setRowStretch(properties_layout.rowCount(), 1)
 
         self._non_bus_property_widgets = [
             self.prop_status_label,
