@@ -34,6 +34,7 @@ SYMBOL_TYPE_CHOICES: list[tuple[str, str]] = [
     ("mos", "Motor Operated Switch (MOS)"),
     ("ct", "Current Transformer (CT/BCT)"),
     ("pt", "Potential Transformer (PT/VT)"),
+    ("surge_arrester", "Surge Arrester"),
     ("line_trap", "Line Trap"),
     ("xfmr_2w", "Transformer (2-winding)"),
     ("xfmr_3w", "Transformer (3-winding)"),
@@ -176,7 +177,10 @@ class ComponentDialog(QDialog):
     def _update_fields_for_component(self, _text: str = ""):
         """Show electrical inputs supported by the selected symbol."""
         symbol = self.symbol_type_key()
-        self.form.setRowVisible(self.rating_spin, symbol == "bus")
+        # Arresters are rated by MCOV; the value is stored as rating_kv like a bus rating.
+        self.form.labelForField(self.rating_spin).setText(
+            "MCOV (kV):" if symbol == "surge_arrester" else "Rating (kV):")
+        self.form.setRowVisible(self.rating_spin, symbol in {"bus", "surge_arrester"})
         for field_widget in (self.trip_coil_1_spin, self.trip_coil_2_spin, self.close_coil_spin):
             self.form.setRowVisible(field_widget, symbol in {"breaker", "custom"})
         for field_widget in (self.motor_inrush_spin, self.motor_run_spin):
@@ -214,7 +218,7 @@ class ComponentDialog(QDialog):
             "tags": ["Manufacturer", "Year"],
         }
         symbol = self.symbol_type_key()
-        if symbol == "bus":
+        if symbol in {"bus", "surge_arrester"}:
             data["Rating"] = self.rating_spin.value()
         if symbol in {"breaker", "custom"}:
             data.update({

@@ -134,6 +134,7 @@ verify each zone before running the evaluation.
 | Motor Operated Switch | Motor Inrush, Motor Run |
 | Transformer (2- and 3-winding), Potential Transformer | Motor Inrush, Motor Run (recorded but not included in the DC calculation) |
 | Bus | Rating (kV) |
+| Surge Arrester | MCOV (kV) |
 | Disconnect Switch, CT, Line Trap, Incoming AC Line, Ground | None |
 
 **Copy and paste**

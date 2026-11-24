@@ -67,7 +67,14 @@ class GuiWorkflows(unittest.TestCase):
     def test_passive_component_creation_excludes_operating_loads(self):
         from gft_opto.gui.custom_widget_tool import ComponentDialog
         dialog = ComponentDialog(self.window)
-        self.assertEqual(dialog.symbol_combo.findData("surge_arrester"), -1)
+        dialog.symbol_combo.setCurrentIndex(dialog.symbol_combo.findData("surge_arrester"))
+        self.assertEqual(dialog.form.labelForField(dialog.rating_spin).text(), "MCOV (kV):")
+        dialog.rating_spin.setValue(88)
+        self.assertEqual(dialog.component_data()["Rating"], 88)
+        self.assertNotIn("TripCoil1", dialog.component_data())
+        self.assertNotIn("MotorInrushCurrent", dialog.component_data())
+        dialog.symbol_combo.setCurrentIndex(dialog.symbol_combo.findData("bus"))
+        self.assertEqual(dialog.form.labelForField(dialog.rating_spin).text(), "Rating (kV):")
         dialog.symbol_combo.setCurrentIndex(dialog.symbol_combo.findData("ground"))
         self.assertNotIn("TripCoil1", dialog.component_data())
         self.assertTrue(dialog.trip_coil_1_spin.isHidden())
