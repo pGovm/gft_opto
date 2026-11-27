@@ -387,8 +387,10 @@ class SubstationGuiMockup(ProjectFilesMixin, EvaluationViewMixin, PdfExportMixin
         if self._loading:
             return
         data = self._layout_data()
-        self.setWindowTitle(f"{data['project']}{' *' if data != self._saved_snapshot else ''} — GFT_Analysis_Tool")
-        if self.last_result is not None and data != self._evaluated_snapshot:
+        modified = self._document_content(data) != self._document_content(self._saved_snapshot)
+        self.setWindowTitle(f"{data['project']}{' *' if modified else ''} — GFT_Analysis_Tool")
+        if (self.last_result is not None
+                and self._evaluation_content(data) != self._evaluation_content(self._evaluated_snapshot)):
             self._invalidate_results()
 
 
@@ -851,11 +853,14 @@ class SubstationGuiMockup(ProjectFilesMixin, EvaluationViewMixin, PdfExportMixin
                     item.setSelected(False)
                 if item.isVisible() != visible:
                     item.setVisible(visible)
+        self._set_zones_visible(self._zones_visible)
 
     def _set_zones_visible(self, visible):
         self._zones_visible = visible
+        shown = visible and self.circuit_show_cb.isChecked()
         for overlay in self._zone_overlays:
-            overlay.setVisible(self._zones_visible)
+            if overlay.isVisible() != shown:
+                overlay.setVisible(shown)
 
     def _clear_zone_highlights(self):
         for overlay in self._zone_overlays:
@@ -959,7 +964,7 @@ class SubstationGuiMockup(ProjectFilesMixin, EvaluationViewMixin, PdfExportMixin
         overlay.setData(0, "protection-zone-overlay")
         overlay.setData(1, zone_id)
         self.workspace_scene.addItem(overlay)
-        overlay.setVisible(self._zones_visible)
+        overlay.setVisible(self._zones_visible and self.circuit_show_cb.isChecked())
         self._zone_overlays.append(overlay)
 
 

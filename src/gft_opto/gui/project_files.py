@@ -21,6 +21,19 @@ from pathlib import Path
 
 
 class ProjectFilesMixin:
+    @staticmethod
+    def _document_content(data):
+        """View preferences are saved on request, but do not dirty a project."""
+        if data is None:
+            return None
+        return {key: value for key, value in data.items() if key != "settings"}
+
+    @staticmethod
+    def _evaluation_content(data):
+        """Only drawing and study edits can make calculated results outdated."""
+        return {key: value for key, value in data.items()
+                if key not in {"settings", "pdf", "scene_rect", "library"}}
+
     def _layout_data(self):
         rect = self.workspace_scene.sceneRect()
         return {
@@ -38,7 +51,7 @@ class ProjectFilesMixin:
 
 
     def _confirm_discard(self):
-        if self._layout_data() == self._saved_snapshot:
+        if self._document_content(self._layout_data()) == self._document_content(self._saved_snapshot):
             return True
         answer = QMessageBox.question(
             self, "Unsaved Layout", "Save changes to this layout?",

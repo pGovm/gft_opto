@@ -490,6 +490,29 @@ class GuiWorkflows(unittest.TestCase):
         self.assertFalse(w.workspace_view._snap_to_grid)
         self.assertEqual(w.pdf_path, str(pdf_path.resolve()))
 
+    def test_view_preferences_save_explicitly_without_masking_document_edits(self):
+        w = self.window
+        self.add_breaker()
+        path = Path(self.temp.name) / "view-preferences.json"
+        self.assertTrue(w.save_layout(path))
+        w.grid_show_cb.setChecked(False)
+        w.pdf_show_cb.setChecked(False)
+        w.grid_snap_cb.setChecked(False)
+        w.grid_opacity_slider.setValue(60)
+        self.assertNotIn(" *", w.windowTitle())
+        with patch.object(QMessageBox, "question") as prompt:
+            self.assertTrue(w._confirm_discard())
+        prompt.assert_not_called()
+        self.assertTrue(w.save_layout(path))
+        data = json.loads(path.read_text())
+        self.assertEqual(data["settings"], dict(grid_visible=False, pdf_visible=False,
+                                               snap=False, grid_opacity=60))
+        self.add_breaker()
+        self.assertIn(" *", w.windowTitle())
+        with patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.Cancel) as prompt:
+            self.assertFalse(w._confirm_discard())
+        prompt.assert_called_once()
+
     def test_unsaved_cancel_save_and_new(self):
         w = self.window
         self.add_breaker()
