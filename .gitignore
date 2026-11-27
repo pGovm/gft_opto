@@ -1,11 +1,4 @@
-# Python cache folder
-src/gft_opto/__pycache__/*
-src/gft_opto/*/__pycache__/*
-
-# Virtual environment and its subfolders
-.venv/
-
-#Latex related files
+# LaTeX working files (the built main_report.pdf is committed)
 **/*.aux
 **/*.fdb_latexmk
 **/*.fls
@@ -14,5 +7,16 @@ src/gft_opto/*/__pycache__/*
 **/*.lot
 **/*.out
 **/*.synctex.gz
-**/*.glo
 **/*.toc
+**/*.glo
+**/*.glg
+**/*.gls
+**/*.ist
+**/*.bbl
+**/*.blg
+
+# Files left behind by the main branch's code when switching branches
+.venv/
+__pycache__/
+results/
+docs/*.drawio
