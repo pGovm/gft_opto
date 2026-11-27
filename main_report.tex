@@ -1,25 +1,87 @@
 \documentclass[11pt]{article}
 
 \input{report_setup.tex}
-\usepackage{graphicx}
 
 \begin{document}
+
+% ---------------------------------------------------------------- title page
+\pagenumbering{alph}
+\begin{titlepage}
+  \thispagestyle{empty}
+  \centering
+  \vspace*{0.6in}
+  \includegraphics[width=0.32\textwidth]{images/gft_logo.png}\par
+  \vspace{0.5in}
+  {\Huge\bfseries\color{gftgreen} GFT\_Analysis\_Tool\par}
+  \vspace{0.15in}
+  {\LARGE Substation Momentary DC Load Calculator\par}
+  \vspace{0.35in}
+  {\Large Project Report and User Guide\par}
+  \vspace{0.15in}
+  {\large Software version 1.0.0\par}
+  \vfill
+  {\large\bfseries Project team\par}
+  \vspace{0.1in}
+  {\large Govind Menon \quad Jon Hemrick \quad Athens Taylor \quad Lauren Rouse\par}
+  \vspace{0.35in}
+  {\large Prepared for GFT\par}
+  \vspace{0.1in}
+  {\large November 2026\par}
+  \vspace*{0.4in}
+\end{titlepage}
+
+% ---------------------------------------------------------- front matter
 \pagenumbering{roman}
-
 \setcounter{page}{1}
+\input{sections/summary.tex}
+\clearpage
 \tableofcontents
-\pagebreak
+\clearpage
+\listoffigures
+\listoftables
+\clearpage
 
-\section{Introduction}
-\input{./sections/introduction.tex}
-\section{Tool Overview}
-\input{./sections/tool_overview.tex}
-\section{Step-by-Step Instructions}
-\input{./sections/step_instructions.tex}
-\section{Engineering Calculation and Validation}
-\input{./sections/eng_calculation_validation.tex}
-\section{Testing and Verification}
-\input{./sections/testing_verification.tex}
-\section{Future Improvements}
-\input{./sections/future_improvements.tex}
+% ------------------------------------------------------------- main body
+\pagenumbering{arabic}
+\setcounter{page}{1}
+
+\section{Introduction}\label{sec:introduction}
+\input{sections/introduction.tex}
+
+\section{Tool Overview}\label{sec:overview}
+\input{sections/tool_overview.tex}
+
+\section{Installation and Setup}\label{sec:installation}
+\input{sections/installation.tex}
+
+\section{Quick Start: A First Study}\label{sec:quickstart}
+\input{sections/step_instructions.tex}
+
+\section{User Guide}\label{sec:userguide}
+\input{sections/user_guide.tex}
+
+\section{Keyboard and Mouse Shortcuts}\label{sec:shortcuts}
+\input{sections/shortcuts.tex}
+
+\section{Engineering Calculation Method}\label{sec:calculation}
+\input{sections/eng_calculation_validation.tex}
+
+\section{Testing and Verification}\label{sec:testing}
+\input{sections/testing_verification.tex}
+
+\section{Limitations and Future Improvements}\label{sec:future}
+\input{sections/future_improvements.tex}
+
+\section{Conclusion}\label{sec:conclusion}
+\input{sections/conclusion.tex}
+
+\clearpage
+\input{sections/references.tex}
+
+% -------------------------------------------------------------- appendices
+\clearpage
+\appendix
+\section{Layout and Netlist File Formats}\label{app:formats}
+\input{sections/appendix_formats.tex}
+
 \end{document}

@@ -1,0 +1,222 @@
+Because the tool's results feed engineering decisions, it was checked in several ways:
+\begin{itemize}
+  \item automated tests of the logic and of the user interface;
+  \item an independent recalculation of every provided layout;
+  \item deliberate faults injected into the code to confirm the tests catch them;
+  \item performance measurements;
+  \item a review of the layouts with the sponsor.
+\end{itemize}
+All figures in this section were measured on release 1.0.0.
+
+\subsection{Automated Test Suite}
+
+The project has 288 automated tests in 20 test files (Table~\ref{tab:testmodules}).
+Some tests generate many cases, such as every possible wiring of a small model, adding
+34{,}882 sub-cases in total. The full suite runs in about 36~seconds. The interface
+tests run without opening a window, using Qt's \emph{offscreen} mode, so they can run
+on build servers.
+
+\begin{table}[H]
+  \centering
+  \caption{Automated test files}
+  \label{tab:testmodules}
+  \small
+  \begin{tabularx}{\textwidth}{l r L}
+    \toprule
+    \textbf{Test file} & \textbf{Tests} & \textbf{What it checks} \\
+    \midrule
+    \multicolumn{3}{l}{\emph{Logic: zones and calculation (no user interface)}} \\
+    \texttt{test\_protection\_zones} & 34 & CT-bounded topology regions \\
+    \texttt{test\_protection\_zone\_extended} & 12 & Generated wirings checked against independent algorithms (Section~\ref{sec:generated}) \\
+    \texttt{test\_protection\_study} & 20 & Zone and simultaneous-load examples \\
+    \texttt{test\_study\_integration} & 35 & Detector, study and calculator working together \\
+    \texttt{test\_zone\_proposals} & 12 & Feeder proposals and opposite-side CT overlap \\
+    \texttt{test\_zone\_switching} & 9 & Open switches splitting zones \\
+    \texttt{test\_transfer\_bus\_exclusions} & 3 & Transfer buses get no zone of their own \\
+    \texttt{test\_teammate\_merge} & 24 & Breaker settings, multipliers and approval rules \\
+    \texttt{test\_review\_regressions} & 10 & Defects found in code review \\
+    \texttt{test\_cross\_module\_contracts} & 10 & Drawing, netlist and study agree with each other \\
+    \texttt{test\_messages} & 3 & Every message is used and correctly formatted \\
+    \midrule
+    \multicolumn{3}{l}{\emph{User interface (offscreen Qt)}} \\
+    \texttt{test\_gui\_workflows} & 28 & Editing, saving and reopening, properties, copy and paste, exports \\
+    \texttt{test\_gui\_zone\_integration} & 42 & Configure Zones, verification and zone outlines \\
+    \texttt{test\_undo\_commands} & 16 & Every edit undoes to the exact previous drawing and redoes \\
+    \texttt{test\_circuit\_check} & 12 & Validate: open ends, dangling wires and shorts \\
+    \texttt{test\_polish\_regressions} & 9 & Load rows, project files and performance fixes \\
+    \texttt{test\_layout\_grid\_alignment} & 2 & Saved positions and Align to Grid \\
+    \texttt{test\_ribbon\_overflow} & 1 & Every command reachable at the minimum window width \\
+    \texttt{test\_oneline\_demo\_exports} & 1 & All provided layouts evaluate and export with their currents \\
+    \texttt{test\_app\_entrypoints} & 5 & Start-up command, installers and Windows build stay aligned \\
+    \midrule
+    \textbf{Total} & \textbf{288} & plus 34{,}882 generated sub-cases \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\paragraph{Continuous integration.} Every change pushed to the project's GitHub
+repository, and every pull request, automatically runs the full suite on Windows and
+Linux through GitHub Actions. A change that breaks a test is caught before it reaches
+the main branch.
+
+\paragraph{Running the tests.} From the project folder:
+\begin{lstlisting}
+uv sync --locked --group test
+QT_QPA_PLATFORM=offscreen .venv/bin/python -m unittest discover -s tests -p 'test_*.py'
+\end{lstlisting}
+On Windows, set \texttt{QT\_QPA\_PLATFORM} to \texttt{offscreen} first and use
+\texttt{.venv\textbackslash Scripts\textbackslash python.exe}.
+
+\subsection{Code Coverage}
+
+Coverage measures how much of the code the tests run. The suite runs 81.2\% of the
+lines and 69.0\% of the branches (Table~\ref{tab:coverage}).
+
+\begin{table}[H]
+  \centering
+  \caption{Test coverage by module}
+  \label{tab:coverage}
+  \small
+  \begin{tabular}{l r l r}
+    \toprule
+    \multicolumn{2}{c}{\textbf{Logic}} & \multicolumn{2}{c}{\textbf{User interface}} \\
+    \cmidrule(lr){1-2}\cmidrule(lr){3-4}
+    \texttt{protection\_zones} & 99.7\% & \texttt{zone\_dialog} & 95.9\% \\
+    \texttt{breaker\_settings} & 100.0\% & \texttt{circuit\_check} & 94.7\% \\
+    \texttt{protection\_study} & 93.5\% & \texttt{custom\_widget\_tool} & 90.7\% \\
+    \texttt{netlist\_manager} & 71.1\% & \texttt{commands} & 90.5\% \\
+    \texttt{momentary\_calc2} & 45.6\% & \texttt{evaluation\_view} & 87.8\% \\
+    & & \texttt{project\_files} & 85.7\% \\
+    & & \texttt{pdf\_export} & 83.6\% \\
+    & & \texttt{symbols} & 82.7\% \\
+    & & \texttt{layout\_io} & 81.2\% \\
+    & & \texttt{substation\_gui} & 78.7\% \\
+    & & \texttt{workspace} & 28.4\% \\
+    \midrule
+    \multicolumn{4}{c}{\textbf{Overall: 81.2\% of lines, 69.0\% of branches}} \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+The code that determines the results (the zone detector, the study and the breaker
+multipliers) is 94--100\% covered. Two modules have lower coverage:
+\begin{itemize}
+  \item \texttt{workspace} is mostly mouse handling (dragging, wiring and rotating),
+        which was tested by hand rather than with simulated mouse events.
+  \item \texttt{momentary\_calc2} contains an older calculation interface, from before
+        zones were added, that the tool no longer uses. The parts the calculation does
+        use, the \texttt{Load} and \texttt{Scenario} classes, are fully tested.
+\end{itemize}
+
+\subsection{Independent Calculation Check}
+
+To confirm the results, a separate script recalculated every provided layout
+\emph{without using any of the tool's code}. Working from the saved layout files, it
+followed the same steps an engineer would by hand:
+\begin{enumerate}
+  \item trace each zone through the wiring from its protected equipment, stopping at
+        its boundary CTs and at open switches;
+  \item look up each assigned coil's current and DC supply, and apply the multiplier;
+  \item add the simultaneous currents per stage and per supply.
+\end{enumerate}
+It then compared its answers with the tool's. As Table~\ref{tab:validation} shows,
+every zone membership, stage total and supply subtotal matched; the largest
+difference was \SI{0}{A}.
+
+\begin{table}[H]
+  \centering
+  \caption{Independent recalculation and timing, release 1.0.0 (median of three runs)}
+  \label{tab:validation}
+  \small
+  \begin{tabular}{l r r r r r r r}
+    \toprule
+    & & \multicolumn{3}{c}{\textbf{Matching the hand method}} & \multicolumn{3}{c}{\textbf{Time (ms)}} \\
+    \cmidrule(lr){3-5}\cmidrule(lr){6-8}
+    \textbf{Layout} & \textbf{Zones} & \textbf{Membership} & \textbf{Stages} & \textbf{Supplies} & \textbf{Open} & \textbf{Evaluate} & \textbf{PDF} \\
+    \midrule
+    1M-1L01 & 8 & 8/8 & 32/32 & 32/32 & 35 & 24 & 254 \\
+    1P-1L01-Model & 5 & 5/5 & 14/14 & 14/14 & 14 & 28 & 238 \\
+    1U-1L01-Layout1 & 11 & 11/11 & 44/44 & 44/44 & 42 & 30 & 258 \\
+    1U-1L01-Model\_1 & 13 & 13/13 & 48/48 & 48/48 & 50 & 78 & 262 \\
+    1U-1L01-Model\_5 & 6 & 6/6 & 24/24 & 24/24 & 22 & 15 & 244 \\
+    1U-1L01\_1 & 7 & 7/7 & 16/16 & 16/16 & 13 & 15 & 245 \\
+    A-089881-Layout1 & 2 & 2/2 & 8/8 & 8/8 & 4 & 2 & 226 \\
+    A-89887-Layout1 & 6 & 6/6 & 24/24 & 24/24 & 20 & 14 & 245 \\
+    AA-69925-Layout1 & 9 & 9/9 & 36/36 & 36/36 & 30 & 23 & 249 \\
+    AS-1-Layout1 & 6 & 6/6 & 24/24 & 24/24 & 11 & 10 & 242 \\
+    AS-11-Layout1 & 7 & 7/7 & 28/28 & 28/28 & 26 & 19 & 245 \\
+    MVEC reference draft & 3 & 3/3 & --- & --- & 20 & 8 & 274 \\
+    Two-zone demonstration & 2 & 2/2 & 5/5 & 7/7 & 5 & 3 & 238 \\
+    \midrule
+    \textbf{Total} & \textbf{85} & \textbf{85/85} & \textbf{303/303} & \textbf{305/305} & & & \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+By hand, these 13 layouts would take about 3{,}800 individual steps: wire traces,
+current look-ups, multiplications and additions. The tool does them in well under a
+second.
+
+\subsection{Generated-Case Checks}\label{sec:generated}
+
+Beyond hand-written examples, the zone detector and the calculation were compared with
+simpler, independently written algorithms on automatically generated inputs:
+
+\begin{itemize}
+  \item \textbf{Exhaustive wiring.} All 32{,}768 possible wirings of a model with two
+        CTs and six terminals, each checked against an independent search.
+  \item \textbf{Random topologies.} 1{,}000 randomly generated stations, with their
+        regions checked against an independent depth-first search.
+  \item \textbf{Invariance.} 200 cases confirming that the result does not change with
+        the order in which components were drawn, the direction of the wires, or a
+        rebuild of the drawing.
+  \item \textbf{Random studies.} 250 randomly generated multi-zone studies, with their
+        totals checked against independent arithmetic.
+\end{itemize}
+
+\subsection{Fault-Injection Check}
+
+A passing test proves little unless it would fail if the code were wrong. To check
+this, faults were deliberately introduced, one at a time, into a copy of the
+\texttt{circuit\_check} and \texttt{commands} modules: for example, removing the
+dangling-wire check, not restoring bus nodes on undo, and not reconnecting a wire
+after a split. All 14 faults were caught by at least one test.
+
+\subsection{Performance}
+
+Every provided layout, including the largest (92 components and 13 zones), opens in
+under \SI{0.06}{s} and evaluates in under \SI{0.08}{s}. Exporting the calculation PDF,
+with its annotated one-line, takes about a quarter of a second
+(Table~\ref{tab:validation}). These timings were measured on a Linux desktop computer.
+
+\subsection{Defects Found by Testing}
+
+Testing also found problems outside the calculation, which were fixed before release.
+Table~\ref{tab:defects} lists examples.
+
+\begin{table}[H]
+  \centering
+  \caption{Examples of defects found and fixed}
+  \label{tab:defects}
+  \begin{tabularx}{\textwidth}{L L}
+    \toprule
+    \textbf{Defect} & \textbf{Fix} \\
+    \midrule
+    At the minimum window width, some ribbon buttons ran off the edge of the window. & Ribbon tabs scroll sideways; a test checks every command is reachable. \\
+    The Linux installer failed after being edited on Windows, because of Windows line endings. & The repository now stores text files with Linux line endings, whichever system saves them. \\
+    When few fields were shown, the properties panel spread them across its full height. & The rows now stay at the top for every type of equipment. \\
+    Opening a large layout took several seconds, because equipment labels were repositioned after every wire. & Label placement is now batched; the largest layout opens in \SI{0.05}{s}. \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\subsection{Review with the Sponsor}
+
+In November 2026, the sponsor reviewed the 13 provided layouts and confirmed that they
+correctly represent their one-line drawings. The sponsor also settled three scope
+questions:
+\begin{itemize}
+  \item surge arresters are included in the drawing and in Create Component;
+  \item the breaker settings remain available;
+  \item a separate validation study using manufacturers' coil currents is not required.
+\end{itemize}

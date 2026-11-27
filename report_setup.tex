@@ -1,48 +1,84 @@
-%Glossary Package
-\makeglossary 
-%Needed to make the glossary
-\usepackage{todonotes} 
-%For making to-do notes in the pdf
-\usepackage{float} 
-%Redefine the float, now we can use 'H' instead of 'h'
-\usepackage{array} 
-%Extend the array environment
-\usepackage{pdfpages} 
-%Allows the inclusion of external pdf's 
-\usepackage{color, colortbl}
-%Allows us to manage the colour of items in the final output 
-\usepackage{fancyhdr}
-%Allows control of the headers and footers
-\usepackage{nameref}
-%Refer to sections by their name
-\usepackage{chemfig} 
-%Draw chemical diagrams
-\usepackage{listings} 
-%Typeset programming languages
-\lstset{language=bash, numbers=left, frame=single, breaklines=true, numberstyle=\footnotesize}
-%Set-up date for listings package
-\usepackage{framed} 
-%Framed or shaded regions that can break across pages
-\usepackage[os=win]{menukeys}
-%Format menu sequences, paths and keystrokes from lists
-\usepackage{tikz} 
-%Used for drawing within the package
-\usetikzlibrary{positioning,decorations.markings,patterns}
-\usepackage{multirow} 
-%Create tabular cells spanning multiple rows
-\usepackage[scientific-notation=true]{siunitx} 
-%For putting certain scientific notation i.e. x10^.
-\usepackage{titlesec} 
-%Custom titles
-\usepackage[normalem]{ulem}
-%Strikethrough text with \sout{}
-\usepackage{titlesec}
-\usepackage{tikz}
+% Shared packages and styles for main_report.tex.
+
+\usepackage[letterpaper, margin=1in, headheight=14pt]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
 \renewcommand{\familydefault}{\sfdefault}
 
-\titleformat*{\section}{\Huge\bfseries}
-\titleformat*{\subsection}{\LARGE\bfseries}
-\titleformat*{\subsubsection}{\Large\bfseries}
+% Colors (GFT green accent, as used in the application)
+\usepackage[table]{xcolor}
+\definecolor{gftgreen}{HTML}{006A4E}
+\definecolor{gftlight}{HTML}{E6F2ED}
+\definecolor{notegrey}{HTML}{52606D}
 
-\setcounter{tocdepth}{3}
+% Figures, tables and lists
+\usepackage{graphicx}
+\usepackage{float}          % [H] placement
+\usepackage{caption}
+\usepackage{subcaption}
+\captionsetup{font=small, labelfont={bf,color=gftgreen}}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{multirow}
+\usepackage{enumitem}
+\setlist{itemsep=2pt, topsep=4pt}
+\newcolumntype{L}{>{\raggedright\arraybackslash}X}
+\renewcommand{\arraystretch}{1.25}
+
+% Diagrams
+\usepackage{tikz}
+\usetikzlibrary{positioning, arrows.meta, shapes.geometric, fit, calc, backgrounds}
+
+% Maths and units
+\usepackage{amsmath}
+\usepackage{siunitx}
+\sisetup{group-separator={,}}
+
+% Keyboard keys and menu paths: \keys{Ctrl + S}, \menu{File > Save}
+\usepackage[os=win]{menukeys}
+
+% Code and file listings
+\usepackage{listings}
+\lstset{basicstyle=\ttfamily\small, columns=fullflexible, breaklines=true,
+        frame=single, rulecolor=\color{notegrey!40}, backgroundcolor=\color{gray!4},
+        numbers=none, showstringspaces=false}
+
+% Note boxes
+\usepackage{framed}
+\newenvironment{note}
+  {\def\FrameCommand{{\color{gftgreen}\vrule width 3pt}\hspace{8pt}}%
+   \MakeFramed{\advance\hsize-\width \FrameRestore}\small\noindent\textbf{Note.}\ }
+  {\endMakeFramed}
+
+% Headings
+\usepackage{titlesec}
+\titleformat{\section}{\LARGE\bfseries\color{gftgreen}}{\thesection}{0.8em}{}
+\titleformat{\subsection}{\Large\bfseries}{\thesubsection}{0.8em}{}
+\titleformat{\subsubsection}{\large\bfseries}{\thesubsubsection}{0.8em}{}
+\titlespacing*{\section}{0pt}{18pt}{10pt}
+\setcounter{tocdepth}{2}
 \setcounter{secnumdepth}{3}
+
+% Headers and footers
+\usepackage{fancyhdr}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small\color{notegrey}GFT\_Analysis\_Tool --- Project Report}
+\fancyhead[R]{\small\color{notegrey}\nouppercase{\leftmark}}
+\fancyfoot[C]{\small\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+
+% The application's name, used throughout
+\newcommand{\app}{GFT\_Analysis\_Tool}
+% A ribbon command or on-screen control
+\newcommand{\ui}[1]{\textbf{#1}}
+
+\usepackage{nameref}
+\usepackage[hidelinks]{hyperref}
+% Code and file names that may break at underscores, slashes and dots: \code{trip_coil_1_a}
+\def\UrlBreaks{\do\/\do-\do\_\do.\do,}
+\urlstyle{tt}
+\newcommand{\code}[1]{\nolinkurl{#1}}
+\hypersetup{pdftitle={GFT\_Analysis\_Tool Project Report}, pdfauthor={Govind Menon, Jon Hemrick, Athens Taylor, Lauren Rouse}}

@@ -1,39 +1,87 @@
-This project focuses on the design, development, and implementation of an
-interactive engineering tool that integrates electrical and systems control
-systems. The objective is to develop a functional and reliable system
-that allows users to interact with various electrical components and seamlessly import
-or create one-line diagrams within a specialized component GUI. The software will validate 
-system topology, map zones of protection, and perform critical momentary DC battery load 
-calculations. By identifying worst-case scenarios, the tool provides GFT engineers with 
-actionable insights to ensure maximum substation reliability and safety.
+\subsection{Background}
 
+A substation's protection and control equipment runs on DC power, usually from a
+station battery and its charger. In normal service, the battery carries a steady
+background load. When a fault occurs, protective relays energize the trip coils of the
+breakers around the faulted equipment. Other operations may follow: breakers reclose,
+a breaker-failure scheme trips neighboring breakers, and motor-operated mechanisms
+recharge their springs. Each operation draws a large current for a fraction of a
+second. The DC system must be able to supply the largest combination of these
+\emph{momentary} currents that can occur at the same time~\cite{ieee946}.
 
-The project provides an opportunity to apply theoretical concepts learned
-through coursework to the creation of a practical engineering application. Key areas of
-focus include system design, component integration, programming, testing,
-and troubleshooting. The completed system is intended to demonstrate the
-application of engineering methods to solve a real-world problem.
+Which equipment operates for a given fault depends on the \emph{protection zones}. A
+zone is the part of the one-line diagram covered by one protection scheme, bounded by
+the current transformers (CTs) that measure the current entering and leaving it. A
+fault inside the zone trips the breakers that isolate it. Zones overlap at each
+breaker so that no part of the station is left unprotected.
 
-
-The GUI allows users to construct protection system schematics using a Drag-and-Drop Approach, 
-identifying and visualizing zones of protection, performing momentary current calculations, and 
-accessing a library of electrical components. In addition, the tool provides the ability to 
-import an existing PDF diagram and use it as a background reference while recreating or 
-analyzing the system. These features are intended to make the analysis process more clean, 
-organized, interactive, and easier to understand.
-
-
-The tool is divided into several primary sections: the Protection Zone Outliner, Momentary 
-Calculation Tool, Component Library, Sandbox, and PDF Importer/Exporter function.
+Finding the momentary load therefore means identifying every zone, the breakers and
+motors that operate for a fault in it, the order in which they operate, and the DC
+supply that feeds each coil. Done by hand, this involves tracing zones on paper
+drawings and adding up coil currents in a spreadsheet. The work is slow, hard to
+review, and must be repeated whenever the station changes.
 
 \subsection{Project Objectives}
-The objective of the project is to create an AI-driven tool that will assist in 
-the design process of protection zones within a substation. 
 
-The tool will allow the user to: (Needs to be updated for bullet list below later)
+The goal of the project was a tool that lets the user:
 
-Transcribe a One-Line Diagram onto it:
-Edit the components of the One-Line Diagram
-Outline the Zones of Protection
-Calculate the Momentary DC Battery Load
-Identify the Worst-Case Scenario
+\begin{itemize}
+  \item transcribe a substation one-line diagram into an editable, connected drawing;
+  \item edit the drawing's components and their electrical data;
+  \item outline the zones of protection;
+  \item calculate the momentary DC load of each operating stage; and
+  \item identify the worst case: the largest momentary current on each DC supply.
+\end{itemize}
+
+The project also let the team apply what it learned in coursework, including power
+system protection, software design, testing and troubleshooting, to a real
+engineering problem for an industry sponsor.
+
+\subsection{Scope}
+
+\app{} meets these objectives. With it, the user can:
+
+\begin{enumerate}
+  \item show the station's one-line PDF as a background and rebuild the diagram from a
+        library of electrical symbols;
+  \item record each device's coil and motor currents, switch status, mechanism
+        arrangement and DC supply;
+  \item check the drawing for unconnected terminals and wiring shorts;
+  \item have protection zones proposed automatically, then review, edit and verify them;
+  \item calculate the momentary current for every zone, stage and DC supply, and the
+        peak each supply must deliver; and
+  \item save the study and export a PDF calculation report.
+\end{enumerate}
+
+Two areas are outside the tool's scope:
+
+\begin{itemize}
+  \item \textbf{Battery capacity.} The tool reports momentary current in amperes. It
+        does not size the battery in ampere-hours, which requires a duty cycle over
+        time (see IEEE Std~485~\cite{ieee485}).
+  \item \textbf{Protection design.} The tool does not work out relay settings, CT
+        assignments or trip logic. Its zones are proposals that an engineer confirms.
+\end{itemize}
+
+\subsection{Intended Users}
+
+The tool is intended for GFT's substation protection and control engineers who prepare
+or review DC load studies. Users should understand one-line diagrams and protection
+zones. No programming knowledge is needed; the tool runs from a portable Windows
+package.
+
+\subsection{Report Organization}
+
+\begin{itemize}
+  \item Section~\ref{sec:overview} gives an overview of the tool: what it does, a
+        typical workflow, the main window and how the software is built.
+  \item Section~\ref{sec:installation} explains how to install and start it.
+  \item Section~\ref{sec:quickstart} walks through a complete first study.
+  \item Section~\ref{sec:userguide} is the user guide, organized by feature.
+  \item Section~\ref{sec:shortcuts} lists every keyboard and mouse shortcut.
+  \item Section~\ref{sec:calculation} explains the calculation, with a worked example.
+  \item Section~\ref{sec:testing} describes how the tool was tested.
+  \item Section~\ref{sec:future} covers limitations and future improvements, and
+        Section~\ref{sec:conclusion} concludes.
+  \item Appendix~\ref{app:formats} describes the file formats.
+\end{itemize}

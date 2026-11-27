@@ -1,0 +1,33 @@
+\section*{Executive Summary}
+\addcontentsline{toc}{section}{Executive Summary}
+
+When a fault occurs in a substation, protective relays energize breaker trip coils,
+and reclosing and motor-operated equipment may follow. All of this equipment draws
+current from the station's DC battery system. Engineers must find the largest
+\emph{momentary} current each DC supply may have to deliver. Today, that means
+tracing protection zones on paper drawings and adding up coil currents in a
+spreadsheet.
+
+\app{} is a desktop application that does this work on a rebuilt copy of the
+one-line diagram. The user redraws the station over the original PDF and enters each
+device's coil and motor currents. The tool then:
+
+\begin{itemize}
+  \item proposes bus, transformer and line protection zones by tracing the wiring
+        between current transformers (CTs), taking open switches into account;
+  \item lets the engineer review each zone, assign the equipment that operates at
+        each stage (primary trip, reclose, motor inrush and so on), and verify it;
+  \item adds up the currents that flow at the same time for each zone, stage and DC
+        supply, and reports the peak current each supply must deliver;
+  \item exports a PDF calculation report with an annotated one-line diagram.
+\end{itemize}
+
+Results stay marked \emph{provisional} until every zone has been verified, so an
+unfinished study cannot be mistaken for a final one. The tool calculates momentary
+current only; it does not size battery capacity in ampere-hours.
+
+\app{} is written in Python with the Qt user-interface toolkit and is delivered as a
+portable Windows package that needs no installation. Its results matched an
+independent hand calculation exactly on all 13 provided layouts, and 288 automated
+tests run on Windows and Linux whenever the code changes. The sponsor reviewed the
+provided layouts and confirmed that they are correct.

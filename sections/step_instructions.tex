@@ -1,0 +1,72 @@
+This section takes a small station, a bus with two feeder breakers, from an empty
+drawing to an exported calculation report. Each step refers to the part of the User
+Guide (Section~\ref{sec:userguide}) that covers it in detail.
+
+\subsection*{Step 1 --- Start a layout}
+Click \menu{File > New} (\keys{Ctrl + N}) and type a name in the \ui{Project} field at
+the top right. If you have the one-line as a PDF, click \menu{File > Import PDF} and
+choose the file. Its first page appears under the grid, at drawing scale
+(Section~\ref{sec:files}).
+
+\subsection*{Step 2 --- Create the equipment}
+The Equipment Library starts empty. Click \menu{Edit > Create Component} and create:
+
+\begin{itemize}
+  \item a \textbf{Bus}, named \emph{BUS-1}, with its kV rating;
+  \item a \textbf{Circuit Breaker}, named \emph{CB-F}, with its trip coil, close coil
+        and motor currents, for example Trip Coil~1 = \SI{6}{A}, Trip Coil~2 =
+        \SI{5}{A}, Close Coil = \SI{10}{A};
+  \item a \textbf{Current Transformer}, named \emph{CT-F}.
+\end{itemize}
+
+Each one appears in the Equipment Library (Figure~\ref{fig:create}).
+
+\subsection*{Step 3 --- Place and connect}
+Drag \emph{BUS-1} from the library onto the drawing, then drag in two breakers and two
+CTs, one of each per feeder. Place each feeder's CT between the bus and its breaker, so
+that the CTs form the boundary of the bus zone.
+
+To draw a wire, press the mouse button on a terminal (one of the dark dots on a
+symbol) and drag to another terminal. To connect to the bus, release the wire
+anywhere on the bus bar; a connection node is added where it lands
+(Section~\ref{sec:connecting}).
+
+\subsection*{Step 4 --- Check the data}
+Click each breaker. The \ui{Selected Element Properties} panel shows the currents it
+was created with; changes made here apply to that breaker only. Scroll down to the
+breaker settings and choose the DC supply for each coil, for example Trip Coil~1 on
+\emph{DC 1} and Trip Coil~2 on \emph{DC 2} (Section~\ref{sec:properties}).
+
+\subsection*{Step 5 --- Validate}
+Click \menu{Analysis > Validate} and fix any open terminals or shorts it reports. End
+each feeder that leaves the drawing with an \textbf{Incoming AC Line} symbol, so that
+its last terminal is connected (Section~\ref{sec:validate}).
+
+\subsection*{Step 6 --- Evaluate and configure the zone}
+Click \menu{Analysis > Run Evaluation}. The tool proposes a \emph{BUS-1 Bus Zone}
+bounded by the two CTs and outlines it on the drawing. The zone is marked
+\emph{review required} because no operating loads have been assigned yet.
+
+Click \menu{Analysis > Configure Zones} (Figure~\ref{fig:zonedialog}). For the bus
+zone:
+\begin{enumerate}
+  \item make sure both feeder CTs are checked as boundary CTs;
+  \item click \ui{Add Load} once for each coil that operates. For example, add each
+        breaker's Trip Coil~1 and Trip Coil~2 in the \emph{Primary trip} stage, and a
+        close coil in the \emph{Reclose} stage if the scheme recloses;
+  \item check \ui{I have verified this zone's CT boundaries and operating actions},
+        then click \ui{Save}.
+\end{enumerate}
+The evaluation runs again automatically (Section~\ref{sec:zones}).
+
+\subsection*{Step 7 --- Review and export}
+The Analysis Output now reads \textbf{COMPLETE}. It lists each stage's total current
+and the peak on each DC supply, and the zone outline becomes solid. Click
+\menu{File > Export Results} and choose \ui{Save Calculation PDF} to save the report
+(Section~\ref{sec:reports}). Save the layout with \keys{Ctrl + S}.
+
+\begin{note}
+To try the tool without building a drawing, open one of the provided layouts
+(Section~\ref{sec:providedlayouts}) and click \ui{Run Evaluation}.
+
+\end{note}

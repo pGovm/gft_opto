@@ -1,0 +1,113 @@
+This section lists every keyboard and mouse shortcut in \app{}. They are the same on
+Windows and Linux.
+
+\begin{note}
+Copy, paste, delete and rotate work on the drawing only when it has keyboard focus,
+so click an empty part of the drawing first. In a text field, these keys edit the text
+as usual.
+\end{note}
+
+\subsection{Files and Commands}
+
+\begin{table}[H]
+  \centering
+  \caption{File and command shortcuts}
+  \label{tab:keys-file}
+  \begin{tabularx}{\textwidth}{l L}
+    \toprule
+    \textbf{Keys} & \textbf{Action} \\
+    \midrule
+    \keys{Ctrl + N} & New layout \\
+    \keys{Ctrl + O} & Open a layout \\
+    \keys{Ctrl + S} & Save the layout \\
+    \keys{Ctrl + Shift + S} & Save the layout under a new name \\
+    \keys{Ctrl + Z} & Undo the last edit \\
+    \keys{Ctrl + Y} & Redo \\
+    \keys{Alt + F}, \keys{Alt + E}, \keys{Alt + V}, \keys{Alt + A} & Show the File, Edit, View or Analysis ribbon tab \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\subsection{Drawing: Keyboard}
+
+\begin{table}[H]
+  \centering
+  \caption{Keyboard shortcuts on the drawing}
+  \label{tab:keys-drawing}
+  \begin{tabularx}{\textwidth}{l L}
+    \toprule
+    \textbf{Keys} & \textbf{Action} \\
+    \midrule
+    \keys{Ctrl + C} & Copy the selected equipment, with the wires between them \\
+    \keys{Ctrl + V} & Paste a copy, offset from the original \\
+    \keys{Delete} or \keys{Backspace} & Delete the selection and its attached wires \\
+    \keys{R} & Rotate the selection \SI{90}{\degree} clockwise \\
+    \keys{Shift + R} & Rotate the selection \SI{90}{\degree} counterclockwise \\
+    \keys{Esc} & Cancel the wire, rotation, resize or bus-length change in progress \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\subsection{Drawing: Mouse}
+
+\begin{table}[H]
+  \centering
+  \caption{Mouse actions on the drawing}
+  \label{tab:keys-mouse}
+  \begin{tabularx}{\textwidth}{l L}
+    \toprule
+    \textbf{Mouse} & \textbf{Action} \\
+    \midrule
+    Click & Select a symbol or wire \\
+    \keys{Ctrl} + click & Add a symbol to the selection, or remove it \\
+    Drag a symbol & Move the selection; terminals snap to the grid when Snap to Grid is on \\
+    Drag an empty area & Pan the drawing \\
+    \keys{Ctrl} + mouse wheel & Zoom in and out around the pointer \\
+    Mouse wheel & Scroll the drawing \\
+    Drag a library entry onto the drawing & Place a copy of that equipment \\
+    Drag from a terminal to a terminal & Draw a wire \\
+    Drag from a terminal onto a bus bar & Connect to the bus, adding a node where released \\
+    Drag from a terminal onto a wire & Tee into the wire with a new junction \\
+    Right-click while drawing a wire & Cancel the wire \\
+    Drag the round handle above a symbol & Rotate in \SI{15}{\degree} steps \\
+    \keys{Shift} + drag the round handle & Rotate freely \\
+    Drag a corner handle & Resize the symbol (half to three times normal size, in 0.25 steps) \\
+    Drag the end of a bus & Lengthen or shorten the bus \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\subsection{Properties Panel}
+
+\begin{table}[H]
+  \centering
+  \caption{Properties panel shortcuts}
+  \label{tab:keys-properties}
+  \begin{tabularx}{\textwidth}{l L}
+    \toprule
+    \textbf{Keys} & \textbf{Action} \\
+    \midrule
+    \keys{Enter} & Apply the edited value \\
+    \keys{Tab} & Apply the value and move to the next field \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\subsection{Configure Zones Dialog}
+
+\begin{table}[H]
+  \centering
+  \caption{Shortcuts in the Configure Zones dialog}
+  \label{tab:keys-zones}
+  \begin{tabularx}{\textwidth}{l L}
+    \toprule
+    \textbf{Keys or mouse} & \textbf{Action} \\
+    \midrule
+    Click a row number & Select that load row \\
+    \keys{Shift} + click a row number & Select a range of rows \\
+    \keys{Ctrl} + click a row number & Add a row to the selection, or remove it \\
+    \keys{Delete} or \keys{Backspace} & Delete the selected rows, after confirmation \\
+    \keys{Esc} & Close the dialog without saving (the same as \ui{Cancel}) \\
+    \bottomrule
+  \end{tabularx}
+\end{table}

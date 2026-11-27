@@ -1,0 +1,91 @@
+Both formats are plain JSON text files that other tools can read.
+
+\subsection{Layout File}
+
+A layout (\texttt{.json}) holds a complete study. Table~\ref{tab:layoutkeys} lists
+its top-level fields.
+
+\begin{table}[H]
+  \centering
+  \caption{Layout file fields}
+  \label{tab:layoutkeys}
+  \begin{tabularx}{\textwidth}{l L}
+    \toprule
+    \textbf{Field} & \textbf{Contents} \\
+    \midrule
+    \texttt{version} & Format version, currently 1. \\
+    \texttt{project} & Project name. \\
+    \texttt{pdf} & Path of the background PDF, or \texttt{null}. \\
+    \texttt{scene\_rect} & Drawing area: $x$, $y$, width and height, in drawing units (50 per inch). \\
+    \texttt{settings} & \texttt{grid\_visible}, \texttt{grid\_opacity}, \texttt{snap}, \texttt{pdf\_visible}. \\
+    \texttt{library} & Equipment Library entries: \texttt{symbol}, \texttt{name} and \texttt{properties}. \\
+    \texttt{components} & The drawn equipment (below). \\
+    \texttt{connections} & Wires, each \texttt{[from\_id, from\_port, to\_id, to\_port]}. \\
+    \texttt{zones} & Zone settings (below). \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\paragraph{Component.} One breaker from the two-zone demonstration:
+\begin{lstlisting}
+{"id": "breaker_3", "symbol": "breaker", "name": "CB-F1", "display_id": "CB-F1",
+ "properties": {"status": "Closed", "symbol_type": "breaker",
+   "trip_coil_1_a": 6, "trip_coil_2_a": 5, "close_coil_a": 10,
+   "coil_current_basis": "whole_breaker", "mechanism_arrangement": "shared",
+   "pole_count": 3, "trip_coil_1_supply": "DC 1", "trip_coil_2_supply": "DC 2",
+   "close_coil_supply": "DC 1", "motor_supply": "DC 1"},
+ "position": [450.0, 707.0], "scale": 1.0, "rotation": 90.0,
+ "ports": {"left": [-32.0, 0.0], "right": [32.0, 0.0]}}
+\end{lstlisting}
+
+Currents are stored in amperes under \code{trip_coil_1_a}, \code{trip_coil_2_a},
+\code{close_coil_a}, \code{motor_inrush_a} and \code{motor_run_a}. A bus's or surge
+arrester's rating is \code{rating_kv}.
+\texttt{ports} gives each terminal's position relative to the symbol, before
+rotation and scaling. A bus lists its added connection nodes here as well.
+
+\paragraph{Zone.} The demonstration's bus zone, with its first two load rows:
+\begin{lstlisting}
+{"id": "bus_zone", "name": "BUS-1 Bus Differential", "kind": "Bus",
+ "seed": "bus_1", "boundary_cts": ["ct_5", "ct_4", "ct_3"], "confirmed": true,
+ "actions": [
+   {"component": "breaker_2", "load": "trip_coil_1_a",
+    "stage": "Primary trip", "operation": "all_poles"},
+   {"component": "breaker_2", "load": "trip_coil_2_a",
+    "stage": "Primary trip", "operation": "all_poles"}],
+ "topology_signature": "ct-study-v3:43b4...", "configuration_signature": "74b8..."}
+\end{lstlisting}
+
+The two signatures are fingerprints of the drawing and of the zone's settings, taken
+when the zone was verified. If either no longer matches, the zone must be
+reconfirmed. An \emph{Other} load row has a \texttt{component} beginning with
+\texttt{other:} and a \texttt{custom\_load} object holding its \texttt{name} and
+\texttt{amps}.
+
+\subsection{Netlist File}
+
+A netlist (\texttt{.json}) describes components and connections only, with no zones or
+drawing settings. \menu{File > Import Netlist} accepts files like this:
+
+\begin{lstlisting}
+{"schema_version": 1,
+ "project_name": "Example",
+ "components": [
+   {"id": "breaker:breaker_1", "display_id": "CB-HV", "type": "breaker",
+    "name": "CB-HV", "properties": {"trip_coil_1_a": 10},
+    "position": {"x": 300.0, "y": 175.0}, "rotation_deg": 0.0, "scale_factor": 1.0,
+    "ports": ["left", "right"],
+    "port_positions": {"left": {"x": -32.0, "y": 0.0}, "right": {"x": 32.0, "y": 0.0}}}],
+ "connections": [
+   {"id": "connection_1",
+    "from": {"component": "breaker:breaker_1", "port": "right"},
+    "to":   {"component": "ct:ct_1", "port": "left"}}]}
+\end{lstlisting}
+
+{\raggedright Each component \texttt{type} is one of the symbol types of
+Figure~\ref{fig:symbols}, using the names \code{breaker}, \code{disconnect},
+\code{mos}, \code{ct}, \code{pt}, \code{bus}, \code{xfmr_2w}, \code{xfmr_3w},
+\code{incoming_line}, \code{surge_arrester}, \code{line_trap}, \code{ground},
+\code{junction} and \code{custom}.\par} Every
+connection must refer to components and terminals that exist. A file that breaks
+these rules is rejected, with a message explaining why.
