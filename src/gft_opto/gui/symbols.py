@@ -365,14 +365,20 @@ class OneLineSymbolItem(QGraphicsItem):
 
     def _draw_centered_text(self, painter: QPainter, rect: QRectF, text: str):
         if self._labels_as_paths:
+            # Rebuild the font so its size is measured at screen resolution, as
+            # on the canvas. painter.font() is resolved for the paint device, and
+            # a high-resolution printer would otherwise make the text far too big.
+            font = QFont()
+            font.fromString(painter.font().toString())
             path = QPainterPath()
-            path.addText(QPointF(), painter.font(), text)
+            path.addText(QPointF(), font, text)
             bounds = path.boundingRect()
             path.translate(
                 rect.center().x() - bounds.center().x(),
                 rect.center().y() - bounds.center().y(),
             )
-            painter.drawPath(path)
+            # Text outlines must be filled, not stroked, to look like text.
+            painter.fillPath(path, QBrush(painter.pen().color()))
         else:
             painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
 

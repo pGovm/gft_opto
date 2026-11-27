@@ -6,7 +6,7 @@ from PySide6.QtGui import QPageLayout, QPainter, QTextDocument
 from PySide6.QtPrintSupport import QPrinter
 from PySide6.QtWidgets import QFileDialog, QMessageBox
 from gft_opto.gui import messages
-from gft_opto.gui.symbols import BUILTIN_SYMBOLS, OneLineSymbolItem
+from gft_opto.gui.symbols import BUILTIN_SYMBOLS, ConnectionItem, OneLineSymbolItem
 from html import escape
 from pathlib import Path
 
@@ -59,10 +59,26 @@ def property_value(key, value):
 
 
 class PdfExportMixin:
+    def _annotated_drawing_rect(self):
+        """Area covered by the equipment, wires and zone outlines, with a small margin.
+
+        Fitting the page to this, rather than to the whole drawing sheet, keeps a
+        small one-line from shrinking into a corner of the page.
+        """
+        overlays = set(map(id, getattr(self, "_zone_overlays", [])))
+        rect = QRectF()
+        for item in self.workspace_scene.items():
+            if isinstance(item, (OneLineSymbolItem, ConnectionItem)) or id(item) in overlays:
+                rect = rect.united(item.sceneBoundingRect())
+        if rect.isEmpty():
+            return rect
+        margin = max(rect.width(), rect.height()) * 0.02
+        return rect.adjusted(-margin, -margin, margin, margin)
+
     def _on_save_annotated_one_line_pdf(self):
         scene = self.workspace_scene
-        rect = scene.sceneRect()
-        if rect.width() <= 0 or rect.height() <= 0:
+        rect = self._annotated_drawing_rect()
+        if rect.isEmpty():
             QMessageBox.information(
                 self, "Save Annotated One-Line PDF", "The one-line diagram is empty."
             )
@@ -91,8 +107,9 @@ class PdfExportMixin:
             for item in scene.items()
             if isinstance(item, OneLineSymbolItem)
         ]
+        # Keep equipment IDs on the diagram, drawn as outlines so the PDF embeds
+        # no fonts. Symbols that never show a name (ground, junction) are unchanged.
         for item, _, _ in label_states:
-            item.show_name_label = False
             item._labels_as_paths = True
             item.refresh_label_placement()
 
@@ -106,15 +123,23 @@ class PdfExportMixin:
             printer = QPrinter(QPrinter.PrinterMode.HighResolution)
             printer.setOutputFormat(QPrinter.OutputFormat.PdfFormat)
             printer.setOutputFileName(temporary)
-            printer.setPageOrientation(QPageLayout.Orientation.Landscape)
+            # Match the page to the drawing's shape so it fills as much as possible.
+            printer.setPageOrientation(
+                QPageLayout.Orientation.Landscape if rect.width() >= rect.height()
+                else QPageLayout.Orientation.Portrait
+            )
 
             painter = QPainter(printer)
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
             painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
             page_rect = printer.pageRect(QPrinter.Unit.DevicePixel)
             margin = int(min(page_rect.width(), page_rect.height()) * 0.035)
-            target = page_rect.adjusted(margin, margin, -margin, -margin)
-            scene.render(painter, QRectF(target), rect)
+            area = QRectF(page_rect.adjusted(margin, margin, -margin, -margin))
+            # Scale the drawing to fit and center it on the page.
+            scale = min(area.width() / rect.width(), area.height() / rect.height())
+            target = QRectF(0, 0, rect.width() * scale, rect.height() * scale)
+            target.moveCenter(area.center())
+            scene.render(painter, target, rect)
             painter.end()
 
             if printer.printerState() == QPrinter.PrinterState.Error or Path(temporary).stat().st_size == 0:

@@ -259,13 +259,30 @@ class GuiWorkflows(unittest.TestCase):
         self.assertNotIn("Annotated One-Line", text)
         self.assertIn("Results saved:", w.footer_status_label.text())
         annotated_path = Path(self.temp.name) / "annotated-one-line.pdf"
-        with patch("gft_opto.gui.substation_gui.QFileDialog.getSaveFileName", return_value=(str(annotated_path), "")):
+        drawn_text = []
+        draw_text = OneLineSymbolItem._draw_centered_text
+
+        def record_text(item, painter, rect, text):
+            drawn_text.append((item, text))
+            return draw_text(item, painter, rect, text)
+
+        with patch("gft_opto.gui.substation_gui.QFileDialog.getSaveFileName", return_value=(str(annotated_path), "")), \
+                patch.object(OneLineSymbolItem, "_draw_centered_text", record_text):
             w._on_save_annotated_one_line_pdf()
+        # Equipment IDs are drawn on the diagram (as outlines, so no fonts are embedded).
+        self.assertIn((breaker, breaker.visible_id()), drawn_text)
         self.assertGreater(annotated_path.stat().st_size, 0)
         with pymupdf.open(annotated_path) as document:
             self.assertEqual(document.page_count, 1)
             page_rect = document[0].rect
-            self.assertGreater(page_rect.width, page_rect.height)
+            # The page fits the drawing: the drawing spans most of the page in one
+            # direction, and the orientation follows the drawing's shape.
+            boxes = [path["rect"] for path in document[0].get_drawings()]
+            drawn_width = max(b.x1 for b in boxes) - min(b.x0 for b in boxes)
+            drawn_height = max(b.y1 for b in boxes) - min(b.y0 for b in boxes)
+            self.assertGreater(max(drawn_width / page_rect.width, drawn_height / page_rect.height), 0.8)
+            drawing = w._annotated_drawing_rect()
+            self.assertEqual(page_rect.width > page_rect.height, drawing.width() >= drawing.height())
             self.assertFalse(document[0].get_fonts())
             self.assertEqual(document[0].get_text().strip(), "")
         self.assertEqual(breaker.display_id, "")
