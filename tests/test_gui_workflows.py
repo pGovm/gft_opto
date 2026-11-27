@@ -231,13 +231,28 @@ class GuiWorkflows(unittest.TestCase):
         self.assertGreater(path.stat().st_size, 0)
         with pymupdf.open(path) as document:
             pages = [page.get_text() for page in document]
+            diagram_images = document[0].get_image_info()
+            self.assertTrue(diagram_images)
+            diagram = diagram_images[0]
+            page_rect = document[0].rect
+            x0, y0, x1, y1 = diagram["bbox"]
+            self.assertGreaterEqual(x0, page_rect.x0)
+            self.assertGreaterEqual(y0, page_rect.y0)
+            self.assertLessEqual(x1, page_rect.x1)
+            self.assertLessEqual(y1, page_rect.y1)
+            self.assertAlmostEqual(
+                diagram["width"] / diagram["height"],
+                (x1 - x0) / (y1 - y0),
+                delta=0.02,
+            )
         text = "".join(pages)
         ct_ids = [item.instance_id for item in w.workspace_scene.items()
                   if isinstance(item, CurrentTransformerItem)]
         self.assertIn("18", text)
         self.assertIn("Supply Peaks", text)
-        self.assertIn("Zone Summary", pages[0])
-        self.assertIn("Review", pages[0])
+        self.assertIn("Annotated One-Line", text)
+        self.assertIn("Zone Summary", text)
+        self.assertIn("Review", text)
         self.assertIn("Test Bus Zone", text)
         self.assertNotIn("bus_zone", text)
         self.assertIn("Primary trip", text)

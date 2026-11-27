@@ -1,8 +1,10 @@
 """Calculation and netlist PDF export workflows."""
 import os
 import tempfile
+import base64
 
-from PySide6.QtGui import QTextDocument
+from PySide6.QtCore import QBuffer, QIODevice, QRectF, Qt
+from PySide6.QtGui import QImage, QPainter, QTextDocument
 from PySide6.QtPrintSupport import QPrinter
 from PySide6.QtWidgets import QFileDialog, QMessageBox
 from gft_opto.gui import messages
@@ -59,6 +61,48 @@ def property_value(key, value):
 
 
 class PdfExportMixin:
+    def _annotated_one_line_html(self):
+        scene = self.workspace_scene
+        rect = scene.sceneRect()
+        if rect.width() <= 0 or rect.height() <= 0:
+            return ""
+
+        visibility = [(item, item.isVisible()) for item in scene.items()]
+        grid_item = getattr(getattr(self, "workspace_view", None), "_grid_item", None)
+        if grid_item is not None:
+            grid_item.setVisible(False)
+        for item in scene.items():
+            if item is not grid_item:
+                item.setVisible(True)
+
+        try:
+            scale = min(640 / rect.width(), 480 / rect.height())
+            width = max(1, int(round(rect.width() * scale)))
+            height = max(1, int(round(rect.height() * scale)))
+            image = QImage(width, height, QImage.Format.Format_ARGB32)
+            image.fill(Qt.GlobalColor.white)
+            painter = QPainter(image)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+            scene.render(painter, QRectF(0, 0, width, height), rect)
+            painter.end()
+
+            buffer = QBuffer()
+            buffer.open(QIODevice.OpenModeFlag.WriteOnly)
+            if not image.save(buffer, "PNG"):
+                return ""
+            encoded = base64.b64encode(bytes(buffer.data())).decode("ascii")
+        finally:
+            for item, was_visible in visibility:
+                item.setVisible(was_visible)
+
+        return (
+            "<h2>Annotated One-Line</h2>"
+            "<p><i>Protection-zone annotations at evaluation time</i></p>"
+            f'<p><img src="data:image/png;base64,{encoded}" '
+            'style="width: 100%; max-height: 650px; object-fit: contain;" /></p>'
+        )
+
     def _on_save_results_clicked(self):
         if self.last_result is not None and self._layout_data() != self._evaluated_snapshot:
             self._invalidate_results()
@@ -128,6 +172,7 @@ class PdfExportMixin:
             "<tr><td colspan='3'>Unavailable until zone assignments and currents are complete.</td></tr>"
         )
         evaluation_html = self._evaluation_output_html(result, report)
+        one_line_html = self._annotated_one_line_html()
 
         html = f"""
         <html>
@@ -159,6 +204,8 @@ class PdfExportMixin:
           <p><b>{escape(study_status)}</b></p>
           <p><b>System:</b> {escape(str(result.get('scenario_name', 'N/A')))}
             &nbsp; <b>Voltage:</b> {escape(str(result.get('voltage_V', 'N/A')))} V</p>
+
+          {one_line_html}
 
           <h2>Supply Peaks</h2>
           <table class="summary">
