@@ -11,7 +11,7 @@ from PySide6.QtGui import QColor, QKeySequence, QPalette, QShortcut
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QHBoxLayout,
     QLabel, QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPushButton,
-    QSpinBox, QTableWidget, QVBoxLayout, QWidget, QHeaderView, QAbstractItemView, QDoubleSpinBox,
+    QTableWidget, QVBoxLayout, QWidget, QHeaderView, QAbstractItemView, QDoubleSpinBox,
     QTableWidgetSelectionRange, QStackedWidget, QSplitter, QScrollArea, QFrame, QAbstractSpinBox,
 )
 

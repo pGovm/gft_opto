@@ -4,9 +4,14 @@
 
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QPointF, QRectF
 from PySide6.QtGui import QPainterPath
+
+if TYPE_CHECKING:
+    # Type hints only: symbols.py imports this module, so a runtime import would be circular.
+    from gft_opto.gui.symbols import OneLineSymbolItem
 
 # ---------------------------------------------------------------------------
 # Constants

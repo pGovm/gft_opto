@@ -11,7 +11,7 @@ from typing import Callable
 
 from PySide6.QtCore import Qt, QPointF, QRectF, QMimeData
 from PySide6.QtGui import (
-    QBrush, QColor, QPainter, QPainterPath, QPen, QPixmap,
+    QColor, QPainter, QPainterPath, QPen, QPixmap,
     QTransform, QUndoCommand, QUndoStack, QKeySequence,
 )
 from PySide6.QtWidgets import (
@@ -34,16 +34,12 @@ from gft_opto.gui.commands import (
 from gft_opto.gui.routing import (
     BUS_DROP_RADIUS,
     DEFAULT_GRID_OPACITY,
-    DEFAULT_WORKSPACE_HEIGHT,
-    DEFAULT_WORKSPACE_WIDTH,
     GRID_MAJOR_EVERY,
     GRID_SPACING,
     MIME_EQUIPMENT,
     MIN_SYMBOL_SCALE,
     PORT_HIT_RADIUS,
-    RESIZE_HANDLE_HIT,
     ROTATE_DRAG_SNAP,
-    ROTATE_HANDLE_HIT,
     SYMBOL_ROTATION_STEP,
     SYMBOL_SCALE_STEP,
     UI_ACCENT,
@@ -61,9 +57,7 @@ from gft_opto.gui.symbols import (
     EQUIPMENT_DEFS,
     BusItem,
     ConnectionItem,
-    JunctionItem,
     OneLineSymbolItem,
-    make_user_equipment,
     release_instance_id,
     next_instance_id,
 )

@@ -81,8 +81,8 @@ def build_netlist(scene, project_name="Untitled Project"):
             wire.from_item not in component_ids
             or wire.to_item not in component_ids
         ):
-            # TODO: Collect this as a validation warning instead
-            # of silently skipping it in a production version.
+            # Leave out a wire whose far end is not on the drawing. Validate
+            # (circuit_check) reports the terminal it leaves unconnected.
             continue
 
         netlist_connections.append({
