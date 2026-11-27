@@ -4,7 +4,7 @@ build-backend = "uv_build"
 
 [project]
 name = "gft-opto"
-version = "0.0.1"
+version = "1.0.0"
 
 dependencies = [
     "PySide6>=6.11.0",

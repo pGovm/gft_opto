@@ -23,7 +23,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QAbstractSpinBox,
-    QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFrame, QGraphicsScene, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QSlider, QTextEdit, QVBoxLayout, QWidget, QGraphicsRectItem, QGraphicsPathItem, QSpinBox, QScrollArea, QSizePolicy,
+    QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFrame, QGraphicsScene, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QSlider, QTextEdit, QVBoxLayout, QWidget, QGraphicsPathItem, QSpinBox, QScrollArea, QSizePolicy,
 )
 
 from gft_opto.gui.circuit_check import check_circuit
@@ -37,8 +37,6 @@ from gft_opto.gui.routing import (
     GFT_ICON_PATH,
     MIME_EQUIPMENT,
     SCENE_UNITS_PER_INCH,
-    SYMBOL_ROTATION_STEP,
-    UI_ACCENT,
 )
 from gft_opto.gui.symbols import (
     BUILTIN_SYMBOLS, EQUIPMENT_DEFS, BusItem, ConnectionItem, CurrentTransformerItem, OneLineSymbolItem, make_user_equipment,
@@ -58,12 +56,8 @@ from collections import defaultdict
 
 from gft_opto.logic.netlist_manager import build_netlist
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
-
-# Drag-and-drop mime type for the equipment library
-MIME_EQUIPMENT = "application/x-substation-equipment"
+# Layout constants (sheet size, grid, handles, branding) live in routing.py
+# and are imported above; keep a single definition there.
 
 
 class _ZoneShape(QGraphicsPathItem):
@@ -75,60 +69,6 @@ class _ZoneShape(QGraphicsPathItem):
         painter.fillPath(self.path(), background)
         super().paint(painter, option, widget)
 
-
-class _ZoneRectangle(QGraphicsRectItem):
-    """Translucent fill and hatching behind equipment; no electrical meaning."""
-
-    def paint(self, painter, option, widget=None):
-        background = QColor(self.brush().color())
-        background.setAlpha(24)
-        painter.fillRect(self.rect(), background)
-        super().paint(painter, option, widget)
-
-# Port / wire hit testing
-PORT_HIT_RADIUS = 14.0       # px — cursor must be this close to grab a port
-PORT_DOT_RADIUS = 4.0        # px — drawn port handle size
-WIRE_DRAG_THRESHOLD = 6.0    # px — move this far before a wire drag starts
-WIRE_HIT_RADIUS = 10.0       # px — how close to a wire to tee into it
-BUS_DROP_RADIUS = 16.0       # px — how close to a bus bar to drop a new node
-MIN_BUS_LENGTH = 40.0        # base units — shortest a bus can be dragged
-
-# Default AEP/ANSI E landscape drawing sheet (48 in wide × 36 in high)
-AEP_SHEET_WIDTH_IN = 48.0
-AEP_SHEET_HEIGHT_IN = 36.0
-SCENE_UNITS_PER_INCH = 50.0
-DEFAULT_WORKSPACE_WIDTH = AEP_SHEET_WIDTH_IN * SCENE_UNITS_PER_INCH
-DEFAULT_WORKSPACE_HEIGHT = AEP_SHEET_HEIGHT_IN * SCENE_UNITS_PER_INCH
-
-# Alignment grid: half-inch divisions on the AEP sheet
-GRID_SPACING = SCENE_UNITS_PER_INCH / 2.0
-GRID_MAJOR_EVERY = 5         # every Nth line is drawn heavier
-DEFAULT_GRID_OPACITY = 0.25
-
-# Symbol resize / rotate handles
-RESIZE_HANDLE_SIZE = 8.0
-RESIZE_HANDLE_HIT = 12.0
-MIN_SYMBOL_SCALE = 0.5
-MAX_SYMBOL_SCALE = 3.0
-SYMBOL_SCALE_STEP = 0.25     # snap resize to this increment
-SYMBOL_ROTATION_STEP = 90.0  # degrees — R / Shift+R and the Edit tab
-ROTATE_HANDLE_OFFSET = 28.0  # px above symbol AABB top edge
-ROTATE_HANDLE_RADIUS = 8.0
-ROTATE_HANDLE_HIT = 14.0
-ROTATE_DRAG_SNAP = 15.0      # degrees — snap while dragging the rotate handle
-
-# Branding / theme
-UI_ACCENT = "#006A4E"        # bottle green — primary GUI accent
-def _resource_root() -> Path:
-    """Package directory in a checkout, or the frozen bundle root in an .exe."""
-    bundled = getattr(sys, "_MEIPASS", None)
-    if bundled:
-        return Path(bundled)
-    return Path(__file__).resolve().parent.parent
-
-
-GFT_LOGO_PATH = _resource_root() / "assets" / "gft_logo.png"
-GFT_LOGO_HEIGHT = 34         # px — header wordmark height
 
 _instance_counters: dict[str, int] = defaultdict(int)
 

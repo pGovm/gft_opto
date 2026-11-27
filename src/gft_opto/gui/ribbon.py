@@ -2,7 +2,7 @@
 from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
-    QFrame, QGridLayout, QHBoxLayout, QLabel, QMenu, QStyle, QTabWidget,
+    QFrame, QGridLayout, QHBoxLayout, QMenu, QStyle, QTabWidget,
     QSizePolicy, QToolButton, QVBoxLayout, QWidget, QScrollArea, QLayout,
 )
 
