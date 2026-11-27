@@ -142,6 +142,7 @@ def populate_ribbon(window):
     # One button offers both PDFs; it stays disabled until results exist.
     export_menu = QMenu(window.save_results_btn)
     export_menu.addAction(window.export_results_action)
+    export_menu.addAction(window.save_annotated_one_line_pdf_action)
     export_menu.addAction(window.save_netlist_pdf_action)
     window.save_results_btn.setMenu(export_menu)
     window.save_results_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)

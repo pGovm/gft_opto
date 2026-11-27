@@ -318,6 +318,7 @@ class ProjectFilesMixin:
         self.last_result = self.last_netlist = None
         self.output_box.clear()
         self.export_results_action.setEnabled(False)
+        self.save_annotated_one_line_pdf_action.setEnabled(False)
         self.zone_view.blockSignals(True)
         self.zone_view.clear()
         self.zone_view.addItem("Run Evaluation to display zones")

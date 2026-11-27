@@ -81,6 +81,7 @@ class OneLineSymbolItem(QGraphicsItem):
         self.label = label
         self.display_name = label
         self.show_name_label = True
+        self._labels_as_paths = False
         self._base_ports = dict(ports)
         self._connections: list["ConnectionItem"] = []
         self._snap_port_name: str | None = None
@@ -360,7 +361,20 @@ class OneLineSymbolItem(QGraphicsItem):
         text_pen.setWidthF(0)
         painter.setPen(text_pen)
         painter.setFont(self._label_font())
-        painter.drawText(self._label_base_rect(), Qt.AlignmentFlag.AlignCenter, caption)
+        self._draw_centered_text(painter, self._label_base_rect(), caption)
+
+    def _draw_centered_text(self, painter: QPainter, rect: QRectF, text: str):
+        if self._labels_as_paths:
+            path = QPainterPath()
+            path.addText(QPointF(), painter.font(), text)
+            bounds = path.boundingRect()
+            path.translate(
+                rect.center().x() - bounds.center().x(),
+                rect.center().y() - bounds.center().y(),
+            )
+            painter.drawPath(path)
+        else:
+            painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
 
     def _pen(self):
         return QPen(Qt.GlobalColor.black, 2)
@@ -557,7 +571,7 @@ class MotorOperatedSwitchItem(OneLineSymbolItem):
         painter.setBrush(QBrush(Qt.GlobalColor.white))
         painter.drawEllipse(QRectF(-8, 8, 16, 16))
         painter.setFont(ui_font(7, QFont.Weight.Bold))
-        painter.drawText(QRectF(-8, 8, 16, 16), Qt.AlignmentFlag.AlignCenter, "M")
+        self._draw_centered_text(painter, QRectF(-8, 8, 16, 16), "M")
         self._end_paint(painter)
 
 

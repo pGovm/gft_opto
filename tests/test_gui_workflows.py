@@ -231,26 +231,11 @@ class GuiWorkflows(unittest.TestCase):
         self.assertGreater(path.stat().st_size, 0)
         with pymupdf.open(path) as document:
             pages = [page.get_text() for page in document]
-            diagram_images = document[0].get_image_info()
-            self.assertTrue(diagram_images)
-            diagram = diagram_images[0]
-            page_rect = document[0].rect
-            x0, y0, x1, y1 = diagram["bbox"]
-            self.assertGreaterEqual(x0, page_rect.x0)
-            self.assertGreaterEqual(y0, page_rect.y0)
-            self.assertLessEqual(x1, page_rect.x1)
-            self.assertLessEqual(y1, page_rect.y1)
-            self.assertAlmostEqual(
-                diagram["width"] / diagram["height"],
-                (x1 - x0) / (y1 - y0),
-                delta=0.02,
-            )
         text = "".join(pages)
         ct_ids = [item.instance_id for item in w.workspace_scene.items()
                   if isinstance(item, CurrentTransformerItem)]
         self.assertIn("18", text)
         self.assertIn("Supply Peaks", text)
-        self.assertIn("Annotated One-Line", text)
         self.assertIn("Zone Summary", text)
         self.assertIn("Review", text)
         self.assertIn("Test Bus Zone", text)
@@ -271,7 +256,21 @@ class GuiWorkflows(unittest.TestCase):
         self.assertIn("Stage total: 18 A", text)
         self.assertIn("Peak per supply among confirmed, complete configured zones:", text)
         self.assertNotIn("Appendix: Detected Topology Regions", text)
+        self.assertNotIn("Annotated One-Line", text)
         self.assertIn("Results saved:", w.footer_status_label.text())
+        annotated_path = Path(self.temp.name) / "annotated-one-line.pdf"
+        with patch("gft_opto.gui.substation_gui.QFileDialog.getSaveFileName", return_value=(str(annotated_path), "")):
+            w._on_save_annotated_one_line_pdf()
+        self.assertGreater(annotated_path.stat().st_size, 0)
+        with pymupdf.open(annotated_path) as document:
+            self.assertEqual(document.page_count, 1)
+            page_rect = document[0].rect
+            self.assertGreater(page_rect.width, page_rect.height)
+            self.assertFalse(document[0].get_fonts())
+            self.assertEqual(document[0].get_text().strip(), "")
+        self.assertEqual(breaker.display_id, "")
+        self.assertTrue(breaker.show_name_label)
+        self.assertFalse(breaker._labels_as_paths)
         bad_path = Path(self.temp.name) / "missing" / "results.pdf"
         with patch("gft_opto.gui.substation_gui.QFileDialog.getSaveFileName", return_value=(str(bad_path), "")), patch.object(QMessageBox, "critical") as error:
             w._on_save_results_clicked()

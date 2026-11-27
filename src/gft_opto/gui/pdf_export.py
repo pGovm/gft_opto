@@ -1,14 +1,12 @@
 """Calculation and netlist PDF export workflows."""
 import os
 import tempfile
-import base64
-
-from PySide6.QtCore import QBuffer, QIODevice, QRectF, Qt
-from PySide6.QtGui import QImage, QPainter, QTextDocument
+from PySide6.QtCore import QRectF
+from PySide6.QtGui import QPageLayout, QPainter, QTextDocument
 from PySide6.QtPrintSupport import QPrinter
 from PySide6.QtWidgets import QFileDialog, QMessageBox
 from gft_opto.gui import messages
-from gft_opto.gui.symbols import BUILTIN_SYMBOLS
+from gft_opto.gui.symbols import BUILTIN_SYMBOLS, OneLineSymbolItem
 from html import escape
 from pathlib import Path
 
@@ -61,11 +59,25 @@ def property_value(key, value):
 
 
 class PdfExportMixin:
-    def _annotated_one_line_html(self):
+    def _on_save_annotated_one_line_pdf(self):
         scene = self.workspace_scene
         rect = scene.sceneRect()
         if rect.width() <= 0 or rect.height() <= 0:
-            return ""
+            QMessageBox.information(
+                self, "Save Annotated One-Line PDF", "The one-line diagram is empty."
+            )
+            return
+
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save Annotated One-Line PDF",
+            "annotated_one_line.pdf",
+            "PDF Files (*.pdf)",
+        )
+        if not file_path:
+            return
+        if not Path(file_path).suffix:
+            file_path += ".pdf"
 
         visibility = [(item, item.isVisible()) for item in scene.items()]
         grid_item = getattr(getattr(self, "workspace_view", None), "_grid_item", None)
@@ -74,33 +86,57 @@ class PdfExportMixin:
         for item in scene.items():
             if item is not grid_item:
                 item.setVisible(True)
+        label_states = [
+            (item, item.show_name_label, item._labels_as_paths)
+            for item in scene.items()
+            if isinstance(item, OneLineSymbolItem)
+        ]
+        for item, _, _ in label_states:
+            item.show_name_label = False
+            item._labels_as_paths = True
+            item.refresh_label_placement()
 
+        temporary = None
         try:
-            scale = min(640 / rect.width(), 480 / rect.height())
-            width = max(1, int(round(rect.width() * scale)))
-            height = max(1, int(round(rect.height() * scale)))
-            image = QImage(width, height, QImage.Format.Format_ARGB32)
-            image.fill(Qt.GlobalColor.white)
-            painter = QPainter(image)
+            with tempfile.NamedTemporaryFile(
+                dir=Path(file_path).parent, suffix=".pdf", delete=False
+            ) as stream:
+                temporary = stream.name
+
+            printer = QPrinter(QPrinter.PrinterMode.HighResolution)
+            printer.setOutputFormat(QPrinter.OutputFormat.PdfFormat)
+            printer.setOutputFileName(temporary)
+            printer.setPageOrientation(QPageLayout.Orientation.Landscape)
+
+            painter = QPainter(printer)
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
             painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-            scene.render(painter, QRectF(0, 0, width, height), rect)
+            page_rect = printer.pageRect(QPrinter.Unit.DevicePixel)
+            margin = int(min(page_rect.width(), page_rect.height()) * 0.035)
+            target = page_rect.adjusted(margin, margin, -margin, -margin)
+            scene.render(painter, QRectF(target), rect)
             painter.end()
 
-            buffer = QBuffer()
-            buffer.open(QIODevice.OpenModeFlag.WriteOnly)
-            if not image.save(buffer, "PNG"):
-                return ""
-            encoded = base64.b64encode(bytes(buffer.data())).decode("ascii")
+            if printer.printerState() == QPrinter.PrinterState.Error or Path(temporary).stat().st_size == 0:
+                raise OSError(messages.SUBSTATION_GUI4_THE_PDF_FILE_WAS_NOT_CREATED_OR_IS_EMPTY)
+            os.replace(temporary, file_path)
+        except OSError as error:
+            QMessageBox.critical(
+                self, messages.SUBSTATION_GUI4_SAVE_FAILED, messages.SUBSTATION_GUI4_COULD_NOT_CREATE_THE_PDF.format(error)
+            )
+            return
         finally:
+            for item, show_name_label, labels_as_paths in label_states:
+                item.show_name_label = show_name_label
+                item._labels_as_paths = labels_as_paths
+                item.refresh_label_placement()
             for item, was_visible in visibility:
                 item.setVisible(was_visible)
+            if temporary and Path(temporary).exists():
+                Path(temporary).unlink()
 
-        return (
-            "<h2>Annotated One-Line</h2>"
-            "<p><i>Protection-zone annotations at evaluation time</i></p>"
-            f'<p><img src="data:image/png;base64,{encoded}" '
-            'style="width: 100%; max-height: 650px; object-fit: contain;" /></p>'
+        self.footer_status_label.setText(
+            f"Annotated One-Line PDF saved: {file_path}"
         )
 
     def _on_save_results_clicked(self):
@@ -172,8 +208,6 @@ class PdfExportMixin:
             "<tr><td colspan='3'>Unavailable until zone assignments and currents are complete.</td></tr>"
         )
         evaluation_html = self._evaluation_output_html(result, report)
-        one_line_html = self._annotated_one_line_html()
-
         html = f"""
         <html>
         <head>
@@ -204,8 +238,6 @@ class PdfExportMixin:
           <p><b>{escape(study_status)}</b></p>
           <p><b>System:</b> {escape(str(result.get('scenario_name', 'N/A')))}
             &nbsp; <b>Voltage:</b> {escape(str(result.get('voltage_V', 'N/A')))} V</p>
-
-          {one_line_html}
 
           <h2>Supply Peaks</h2>
           <table class="summary">

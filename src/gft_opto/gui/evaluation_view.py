@@ -19,6 +19,7 @@ class EvaluationViewMixin:
             self.output_box.append("\nResults are outdated. Run Evaluation again before exporting.")
         self.last_result = self.last_netlist = None
         self.export_results_action.setEnabled(False)
+        self.save_annotated_one_line_pdf_action.setEnabled(False)
 
 
     def _expand_zone_analysis(self):
@@ -125,6 +126,7 @@ class EvaluationViewMixin:
             self.last_netlist = netlist
             self._evaluated_snapshot = self._layout_data()
             self.export_results_action.setEnabled(True)
+            self.save_annotated_one_line_pdf_action.setEnabled(True)
             self.output_box.setPlainText("\n".join(lines))
             self.footer_status_label.setText("Zone evaluation complete" if report["complete"] else messages.SUBSTATION_GUI4_ZONE_EVALUATION_NEEDS_REVIEW_CONFIGURE_PROTECTION_ZONES)
         except Exception as error:

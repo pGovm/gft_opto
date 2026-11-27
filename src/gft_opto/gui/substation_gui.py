@@ -341,6 +341,7 @@ class SubstationGuiMockup(ProjectFilesMixin, EvaluationViewMixin, PdfExportMixin
             ("import_netlist", "Import Netlist JSON", "Import Netlist", None, self.import_netlist_json),
             ("export_results", "Save Calculation PDF", "Export Results", None, self._on_save_results_clicked),
             ("save_netlist_pdf", "Save Netlist PDF", "Netlist PDF", None, self._on_save_netlist_pdf),
+            ("save_annotated_one_line_pdf", "Save Annotated One-Line PDF", "Annotated One-Line PDF", None, self._on_save_annotated_one_line_pdf),
             ("copy", "Copy Selected Components", "Copy", None, self.workspace_view.copy_selected),
             ("paste", "Paste Components", "Paste", None, self.workspace_view.paste_components),
             ("delete", "Delete Selected", "Delete", None, self.workspace_view.delete_selected),
@@ -361,6 +362,7 @@ class SubstationGuiMockup(ProjectFilesMixin, EvaluationViewMixin, PdfExportMixin
             setattr(self, name + "_action", action)
             self.addAction(action)
         self.export_results_action.setEnabled(False)
+        self.save_annotated_one_line_pdf_action.setEnabled(False)
         self.import_netlist_action.setToolTip(
             "Replace the current drawing with a validated netlist JSON file"
         )
