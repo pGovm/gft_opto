@@ -21,12 +21,30 @@ from pathlib import Path
 
 
 class ProjectFilesMixin:
+    @staticmethod
+    def _document_content(data):
+        """View preferences are saved on request, but do not dirty a project."""
+        if data is None:
+            return None
+        return {key: value for key, value in data.items() if key != "settings"}
+
+    @staticmethod
+    def _evaluation_content(data):
+        """Only drawing and study edits can make calculated results outdated."""
+        return {key: value for key, value in data.items()
+                if key not in {"settings", "pdf", "pdf_bounds", "scene_rect", "library"}}
+
     def _layout_data(self):
         rect = self.workspace_scene.sceneRect()
+        background = self.workspace_view._background_item
+        bounds = background.sceneBoundingRect() if background is not None else None
+        pdf_bounds = ([bounds.x(), bounds.y(), bounds.width(), bounds.height()]
+                      if bounds is not None else getattr(self, "_pdf_bounds", None))
         return {
             "version": 1, "project": self.project_box.text().strip() or "Untitled Project",
             "scene_rect": [rect.x(), rect.y(), rect.width(), rect.height()],
             "pdf": self.pdf_path,
+            "pdf_bounds": pdf_bounds,
             "zones": copy.deepcopy(self.protection_zones),
             "library": {key: meta["definition"] for key, meta in EQUIPMENT_DEFS.items()},
             "settings": {"grid_visible": self.grid_show_cb.isChecked(),
@@ -38,7 +56,7 @@ class ProjectFilesMixin:
 
 
     def _confirm_discard(self):
-        if self._layout_data() == self._saved_snapshot:
+        if self._document_content(self._layout_data()) == self._document_content(self._saved_snapshot):
             return True
         answer = QMessageBox.question(
             self, "Unsaved Layout", "Save changes to this layout?",
@@ -288,8 +306,10 @@ class ProjectFilesMixin:
         self._sync_circuit_visibility()
         old_scene.deleteLater()
         self._workspace_original = pixmap
+        self._pdf_bounds = data.get("pdf_bounds")
         if pixmap is not None:
-            view.set_background_pixmap(pixmap, scene_width=data["scene_rect"][2], scene_height=data["scene_rect"][3], fit_existing_sheet=True)
+            view.set_background_pixmap(pixmap, scene_width=data["scene_rect"][2], scene_height=data["scene_rect"][3],
+                fit_existing_sheet=True, scene_bounds=QRectF(*self._pdf_bounds) if self._pdf_bounds else None)
             staged_scene.setSceneRect(QRectF(*data["scene_rect"]))
             view._sync_grid_to_scene()
         self.pdf_path = data.get("pdf")

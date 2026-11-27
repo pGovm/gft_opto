@@ -675,6 +675,7 @@ class WorkspaceView(QGraphicsView):
         scene_width: float | None = None,
         scene_height: float | None = None,
         fit_existing_sheet: bool = False,
+        scene_bounds: QRectF | None = None,
     ):
         """Place a PDF image at its physical drawing-sheet size."""
         scn = self.scene()
@@ -683,7 +684,11 @@ class WorkspaceView(QGraphicsView):
             self._background_item = None
 
         self._background_item = QGraphicsPixmapItem(pixmap)
-        if fit_existing_sheet and scn is not None and not pixmap.isNull():
+        if scene_bounds is not None and not pixmap.isNull():
+            self._background_item.setTransform(QTransform.fromScale(
+                scene_bounds.width() / pixmap.width(), scene_bounds.height() / pixmap.height()))
+            self._background_item.setPos(scene_bounds.topLeft())
+        elif fit_existing_sheet and scn is not None and not pixmap.isNull():
             sheet = scn.sceneRect()
             factor = min(sheet.width() / pixmap.width(), sheet.height() / pixmap.height())
             self._background_item.setTransform(QTransform.fromScale(factor, factor))

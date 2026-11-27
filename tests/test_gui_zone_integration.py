@@ -612,6 +612,78 @@ class GuiZoneIntegration(unittest.TestCase):
         warning.assert_called_once()
         self.assertNotEqual(dialog.result(), QDialog.DialogCode.Accepted)
 
+    def test_view_controls_preserve_results_overlays_and_saved_state(self):
+        _, _, breaker, *_ = self.example()
+        w = self.window
+        w._on_run_evaluation_clicked()
+        self.assertIsNotNone(w.last_result, w.output_box.toPlainText())
+        result, report = w.last_result, w._zone_report
+        overlays = list(w._zone_overlays)
+        self.assertTrue(overlays)
+        output = w.output_box.toPlainText()
+        w._saved_snapshot = w._layout_data()
+        breaker.setSelected(True)
+        for control in (w.grid_show_cb, w.pdf_show_cb, w.grid_snap_cb,
+                        w.circuit_show_cb, w.zones_show_cb):
+            for _ in range(2):
+                with self.subTest(control=control.text(), checked=control.isChecked()):
+                    control.toggle()
+                    self.app.processEvents()
+                    w._mark_modified()
+                    self.assertIs(w.last_result, result)
+                    self.assertIs(w._zone_report, report)
+                    self.assertEqual(w._zone_overlays, overlays)
+                    shown = w.zones_show_cb.isChecked() and w.circuit_show_cb.isChecked()
+                    self.assertTrue(all(item.isVisible() == shown
+                                        for item in overlays))
+                    self.assertTrue(w.export_results_action.isEnabled())
+                    self.assertEqual(w.output_box.toPlainText(), output)
+                    self.assertNotIn(" *", w.windowTitle())
+                    with patch.object(QMessageBox, "question") as prompt:
+                        self.assertTrue(w._confirm_discard())
+                    prompt.assert_not_called()
+        w.grid_opacity_slider.setValue(60)
+        self.assertIs(w.last_result, result)
+        with patch.object(QMessageBox, "question") as prompt:
+            self.assertTrue(w._confirm_discard())
+        prompt.assert_not_called()
+
+    def test_export_after_view_changes_keeps_the_evaluated_study(self):
+        self.example()
+        w = self.window
+        w._on_run_evaluation_clicked()
+        result = w.last_result
+        self.assertIsNotNone(result)
+        for control in (w.grid_show_cb, w.pdf_show_cb, w.circuit_show_cb, w.grid_snap_cb):
+            control.toggle()
+        w.grid_opacity_slider.setValue(60)
+        with patch.object(QMessageBox, "information") as prompt, patch.object(w, "_save_html_as_pdf") as save:
+            w._on_save_results_clicked()
+        prompt.assert_not_called()
+        save.assert_called_once()
+        self.assertIn("Calculation Results", save.call_args.args[2])
+        self.assertIs(w.last_result, result)
+
+    def test_hidden_circuit_keeps_new_overlays_hidden_and_respects_show_zones(self):
+        self.example()
+        w = self.window
+        w.circuit_show_cb.setChecked(False)
+        w._on_run_evaluation_clicked()
+        self.assertIsNotNone(w.last_result, w.output_box.toPlainText())
+        self.assertTrue(w._zone_overlays)
+        self.assertTrue(all(not overlay.isVisible() for overlay in w._zone_overlays))
+        result = w.last_result
+        w.zones_show_cb.setChecked(False)
+        w.zones_show_cb.setChecked(True)
+        self.assertTrue(all(not overlay.isVisible() for overlay in w._zone_overlays))
+        w.circuit_show_cb.setChecked(True)
+        self.assertTrue(all(overlay.isVisible() for overlay in w._zone_overlays))
+        w.zones_show_cb.setChecked(False)
+        w.circuit_show_cb.setChecked(False)
+        w.circuit_show_cb.setChecked(True)
+        self.assertTrue(all(not overlay.isVisible() for overlay in w._zone_overlays))
+        self.assertIs(w.last_result, result)
+
     def test_current_edit_invalidates_result_but_not_topology(self):
         bus, ct, breaker, ground, wires, zone = self.example()
         topology = self.window._scene_topology()

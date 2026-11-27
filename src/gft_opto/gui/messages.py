@@ -183,3 +183,12 @@ PROTECTION_ZONES_CORE_AND_BOUNDARY_COMPONENTS_MUST_BE_DISJOINT = '{0}: core and 
 ZONE_DIALOG_DELETE_LOADS_TITLE = "Delete Operating Loads"
 ZONE_DIALOG_DELETE_ONE_LOAD = "Delete the operating load in row {0}?"
 ZONE_DIALOG_DELETE_MULTIPLE_LOADS = "Delete the {0} selected operating loads?"
+LAYOUT_IO_INVALID_PDF_BOUNDS = "The saved PDF background must have finite coordinates and positive dimensions."
+MOMENTARY_CALC2_EXPLICIT_OPERATING_ACTIONS_REQUIRED = (
+    "Automatic all-load scenarios are no longer supported. Use evaluate_netlist with "
+    "configured protection zones, or build a Scenario with explicit simultaneous loads."
+)
+MOMENTARY_CALC2_SAVED_ZONES_REQUIRED = (
+    "Saved protection-zone assignments are required. Configure zones and operating "
+    "loads in the application, then save the layout before evaluating it here."
+)

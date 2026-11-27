@@ -22,6 +22,40 @@ LAYOUTS = (
 )
 
 
+def source_build_info(root):
+    """Preserve provenance when rebuilding an extracted source archive without Git."""
+    try:
+        checkout = subprocess.check_output(
+            ["git", "rev-parse", "--show-toplevel"], cwd=root, text=True, stderr=subprocess.DEVNULL).strip()
+        if Path(checkout).resolve() != root.resolve():
+            raise ValueError("Source directory is not the checkout root")
+        return {
+            "commit": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip(),
+            "includes_uncommitted_changes": bool(subprocess.check_output(
+                ["git", "status", "--porcelain"], cwd=root, text=True).strip()),
+        }
+    except (OSError, subprocess.CalledProcessError, ValueError):
+        provenance = root / "SOURCE BUILD INFO.json"
+        if provenance.is_file():
+            data = json.loads(provenance.read_text(encoding="utf-8"))
+            return {key: data.get(key) for key in ("commit", "includes_uncommitted_changes")}
+        return {"commit": None, "includes_uncommitted_changes": None}
+
+
+def write_source_archive(target, root=ROOT):
+    """Include every repository input needed by the portable build script."""
+    paths = [p for p in (root / "src" / "gft_opto").rglob("*")
+             if p.is_file() and "__pycache__" not in p.parts and p.suffix != ".pyc"]
+    paths += [root / name for name in (
+        "pyproject.toml", "uv.lock", "README.md", "LICENSE", "gft-opto-portable.spec")]
+    paths += [root / "install" / name for name in ("build_portable.py", "PORTABLE_README.txt")]
+    paths += [root / "tests" / "layouts" / f"{stem}.json" for stem in LAYOUTS]
+    with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as archive:
+        for path in sorted(paths):
+            archive.write(path, path.relative_to(root))
+        archive.writestr("SOURCE BUILD INFO.json", json.dumps(source_build_info(root), indent=2))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--skip-build", action="store_true", help="Package an already built folder")
@@ -50,6 +84,7 @@ def main():
             raise ValueError(f"{stem} references an external PDF; make its background portable first.")
         shutil.copy2(source, layouts / source.name)
     shutil.copy2(ROOT / "install" / "PORTABLE_README.txt", bundle / "START HERE.txt")
+    shutil.copy2(ROOT / "LICENSE", bundle / "LICENSE")
     packages = ("PySide6", "PySide6_Essentials", "PySide6_Addons", "shiboken6", "PyMuPDF")
     notices = []
     for name in packages:
@@ -66,19 +101,11 @@ def main():
                 if source.is_file():
                     shutil.copy2(source, target / source.name)
     (bundle / "Third-Party Notices" / "OVERVIEW.txt").write_text("\n".join(notices), encoding="utf-8")
-    with zipfile.ZipFile(bundle / "Application Source.zip", "w", zipfile.ZIP_DEFLATED) as archive:
-        paths = [p for p in (ROOT / "src" / "gft_opto").rglob("*")
-                 if p.is_file() and "__pycache__" not in p.parts and p.suffix != ".pyc"]
-        paths += [ROOT / name for name in ("pyproject.toml", "uv.lock", "README.md", "gft-opto-portable.spec")]
-        paths += [ROOT / "install" / name for name in ("build_portable.py", "PORTABLE_README.txt")]
-        for path in paths:
-            archive.write(path, path.relative_to(ROOT))
+    write_source_archive(bundle / "Application Source.zip")
     info = {
         "built_utc": datetime.now(timezone.utc).isoformat(),
         "python": platform.python_version(), "architecture": platform.machine(),
-        "commit": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
-        "includes_uncommitted_changes": bool(subprocess.check_output(
-            ["git", "status", "--porcelain", "--untracked-files=no"], cwd=ROOT, text=True).strip()),
+        **source_build_info(ROOT),
         "packages": {name: distribution(name).version for name in packages},
         "layouts": len(LAYOUTS), "signed": False,
     }

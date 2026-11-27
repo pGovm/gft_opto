@@ -56,7 +56,13 @@ def run_fake_evaluation(system_name: str = "Test Bay") -> tuple[dict, dict]:
     """
     scene = build_fake_scene()
     netlist = netlist_from_scene(scene, system_name=system_name)
-    result = evaluate_scene(scene, system_name=system_name)
+    zones = [{"id": "switching", "name": "Switch operation", "kind": "Manual",
+              "seed": "custom_mos_relay_1", "boundary_cts": [], "confirmed": False,
+              "actions": [
+                  {"component": "custom_mos_relay_1", "load": key, "stage": stage,
+                   "operation": "device", "supply": "DC 1"}
+                  for key, stage in (("motor_inrush_a", "Motor inrush"), ("motor_run_a", "Motor run"))]}]
+    result = evaluate_scene(scene, system_name=system_name, zones=zones)
     return netlist, result
 
 
@@ -64,6 +70,7 @@ if __name__ == "__main__":
     netlist, result = run_fake_evaluation()
     print(netlist)
     print()
-    print("Peak A:", result["peak_current_A"])
-    for ld in result["loads"]:
-        print(" ", ld["name"], ld["total_amps"])
+    print("Complete:", result["complete"])
+    for zone in result["zones"]:
+        for stage in zone["scenarios"]:
+            print(zone["name"], stage["stage"], stage["supplies"])

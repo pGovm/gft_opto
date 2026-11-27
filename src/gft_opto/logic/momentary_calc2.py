@@ -5,10 +5,9 @@ from gft_opto.gui import messages
 # ============================================================
 # Momentary DC Battery Load Calculator
 # Substation worst-case scenario analysis (up to 12 scenarios)
-# Scenarios built two ways:
-#   - Manually, with Scenario.add_load(...) 
-#   - From a netlist dict/JSON exported by the one-line GUI, via
-#      scenario_from_netlist() / calculator_from_netlist_file()
+# Explicit simultaneous loads use Scenario.add_load(...).
+# Configured netlists and layouts use evaluate_netlist(), which delegates to
+# the GUI's protection-study engine rather than combining unrelated events.
 # ============================================================
 
 import json
@@ -221,60 +220,58 @@ NETLIST_PROPERTY_LOAD_MAP = {
 
 
 def loads_from_component(component: dict) -> list:
-    """
-    Turn one netlist component's current-carrying properties into
-    momentary Loads. Each nonzero coil/motor current becomes its own
-    Load, since (worst case) they can all be commanded simultaneously.
-    """
-    props = component.get("properties", {}) or {}
-    label = component.get("label") or component.get("id") or component.get("type") or "Component"
-
-    loads = []
-    for prop_key, load_suffix in NETLIST_PROPERTY_LOAD_MAP.items():
-        if prop_key not in props:
-            continue
-        try:
-            amps = float(props[prop_key])
-        except (TypeError, ValueError):
-            continue
-        if amps == 0:
-            continue
-        loads.append(Load(
-            name=f"{label} — {load_suffix}",
-            current_A=amps,
-            quantity=1,
-            note=f"from netlist component '{component.get('id', label)}'",
-        ))
-    return loads
+    """Retired: a list of device fields does not define simultaneous actions."""
+    raise ValueError(messages.MOMENTARY_CALC2_EXPLICIT_OPERATING_ACTIONS_REQUIRED)
 
 
 def scenario_from_netlist(netlist: dict, name: str | None = None, voltage: float | None = None) -> Scenario:
-    """
-    Build a single worst-case Scenario directly from a GUI-exported
-    netlist dict (every listed current firing at once).
-    """
-    scenario_name  = name or netlist.get("system_name") or "Netlist Scenario"
-    scenario_volts = voltage if voltage is not None else netlist.get("voltage_V", 125.0)
-
-    scenario = Scenario(scenario_name, scenario_volts)
-    for component in netlist.get("components", []):
-        for load in loads_from_component(component):
-            scenario.add_load(load)
-    return scenario
+    """Retired; use evaluate_netlist with configured zones and stages."""
+    raise ValueError(messages.MOMENTARY_CALC2_EXPLICIT_OPERATING_ACTIONS_REQUIRED)
 
 
 def calculator_from_netlist(netlist: dict, system_name: str | None = None) -> MomentaryLoadCalculator:
-    """Wrap a netlist dict as a one-scenario MomentaryLoadCalculator."""
-    calc = MomentaryLoadCalculator(system_name or netlist.get("system_name", "Netlist Study"))
-    calc.add_scenario(scenario_from_netlist(netlist))
-    return calc
+    """Retired; a protection study cannot be represented by one all-load event."""
+    raise ValueError(messages.MOMENTARY_CALC2_EXPLICIT_OPERATING_ACTIONS_REQUIRED)
 
 
 def calculator_from_netlist_file(path: str, system_name: str | None = None) -> MomentaryLoadCalculator:
-    """Load a netlist JSON file from disk and wrap it as a calculator run."""
-    with open(path) as f:
-        netlist = json.load(f)
-    return calculator_from_netlist(netlist, system_name=system_name)
+    """Retired; use run_from_netlist_file for configured protection studies."""
+    raise ValueError(messages.MOMENTARY_CALC2_EXPLICIT_OPERATING_ACTIONS_REQUIRED)
+
+
+def evaluate_netlist(netlist: dict, zones: list[dict] | None = None) -> dict:
+    """Evaluate saved layouts or netlists with the same engine as the GUI.
+
+    Saved zones are required. No load fields are automatically assigned to events.
+    Draft studies retain provisional stage totals and withhold final supply peaks.
+    """
+    # Lazy import: protection_study uses the explicit Load/Scenario primitives.
+    import copy
+    from gft_opto.logic.protection_study import evaluate_zones
+
+    if not isinstance(netlist, dict):
+        raise ValueError(messages.PROTECTION_STUDY_NETLIST_MUST_BE_AN_OBJECT)
+    data = copy.deepcopy(netlist)
+    if zones is None:
+        zones = data.get("zones")
+    if zones is None:
+        raise ValueError(messages.MOMENTARY_CALC2_SAVED_ZONES_REQUIRED)
+    components = data.get("components")
+    if isinstance(components, list):
+        for component in components:
+            if isinstance(component, dict):
+                component.setdefault("type", component.get("symbol", "custom"))
+                component.setdefault("label", component.get("display_id") or component.get("name") or component.get("id"))
+    connections = data.get("connections")
+    if isinstance(connections, list):
+        for index, connection in enumerate(connections):
+            if isinstance(connection, dict) and ("from" in connection or "to" in connection):
+                a, b = connection.get("from"), connection.get("to")
+                if not isinstance(a, dict) or not isinstance(b, dict):
+                    raise ValueError(messages.PROTECTION_STUDY_EACH_CONNECTION_NEEDS_TWO_COMPONENT_IDS_AND_TWO_TERMINALS)
+                connections[index] = dict(from_id=a.get("component"), from_port=a.get("port"),
+                                          to_id=b.get("component"), to_port=b.get("port"))
+    return evaluate_zones(data, zones)
 
 
 def netlist_from_scene(scene, system_name: str = "Netlist Study", voltage_V: float = 125.0) -> dict:
@@ -340,36 +337,40 @@ def netlist_from_scene(scene, system_name: str = "Netlist Study", voltage_V: flo
     }
 
 
-def evaluate_scene(scene, system_name: str = "Netlist Study", voltage_V: float = 125.0) -> dict:
-    """
-    Convenience one-shot: scene -> netlist -> worst-case Scenario -> result.
-    Returns the same result dict as Scenario.calculate().
-
-    Example (call this from anywhere that has a reference to the GUI window,
-    e.g. wired to the existing "Run Evaluation" button, or from a console):
-
-        from momentary_calc import evaluate_scene
-        result = evaluate_scene(window.workspace_scene, system_name="Bay 3")
-        print(f"Peak current: {result['peak_current_A']} A")
-    """
+def evaluate_scene(scene, system_name: str = "Netlist Study", voltage_V: float = 125.0,
+                   zones: list[dict] | None = None) -> dict:
+    """Evaluate explicit scene zone assignments; return a protection-study report."""
     netlist = netlist_from_scene(scene, system_name=system_name, voltage_V=voltage_V)
-    scenario = scenario_from_netlist(netlist, name=system_name, voltage=voltage_V)
-    return scenario.calculate()
-
+    return evaluate_netlist(netlist, zones=zones)
 
 
 def run_from_netlist_file(path):
-    calc = calculator_from_netlist_file(path)
-    results = calc.run_all()
-    calc.print_summary(results)
-    calc.save_json(results, "momentary_results.json")
-    calc.save_csv(results,  "momentary_results.csv")
-    print()
+    """Export per-zone/stage/supply calculations without an all-load aggregate."""
+    from pathlib import Path
+    with Path(path).open(encoding="utf-8") as stream:
+        report = evaluate_netlist(json.load(stream))
+    Path("momentary_results.json").write_text(
+        json.dumps(report, indent=2, ensure_ascii=False, allow_nan=False), encoding="utf-8")
+    with Path("momentary_results.csv").open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.writer(stream)
+        writer.writerow(["zone", "stage", "supply", "current_A", "zone_complete", "study_complete"])
+        for zone in report["zones"]:
+            for scenario in zone["scenarios"]:
+                for supply, amps in scenario["supplies"].items():
+                    writer.writerow([zone["name"], scenario["stage"], supply, amps,
+                                     zone["complete"], report["complete"]])
+    print("COMPLETE" if report["complete"] else "INCOMPLETE - provisional stage totals only")
+    for supply, peak in report["supply_peaks"].items():
+        print(f"{supply}: {peak['peak_current_A']:g} A - {peak['zone']} / {peak['stage']}")
+    print("Saved momentary_results.json and momentary_results.csv")
+    return report
 
 
 if __name__ == "__main__":
-
-    if len(sys.argv) > 1:
-        run_from_netlist_file(sys.argv[1])
+    if len(sys.argv) == 2:
+        try:
+            run_from_netlist_file(sys.argv[1])
+        except (OSError, ValueError, TypeError) as error:
+            raise SystemExit(str(error))
     else:
-        raise SystemExit("Usage: python -m gft_opto.logic.momentary_calc2 <netlist.json>")
+        raise SystemExit("Usage: python -m gft_opto.logic.momentary_calc2 <configured-layout-or-netlist.json>")
