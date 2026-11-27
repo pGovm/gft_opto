@@ -34,23 +34,31 @@ class _PortUnion:
 
     def __init__(self):
         self._parent: dict[tuple[int, str], tuple[int, str]] = {}
+        self._rank: dict[tuple[int, str], int] = {}
 
     def add(self, key: tuple[int, str]):
         self._parent.setdefault(key, key)
+        self._rank.setdefault(key, 0)
 
     def find(self, key: tuple[int, str]) -> tuple[int, str]:
-        parent = self._parent.get(key, key)
-        if parent != key:
-            parent = self.find(parent)
-            self._parent[key] = parent
-        else:
-            self._parent.setdefault(key, key)
-        return parent
+        self.add(key)
+        root = key
+        while self._parent[root] != root:
+            root = self._parent[root]
+        while key != root:
+            parent = self._parent[key]
+            self._parent[key] = root
+            key = parent
+        return root
 
     def union(self, a: tuple[int, str], b: tuple[int, str]):
         ra, rb = self.find(a), self.find(b)
         if ra != rb:
-            self._parent[ra] = rb
+            if self._rank[ra] < self._rank[rb]:
+                ra, rb = rb, ra
+            self._parent[rb] = ra
+            if self._rank[ra] == self._rank[rb]:
+                self._rank[ra] += 1
 
 
 def _symbol_caption(item: OneLineSymbolItem) -> str:

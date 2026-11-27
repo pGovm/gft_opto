@@ -26,10 +26,12 @@ No online installer, package manager, or PowerShell launch script is used.
 BUILD INFO.json records the build and bundled library versions. The adjacent
 ZIP.sha256 file provides a checksum for the original distribution archive.
 Third-Party Notices contains the installed libraries' metadata and supplied
-license notices. Application Source.zip contains the current application source.
+license notices. Application Source.zip contains the current application source,
+required one-line layouts, license, and build inputs. It can be rebuilt after
+extraction without Git; saved source provenance is used for build information.
 
 BUILDING AN UPDATED PACKAGE (DEVELOPER MACHINE ONLY)
-From the repository, install packaging dependencies:
+From the repository or extracted Application Source.zip, install dependencies:
   uv sync --locked --group package
 Then build and package:
   .venv\Scripts\python.exe install\build_portable.py

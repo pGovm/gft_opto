@@ -513,6 +513,44 @@ class GuiWorkflows(unittest.TestCase):
             self.assertFalse(w._confirm_discard())
         prompt.assert_called_once()
 
+    def test_pdf_placement_survives_sheet_expansion_and_reopening(self):
+        from PySide6.QtCore import QRectF
+        from gft_opto.gui.commands import PasteComponentsCommand
+        w = self.window
+        pdf = Path(self.temp.name) / "background.pdf"
+        with pymupdf.open() as doc:
+            doc.new_page(width=100, height=100)
+            doc.save(pdf)
+        w.pdf_path = str(pdf)
+        w.workspace_scene.setSceneRect(QRectF(-50, -70, 100, 100))
+        w.workspace_view.set_background_pixmap(w._read_pdf_pixmap(pdf), fit_existing_sheet=True)
+        before = w.workspace_view._background_item.sceneBoundingRect()
+        item = CircuitBreakerItem()
+        item.setPos(300, 300)
+        w.undo_stack.push(PasteComponentsCommand(w.workspace_scene, [item], [],
+                                               w.workspace_view._sync_grid_to_scene))
+        self.assertGreater(w.workspace_scene.sceneRect().width(), before.width())
+        path = Path(self.temp.name) / "background-layout.json"
+        self.assertTrue(w.save_layout(path))
+        self.assertEqual(json.loads(path.read_text())["pdf_bounds"], [-50, -70, 100, 100])
+        self.assertTrue(w.open_layout(path))
+        self.assertEqual(w.workspace_view._background_item.sceneBoundingRect(), before)
+        self.assertEqual(next(c for c in scene_data(w.workspace_scene)["components"]
+                              if c["id"] == item.instance_id)["position"], [300, 300])
+
+    def test_bad_pdf_bounds_do_not_replace_the_current_drawing(self):
+        w = self.window
+        self.add_breaker()
+        before = w._layout_data()
+        path = Path(self.temp.name) / "bad-background.json"
+        for bounds in ([0, 0, -1, 10], [0, 0, 10, 0], [0, 0], "bad"):
+            data = dict(before, pdf_bounds=bounds)
+            path.write_text(json.dumps(data), encoding="utf-8")
+            with patch.object(QMessageBox, "critical") as error:
+                self.assertFalse(w.open_layout(path))
+            error.assert_called_once()
+            self.assertEqual(w._layout_data(), before)
+
     def test_unsaved_cancel_save_and_new(self):
         w = self.window
         self.add_breaker()

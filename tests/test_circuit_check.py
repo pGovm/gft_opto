@@ -129,6 +129,18 @@ class CircuitCheck(unittest.TestCase):
         self.wire(ct, "right", ground, "node")
         self.assertEqual(check_circuit(self.scene)["shorts"], [])
 
+    def test_long_junction_chain_detects_grounded_bus_without_recursion(self):
+        bus = self.add(BusItem(), "B1")
+        ground = self.add(GroundItem(), "G1")
+        items = [bus] + [self.add(JunctionItem(), f"J{i}") for i in range(1200)] + [ground]
+        for index, (a, b) in enumerate(zip(items, items[1:])):
+            wire = self.wire(a, "right" if index == 0 else "node", b, "node")
+            # Process from the bus end first, the old validator's worst order.
+            wire.setZValue(-index - 1)
+        result = check_circuit(self.scene)
+        self.assertEqual(result["open_ends"], [])
+        self.assertEqual(result["shorts"], [messages.CIRCUIT_CHECK_IS_TIED_DIRECTLY_TO.format("B1", "G1")])
+
     def test_wire_to_equipment_outside_the_drawing_is_ignored(self):
         breaker = self.add(CircuitBreakerItem(), "CB1")
         bus = self.add(BusItem(), "B1")

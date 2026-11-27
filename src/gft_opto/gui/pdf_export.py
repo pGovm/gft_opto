@@ -60,7 +60,8 @@ def property_value(key, value):
 
 class PdfExportMixin:
     def _on_save_results_clicked(self):
-        if self.last_result is not None and self._layout_data() != self._evaluated_snapshot:
+        if (self.last_result is not None
+                and self._evaluation_content(self._layout_data()) != self._evaluation_content(self._evaluated_snapshot)):
             self._invalidate_results()
         if self.last_result is None or self.last_netlist is None:
             QMessageBox.information(

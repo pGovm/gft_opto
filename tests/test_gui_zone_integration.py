@@ -648,6 +648,22 @@ class GuiZoneIntegration(unittest.TestCase):
             self.assertTrue(w._confirm_discard())
         prompt.assert_not_called()
 
+    def test_export_after_view_changes_keeps_the_evaluated_study(self):
+        self.example()
+        w = self.window
+        w._on_run_evaluation_clicked()
+        result = w.last_result
+        self.assertIsNotNone(result)
+        for control in (w.grid_show_cb, w.pdf_show_cb, w.circuit_show_cb, w.grid_snap_cb):
+            control.toggle()
+        w.grid_opacity_slider.setValue(60)
+        with patch.object(QMessageBox, "information") as prompt, patch.object(w, "_save_html_as_pdf") as save:
+            w._on_save_results_clicked()
+        prompt.assert_not_called()
+        save.assert_called_once()
+        self.assertIn("Calculation Results", save.call_args.args[2])
+        self.assertIs(w.last_result, result)
+
     def test_hidden_circuit_keeps_new_overlays_hidden_and_respects_show_zones(self):
         self.example()
         w = self.window

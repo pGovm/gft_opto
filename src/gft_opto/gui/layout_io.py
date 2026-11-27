@@ -124,6 +124,12 @@ def build_scene(data):
             raise ValueError(messages.LAYOUT_IO_INVALID_SETTING.format(key))
     if data.get("pdf") is not None and not isinstance(data["pdf"], str):
         raise ValueError(messages.LAYOUT_IO_INVALID_PDF_REFERENCE)
+    bounds = data.get("pdf_bounds")
+    if bounds is not None:
+        if (not isinstance(bounds, (list, tuple)) or len(bounds) != 4
+                or any(not math.isfinite(_number(value)) for value in bounds)
+                or bounds[2] <= 0 or bounds[3] <= 0):
+            raise ValueError(messages.LAYOUT_IO_INVALID_PDF_BOUNDS)
     library = data["library"]
     if not isinstance(library, dict):
         raise ValueError(messages.LAYOUT_IO_INVALID_EQUIPMENT_LIBRARY)

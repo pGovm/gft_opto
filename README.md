@@ -245,9 +245,31 @@ zones**, then Save.
 - Use the zone selector above the analysis output to show one zone or all.
   Coloured outlines mark each zone; dashed outlines need review.
 - **Validate** checks the drawing's connectivity separately.
-- Any change to the layout clears the results; run the evaluation again before
-  exporting.
+- Drawing and study edits clear the results; run the evaluation again before
+  exporting. Grid, opacity, snapping, and layer visibility changes keep results
+  valid and do not trigger an unsaved-changes prompt. Hiding the circuit also
+  hides its zone overlays, while preserving the Show Zones preference.
 - Zone settings are saved in the layout. Older layouts without zones still open.
+- PDF position and size are saved independently of the drawing bounds, keeping
+  the background aligned when the sheet expands and the layout is reopened.
+
+### Command-line evaluation
+
+Evaluate a saved layout with configured zones using the same calculation engine
+as the GUI:
+
+```powershell
+uv run python -m gft_opto.logic.momentary_calc2 path/to/layout.json
+```
+
+This writes `momentary_results.json` and `momentary_results.csv` in the current
+directory. CSV rows are separated by zone, stage, and DC supply. Draft studies
+remain provisional and do not produce final supply peaks. A netlist without saved
+zone assignments must first be configured in the GUI; the old helpers that added
+every device-current field together now fail with an explanatory error. For
+Python integrations, use `evaluate_netlist(netlist, zones)` or
+`evaluate_scene(scene, zones=zones)` for a protection-study report. `Load` and
+`Scenario` remain available for explicitly specified simultaneous loads.
 
 ### Provided one-line layouts
 
