@@ -262,14 +262,18 @@ as the GUI:
 uv run python -m gft_opto.logic.momentary_calc2 path/to/layout.json
 ```
 
-This writes `momentary_results.json` and `momentary_results.csv` in the current
-directory. CSV rows are separated by zone, stage, and DC supply. Draft studies
-remain provisional and do not produce final supply peaks. A netlist without saved
-zone assignments must first be configured in the GUI; the old helpers that added
-every device-current field together now fail with an explanatory error. For
-Python integrations, use `evaluate_netlist(netlist, zones)` or
-`evaluate_scene(scene, zones=zones)` for a protection-study report. `Load` and
-`Scenario` remain available for explicitly specified simultaneous loads.
+This writes `layout_results.json` and `layout_results.csv` next to the layout
+(named after it), and prints the path of each file. Use `--output-dir FOLDER`
+to write them somewhere else. CSV rows are separated by zone, stage, and DC
+supply. Draft studies remain provisional and do not produce final supply peaks.
+
+A netlist file does not store zones. To evaluate one, take the zones from a
+saved layout: `... momentary_calc2 netlist.json --zones layout.json`. Run with
+`--help` for all options. The old helpers that added every device-current field
+together now fail with an explanatory error. For Python integrations, use
+`evaluate_netlist(netlist, zones)` or `evaluate_scene(scene, zones=zones)` for a
+protection-study report. `Load` and `Scenario` remain available for explicitly
+specified simultaneous loads.
 
 ### Provided one-line layouts
 
