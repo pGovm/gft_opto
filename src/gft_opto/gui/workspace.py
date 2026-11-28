@@ -62,6 +62,7 @@ from gft_opto.gui.symbols import (
     next_instance_id,
 )
 from gft_opto.gui.layout_io import scene_data, build_scene, reserve_ids
+from gft_opto.logic.protection_study import id_key
 
 COMPONENT_CLIPBOARD_MIME = "application/x-gft-opto-components"
 
@@ -768,7 +769,8 @@ class WorkspaceView(QGraphicsView):
             return False
         count = getattr(self, "_paste_count", 0) + 1 if getattr(self, "_last_paste_payload", None) == raw else 1
         reserve_ids(self.scene())
-        used_labels = {item.visible_id() for item in self.scene().items() if isinstance(item, OneLineSymbolItem)}
+        # Compare IDs the way the study does: case and spacing do not make them distinct.
+        used_labels = {id_key(item.visible_id()) for item in self.scene().items() if isinstance(item, OneLineSymbolItem)}
         offset = QPointF(GRID_SPACING * 2 * count, GRID_SPACING * 2 * count)
         for wire in wires:
             wire.detach()
@@ -779,18 +781,18 @@ class WorkspaceView(QGraphicsView):
             for item in symbols:
                 staged.removeItem(item)
                 item.instance_id = next_instance_id(item.equip_type)
-                while not item.display_id and item.instance_id in used_labels:
+                while not item.display_id and id_key(item.instance_id) in used_labels:
                     item.instance_id = next_instance_id(item.equip_type)
                 if item.display_id:
                     match = re.fullmatch(r"(.+) \((\d+)\)", item.display_id)
                     base = match.group(1) if match else item.display_id
                     suffix = max(2, int(match.group(2)) + 1) if match else 2
                     label = f"{base} ({suffix})"
-                    while label in used_labels:
+                    while id_key(label) in used_labels:
                         suffix += 1
                         label = f"{base} ({suffix})"
                     item.display_id = label
-                used_labels.add(item.visible_id())
+                used_labels.add(id_key(item.visible_id()))
                 item.setPos(item.pos() + offset)
         finally:
             OneLineSymbolItem.snap_to_grid_enabled = was_snap

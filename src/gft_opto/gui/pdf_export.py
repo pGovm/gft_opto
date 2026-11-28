@@ -6,7 +6,9 @@ from PySide6.QtGui import QPageLayout, QPainter, QTextDocument
 from PySide6.QtPrintSupport import QPrinter
 from PySide6.QtWidgets import QFileDialog, QMessageBox
 from gft_opto.gui import messages
-from gft_opto.gui.symbols import BUILTIN_SYMBOLS, ConnectionItem, OneLineSymbolItem
+from gft_opto.gui.symbols import (
+    BUILTIN_SYMBOLS, ConnectionItem, OneLineSymbolItem, scene_wire_index,
+)
 from html import escape
 from pathlib import Path
 
@@ -109,9 +111,10 @@ class PdfExportMixin:
         ]
         # Keep equipment IDs on the diagram, drawn as outlines so the PDF embeds
         # no fonts. Symbols that never show a name (ground, junction) are unchanged.
+        wire_index = scene_wire_index(scene)
         for item, _, _ in label_states:
             item._labels_as_paths = True
-            item.refresh_label_placement()
+            item.refresh_label_placement(wire_index)
 
         temporary = None
         try:
@@ -154,7 +157,7 @@ class PdfExportMixin:
             for item, show_name_label, labels_as_paths in label_states:
                 item.show_name_label = show_name_label
                 item._labels_as_paths = labels_as_paths
-                item.refresh_label_placement()
+                item.refresh_label_placement(wire_index)
             for item, was_visible in visibility:
                 item.setVisible(was_visible)
             if temporary and Path(temporary).exists():

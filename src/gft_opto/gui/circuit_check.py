@@ -1,6 +1,6 @@
-# Checks the drawn diagram for unconnected terminals and certain wiring shorts.
+# Checks the drawn diagram for unconnected terminals, certain wiring shorts and repeated IDs.
 
-"""Open-end and short-circuit check for a drawn one-line."""
+"""Open-end, short-circuit and repeated-ID check for a drawn one-line."""
 
 from gft_opto.gui import messages
 
@@ -15,6 +15,7 @@ from gft_opto.gui.symbols import (
     JunctionItem,
     OneLineSymbolItem,
 )
+from gft_opto.logic.protection_study import duplicate_ids, id_key, kind
 
 
 # Port pairs that must not land on the same electrical node.
@@ -85,6 +86,7 @@ def check_circuit(scene: QGraphicsScene) -> dict:
             "ok": False,
             "open_ends": [messages.CIRCUIT_CHECK_NO_COMPONENTS_ON_THE_CANVAS],
             "shorts": [],
+            "duplicate_ids": [],
         }
 
     nodes = _PortUnion()
@@ -158,8 +160,20 @@ def check_circuit(scene: QGraphicsScene) -> dict:
                     messages.CIRCUIT_CHECK_IS_TIED_DIRECTLY_TO.format(_symbol_caption(bus), _symbol_caption(ground))
                 )
 
+    repeated = duplicate_ids((symbol.visible_id(), symbol_kind(symbol)) for symbol in symbols)
+    duplicates = [messages.CIRCUIT_CHECK_DUPLICATE_ID.format(shown, count)
+                  for shown, count in sorted(repeated.items(), key=lambda pair: id_key(pair[0]))]
+
     return {
-        "ok": not open_ends and not shorts,
+        "ok": not open_ends and not shorts and not duplicates,
         "open_ends": open_ends,
         "shorts": shorts,
+        "duplicate_ids": duplicates,
     }
+
+
+def symbol_kind(symbol: OneLineSymbolItem) -> str:
+    """Study kind of a drawn symbol, as the netlist reports it."""
+    if isinstance(symbol, JunctionItem):
+        return "junction"
+    return kind({"type": symbol.equip_type, "properties": getattr(symbol, "properties", None) or {}})

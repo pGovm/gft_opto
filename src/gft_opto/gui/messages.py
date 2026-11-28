@@ -13,6 +13,7 @@ CIRCUIT_CHECK_BUS_IS_NOT_CONNECTED = '{0}: bus is not connected'
 CIRCUIT_CHECK_IS_NOT_CONNECTED = '{0}: {1} is not connected'
 CIRCUIT_CHECK_AND_ARE_ON_THE_SAME_NODE = '{0}: {1} and {2} are on the same node'
 CIRCUIT_CHECK_IS_TIED_DIRECTLY_TO = '{0} is tied directly to {1}'
+CIRCUIT_CHECK_DUPLICATE_ID = '{0} is shown on {1} components'
 
 # Layout Io
 LAYOUT_IO_LAYOUT_CONTAINS_AN_INVALID_NUMBER = 'Layout contains an invalid number.'
@@ -57,6 +58,12 @@ SUBSTATION_GUI4_LOCATE_MISSING_OR_UNREADABLE_BACKGROUND_PDF_CANCEL_TO_OPEN = 'Lo
 SUBSTATION_GUI4_OPEN_FAILED = 'Open Failed'
 SUBSTATION_GUI4_COULD_NOT_OPEN_THE_LAYOUT = 'Could not open the layout:\n{0}'
 SUBSTATION_GUI4_COULD_NOT_DECODE_PDF_BACKGROUND = 'Could not decode PDF background.'
+PDF_BACKGROUND_NOT_FOUND = 'Could not open {0}. The file was not found or cannot be read.'
+PDF_BACKGROUND_UNREADABLE = '{0} could not be read as a PDF. It may be damaged or not a PDF file.'
+PDF_BACKGROUND_PASSWORD = '{0} is password-protected. Save a copy without a password, then import that copy.'
+PDF_BACKGROUND_NO_PAGES = '{0} has no page to show.'
+PDF_BACKGROUND_RENDER_FAILED = '{0} could not be drawn as a background ({1}).'
+PDF_BACKGROUND_FIRST_PAGE_ONLY = '{0} has {1} pages. Only page 1 is used as the drawing background.'
 SUBSTATION_GUI4_SHORT_CIRCUITS = 'Short circuits:'
 SUBSTATION_GUI4_SHORT_CIRCUITS_NONE = 'Short circuits: none'
 SUBSTATION_GUI4_VALIDATE = 'Validate'
@@ -82,6 +89,8 @@ SUBSTATION_GUI4_PLEASE_ENTER_A_COMPONENT_NAME = 'Please enter a component name.'
 SUBSTATION_GUI4_IMPORT_FAILED = 'Import failed: {0}'
 SUBSTATION_GUI4_IMPORT_FAILED_COULD_NOT_DECODE_RENDERED_PNG = 'Import failed: could not decode rendered PNG'
 SUBSTATION_GUI4_CURRENT_MUST_BE_A_FINITE_NUMBER_GREATER_THAN_OR = 'Current must be a finite number greater than or equal to zero'
+SUBSTATION_GUI4_ID_ALREADY_USED = '{0} is already used by another component. Choose a different ID.'
+SUBSTATION_GUI4_CURRENT_OUTSIDE_RANGE = 'Current must be a number from 0 to {0:,.0f} A. Check the value and its units.'
 SUBSTATION_GUI4_BUS_VOLTAGE_MUST_BE_A_FINITE_POSITIVE_NUMBER_OR = 'Bus voltage must be a finite positive number, or blank'
 
 # Workspace
@@ -107,7 +116,7 @@ BREAKER_SETTINGS_SET_THIS_COIL_S_DC_SUPPLY_IN_THE_SELECTED = "Set this coil's DC
 
 # Momentary Calc2
 MOMENTARY_CALC2_NO_LOADS_ADDED_TO_THIS_SCENARIO = 'No loads added to this scenario!'
-MOMENTARY_CALC2_PEAK_CURRENT_IS_A_THAT_S_OVER_1000_A = "Peak current is {0:.1f} A — that's over 1000 A, please double-check your inputs."
+MOMENTARY_CALC2_PEAK_CURRENT_IS_A_THAT_S_OVER_1000_A = "Peak current is {0} A — that's over 1000 A, please double-check your inputs."
 MOMENTARY_CALC2_HAS_ZERO_OR_NEGATIVE_AMPS_PLEASE_CHECK = "'{0}' has zero or negative amps — please check."
 MOMENTARY_CALC2_YOU_VE_REACHED_THE_MAXIMUM_OF_SCENARIOS_REMOVE_ONE = "You've reached the maximum of {0} scenarios. Remove one before adding another."
 
@@ -162,6 +171,14 @@ PROTECTION_STUDY_OPERATING_EQUIPMENT_IS_MISSING = 'Operating equipment {0!r} is 
 PROTECTION_STUDY_PASSIVE_EQUIPMENT_CANNOT_SUPPLY_AN_OPERATING_COIL_MOTOR_LOAD = '{0}: passive equipment cannot supply an operating coil/motor load.'
 PROTECTION_STUDY_CURRENT_IS_MISSING_OR_NOT_NUMERIC = '{0}: {1} current is missing or not numeric.'
 PROTECTION_STUDY_CURRENT_MUST_BE_FINITE_AND_GREATER_THAN_ZERO = '{0}: {1} current must be finite and greater than zero.'
+PROTECTION_STUDY_DUPLICATE_IDS = (
+    'More than one component shows the same ID: {0}. Give each component its own '
+    'ID so the results can tell them apart.'
+)
+PROTECTION_STUDY_CURRENT_ABOVE_DEVICE_LIMIT = (
+    '{0}: {1} current of {2} A is above the {3:,.0f} A limit for one device. '
+    'Check the value and its units. It is left out of this calculation.'
+)
 PROTECTION_STUDY_STAGE_TOTAL_CURRENT_EXCEEDS_THE_SUPPORTED_NUMERIC_RANGE = 'Stage {0!r}: total current exceeds the supported numeric range.'
 PROTECTION_STUDY_REVIEW_THIS_DEVICE_S_OPERATING_ACTION = "Review this device's operating action."
 PROTECTION_STUDY_DC_VOLTAGE_MUST_BE_A_FINITE_POSITIVE_NUMBER = 'DC voltage must be a finite positive number.'
@@ -183,7 +200,10 @@ PROTECTION_ZONES_CORE_AND_BOUNDARY_COMPONENTS_MUST_BE_DISJOINT = '{0}: core and 
 ZONE_DIALOG_DELETE_LOADS_TITLE = "Delete Operating Loads"
 ZONE_DIALOG_DELETE_ONE_LOAD = "Delete the operating load in row {0}?"
 ZONE_DIALOG_DELETE_MULTIPLE_LOADS = "Delete the {0} selected operating loads?"
-LAYOUT_IO_INVALID_PDF_BOUNDS = "The saved PDF background must have finite coordinates and positive dimensions."
+LAYOUT_IO_INVALID_PDF_BOUNDS = (
+    "The saved PDF background must have positive dimensions and coordinates "
+    "within 1,000,000 drawing units."
+)
 MOMENTARY_CALC2_EXPLICIT_OPERATING_ACTIONS_REQUIRED = (
     "Automatic all-load scenarios are no longer supported. Use evaluate_netlist with "
     "configured protection zones, or build a Scenario with explicit simultaneous loads."
@@ -191,4 +211,12 @@ MOMENTARY_CALC2_EXPLICIT_OPERATING_ACTIONS_REQUIRED = (
 MOMENTARY_CALC2_SAVED_ZONES_REQUIRED = (
     "Saved protection-zone assignments are required. Configure zones and operating "
     "loads in the application, then save the layout before evaluating it here."
+)
+MOMENTARY_CALC2_NO_ZONES_IN_FILE = (
+    "{0} has no saved protection zones. Configure zones and operating loads in the "
+    "application and save the layout, then run this on the saved layout, or pass it "
+    "with --zones when the input is a netlist."
+)
+MOMENTARY_CALC2_ZONES_FILE_INVALID = (
+    "{0} must be a saved layout with protection zones, or a JSON list of zones."
 )

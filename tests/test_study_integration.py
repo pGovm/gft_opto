@@ -278,7 +278,8 @@ class StudyIntegration(unittest.TestCase):
         for component in self.net["components"]:
             if component["id"] in ("cb1", "cb2"):
                 component["properties"]["trip_coil_1_a"] = 1e308
-        report = self.assert_incomplete(self.net, [self.zone], "numeric range")
+        # The per-device limit now stops these values before they are summed.
+        report = self.assert_incomplete(self.net, [self.zone], "limit for one device")
         json.dumps(report, allow_nan=False)
 
     def test_passive_component_cannot_be_an_operating_load(self):

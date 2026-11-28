@@ -2,13 +2,12 @@
 import copy
 import functools
 import json
-import pymupdf
 from gft_opto.logic.protection_study import is_transfer_bus
 
 from PySide6.QtCore import QRectF, Qt
-from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QFileDialog, QListWidgetItem, QMessageBox
 from gft_opto.gui import messages
+from gft_opto.gui.pdf_background import render_first_page
 from gft_opto.gui.layout_io import (
     build_scene, library_from_layout, reserve_ids, scene_data, write_layout,
 )
@@ -17,6 +16,7 @@ from gft_opto.gui.routing import (
 )
 from gft_opto.gui.symbols import BUILTIN_SYMBOLS, EQUIPMENT_DEFS, make_user_equipment
 from gft_opto.logic.netlist_manager import load_netlist_json
+from gft_opto.logic.momentary_calc2 import netlist_instance_ids
 from pathlib import Path
 
 
@@ -30,9 +30,12 @@ class ProjectFilesMixin:
 
     @staticmethod
     def _evaluation_content(data):
-        """Only drawing and study edits can make calculated results outdated."""
+        """Only drawing and study edits can make calculated results outdated.
+
+        The project name is left out: renaming relabels the results instead.
+        """
         return {key: value for key, value in data.items()
-                if key not in {"settings", "pdf", "pdf_bounds", "scene_rect", "library"}}
+                if key not in {"settings", "pdf", "pdf_bounds", "scene_rect", "library", "project"}}
 
     def _layout_data(self):
         rect = self.workspace_scene.sceneRect()
@@ -185,6 +188,9 @@ class ProjectFilesMixin:
 
     def _layout_data_from_netlist(self, netlist):
         project_name = netlist.get("project_name", "Untitled Project")
+        # Exported IDs are "<type>:<instance id>"; restore the instance IDs so
+        # repeated export and import do not keep adding prefixes.
+        renamed = netlist_instance_ids(netlist["components"])
         components = []
         for index, component in enumerate(netlist["components"], start=1):
             component_type = component["type"]
@@ -217,7 +223,7 @@ class ProjectFilesMixin:
                 )
 
             components.append({
-                "id": component["id"],
+                "id": renamed.get(component["id"], component["id"]),
                 "symbol": symbol,
                 "name": name,
                 "display_id": display_id,
@@ -236,9 +242,9 @@ class ProjectFilesMixin:
 
         connections = [
             [
-                connection["from"]["component"],
+                renamed.get(connection["from"]["component"], connection["from"]["component"]),
                 connection["from"]["port"],
-                connection["to"]["component"],
+                renamed.get(connection["to"]["component"], connection["to"]["component"]),
                 connection["to"]["port"],
             ]
             for connection in netlist["connections"]
@@ -265,12 +271,7 @@ class ProjectFilesMixin:
 
     @staticmethod
     def _read_pdf_pixmap(path):
-        with pymupdf.open(path) as document:
-            pix = document.load_page(0).get_pixmap(matrix=pymupdf.Matrix(2, 2), alpha=False)
-            image = QPixmap()
-            if not image.loadFromData(pix.tobytes("png")):
-                raise ValueError(messages.SUBSTATION_GUI4_COULD_NOT_DECODE_PDF_BACKGROUND)
-            return image
+        return render_first_page(path).pixmap
 
 
     def _install_layout(self, data, staged_scene, path, pixmap):

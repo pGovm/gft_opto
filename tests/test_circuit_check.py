@@ -57,7 +57,8 @@ class CircuitCheck(unittest.TestCase):
         breaker = self.add(CircuitBreakerItem(), "CB1")
         self.wire(bus1, "right", breaker, "left")
         self.wire(breaker, "right", bus2, "left")
-        self.assertEqual(check_circuit(self.scene), {"ok": True, "open_ends": [], "shorts": []})
+        self.assertEqual(check_circuit(self.scene),
+                         {"ok": True, "open_ends": [], "shorts": [], "duplicate_ids": []})
 
     def test_breaker_with_both_terminals_on_one_bus_is_a_short(self):
         bus = self.add(BusItem(), "B1")

@@ -20,6 +20,7 @@ from gft_opto.logic.protection_study import (
     configuration_signature, analyze_topology, evaluate_zones, is_transfer_bus,
 )
 from gft_opto.logic.breaker_settings import breaker_settings, resolve_breaker_action, SUPPLY_KEYS
+from gft_opto.logic.momentary_calc2 import MAX_DEVICE_CURRENT_A
 from gft_opto.gui.theme import SCROLLBAR_STYLE
 from gft_opto.gui.operating_loads import OperatingLoadRow
 
@@ -541,7 +542,7 @@ class ZoneDialog(QDialog):
         multiplier.setReadOnly(True)
         other_amps = QDoubleSpinBox()
         other_amps.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
-        other_amps.setRange(0, 1000000)
+        other_amps.setRange(0, MAX_DEVICE_CURRENT_A)
         other_amps.setDecimals(3)
         other_amps.setSuffix(" A")
         other_amps.setValue(action.get("custom_load", {}).get("amps", 0))

@@ -260,7 +260,17 @@ class OneLineSymbolItem(QGraphicsItem):
         """Name placed beside the symbol, shifted when a wire would cross it."""
         if self._label_rect_cache is not None:
             return self._label_rect_cache
-        return self._choose_label_rect()
+        scene = self.scene()
+        if _labels_deferred(scene):
+            # Wires are still moving; the batch places every label when it ends.
+            candidates = self._candidate_label_rects() if self._caption() else []
+            return candidates[0] if candidates else QRectF()
+        rect = self._choose_label_rect()
+        # Keep the choice so later paints and bounding-box queries reuse it. Any
+        # wire change triggers refresh_label_placement, which moves it if needed.
+        if scene is not None:
+            self._label_rect_cache = rect
+        return rect
 
     def _candidate_label_rects(self) -> list[QRectF]:
         """Preferred name positions: above the symbol first, then nearby clear slots."""
@@ -292,26 +302,22 @@ class OneLineSymbolItem(QGraphicsItem):
     def _label_scene_rect(self, base_rect: QRectF) -> QRectF:
         return self.mapRectToScene(self._local_transform().mapRect(base_rect))
 
-    def _label_hits_wire(self, base_rect: QRectF, wires: list) -> bool:
+    def _label_hits_wire(self, base_rect: QRectF, wires) -> bool:
+        """True when a wire passes through or next to this label position."""
         if base_rect.width() <= 0 or base_rect.height() <= 0:
             return False
-        scene_rect = self._label_scene_rect(base_rect).adjusted(-4, -4, 4, 4)
-        for wire in wires:
-            points = wire.route_points()
-            for index in range(len(points) - 1):
-                if _segment_hits_rect(points[index], points[index + 1], scene_rect):
-                    return True
-        return False
+        if not isinstance(wires, _WireSegmentIndex):
+            wires = _WireSegmentIndex(wires)
+        return wires.hits(self._label_scene_rect(base_rect).adjusted(-4, -4, 4, 4))
 
-    def _choose_label_rect(self, wires: list | None = None) -> QRectF:
+    def _choose_label_rect(self, wires=None) -> QRectF:
         caption = self._caption()
         if not caption:
             return QRectF()
         if wires is None:
-            scene = self.scene()
-            wires = [
-                it for it in scene.items() if isinstance(it, ConnectionItem)
-            ] if scene is not None else []
+            wires = scene_wire_index(self.scene())
+        elif not isinstance(wires, _WireSegmentIndex):
+            wires = _WireSegmentIndex(wires)
         candidates = self._candidate_label_rects()
         if not candidates:
             return QRectF()
@@ -320,9 +326,16 @@ class OneLineSymbolItem(QGraphicsItem):
                 return rect
         return candidates[0]
 
-    def refresh_label_placement(self, wires: list | None = None):
-        """Pick a name position that does not cross a wire."""
+    def refresh_label_placement(self, wires=None):
+        """Pick a name position that does not cross a wire.
+
+        ``wires`` is a list of wires or a shared wire index. When omitted, the
+        wires in the item's scene are used.
+        """
         if not self.show_name_label:
+            return
+        if wires is None and _labels_deferred(self.scene()):
+            # The batch refreshes every label when it ends.
             return
         chosen = self._choose_label_rect(wires)
         if _same_label_rect(self._label_rect_cache, chosen):
@@ -334,6 +347,10 @@ class OneLineSymbolItem(QGraphicsItem):
                 QTimer.singleShot(0, self._flush_pending_label)
             return
         if self.scene() is not None:
+            if self._label_rect_cache is None:
+                # Nothing is placed yet, so Qt would compute this same rect while
+                # reading the old bounds. Reuse it instead of rescanning the wires.
+                self._label_rect_cache = chosen
             self.prepareGeometryChange()
         self._label_rect_cache = chosen
         self.update()
@@ -1009,7 +1026,9 @@ class ConnectionItem(QGraphicsPathItem):
                 block_arrive=port_into_direction(self.to_item, self.to_port),
             )
         )
+        global _WIRE_GEOMETRY_VERSION
         self._route_points = points
+        _WIRE_GEOMETRY_VERSION += 1
         self.setPath(wire_path_from_points(points))
         self.update()
         scene = self.scene()
@@ -1037,6 +1056,103 @@ class ConnectionItem(QGraphicsPathItem):
 
 
 _LABEL_REFRESH_DEPTH = 0
+# Bumped whenever a wire is rerouted, so a cached wire index is never stale.
+_WIRE_GEOMETRY_VERSION = 0
+
+
+class _WireSegmentIndex:
+    """Wire segments bucketed on a coarse grid.
+
+    Placing a label checks only the segments near it instead of every wire in
+    the drawing, which keeps large drawings responsive. The result is the same
+    as testing every segment: a segment that touches a rectangle always shares
+    a grid cell with it.
+    """
+
+    CELL = 160.0
+    # Segments or queries spanning more cells than this are checked directly.
+    MAX_CELLS = 4096
+
+    def __init__(self, wires=()):
+        self._cells: dict[tuple[int, int], list[int]] = defaultdict(list)
+        self._segments: list[tuple[QPointF, QPointF]] = []
+        self._unbucketed: list[int] = []
+        for wire in wires:
+            if wire is None:
+                continue
+            points = wire.route_points()
+            for a, b in zip(points, points[1:]):
+                self._add(a, b)
+
+    def __len__(self) -> int:
+        return len(self._segments)
+
+    def _add(self, a: QPointF, b: QPointF):
+        number = len(self._segments)
+        self._segments.append((a, b))
+        keys = self._cell_keys(
+            min(a.x(), b.x()), min(a.y(), b.y()), max(a.x(), b.x()), max(a.y(), b.y())
+        )
+        if keys is None:
+            self._unbucketed.append(number)
+            return
+        for key in keys:
+            self._cells[key].append(number)
+
+    def _cell_keys(self, left: float, top: float, right: float, bottom: float):
+        """Grid cells covering a box, padded by one unit; None when too many."""
+        values = (left, top, right, bottom)
+        if not all(math.isfinite(value) for value in values):
+            return None
+        cell = self.CELL
+        x0 = math.floor((left - 1.0) / cell)
+        x1 = math.floor((right + 1.0) / cell)
+        y0 = math.floor((top - 1.0) / cell)
+        y1 = math.floor((bottom + 1.0) / cell)
+        if (x1 - x0 + 1) * (y1 - y0 + 1) > self.MAX_CELLS:
+            return None
+        return [(x, y) for x in range(x0, x1 + 1) for y in range(y0, y1 + 1)]
+
+    def _nearby(self, rect: QRectF):
+        keys = self._cell_keys(rect.left(), rect.top(), rect.right(), rect.bottom())
+        if keys is None:
+            return range(len(self._segments))
+        found = set(self._unbucketed)
+        for key in keys:
+            bucket = self._cells.get(key)
+            if bucket:
+                found.update(bucket)
+        return found
+
+    def hits(self, rect: QRectF) -> bool:
+        """True when a wire segment crosses or touches ``rect``."""
+        if rect.width() <= 0 or rect.height() <= 0:
+            return False
+        segments = self._segments
+        for number in self._nearby(rect):
+            a, b = segments[number]
+            if _segment_hits_rect(a, b, rect):
+                return True
+        return False
+
+
+def _labels_deferred(scene: QGraphicsScene | None) -> bool:
+    """True inside batch_label_refresh, which places all labels at its end."""
+    return scene is not None and bool(getattr(scene, "_label_batch_depth", 0))
+
+
+def scene_wire_index(scene: QGraphicsScene | None) -> _WireSegmentIndex:
+    """Wire index for a scene, reused until a wire is added, removed or rerouted."""
+    if scene is None:
+        return _WireSegmentIndex()
+    wires = [it for it in scene.items() if isinstance(it, ConnectionItem)]
+    key = (_WIRE_GEOMETRY_VERSION, frozenset(id(wire) for wire in wires))
+    cached = getattr(scene, "_wire_index_cache", None)
+    if cached is not None and cached[0] == key:
+        return cached[1]
+    index = _WireSegmentIndex(wires)
+    scene._wire_index_cache = (key, index)
+    return index
 
 
 @contextmanager
@@ -1082,15 +1198,18 @@ def refresh_symbol_labels(
     _LABEL_REFRESH_DEPTH += 1
     try:
         symbols = [it for it in scene.items() if isinstance(it, OneLineSymbolItem)]
-        wires = [it for it in scene.items() if isinstance(it, ConnectionItem)]
         if extra_wires:
+            wires = [it for it in scene.items() if isinstance(it, ConnectionItem)]
             seen = {id(wire) for wire in wires}
             for wire in extra_wires:
                 if wire is not None and id(wire) not in seen:
                     wires.append(wire)
                     seen.add(id(wire))
+            index = _WireSegmentIndex(wires)
+        else:
+            index = scene_wire_index(scene)
         for symbol in symbols:
-            symbol.refresh_label_placement(wires)
+            symbol.refresh_label_placement(index)
     finally:
         _LABEL_REFRESH_DEPTH -= 1
 

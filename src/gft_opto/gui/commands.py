@@ -378,12 +378,18 @@ class RotateEquipmentCommand(QUndoCommand):
         ]
 
     def redo(self):
-        for item, _old, new in self.rotations:
-            item.set_rotation_deg(new)
+        self._apply(2)
 
     def undo(self):
-        for item, old, _new in self.rotations:
-            item.set_rotation_deg(old)
+        self._apply(1)
+
+    def _apply(self, index):
+        if not self.rotations:
+            return
+        # Place every label once after all symbols turn, not once per symbol.
+        with batch_label_refresh(self.rotations[0][0].scene()):
+            for rotation in self.rotations:
+                rotation[0].set_rotation_deg(rotation[index])
 
 
 class DeleteSelectionCommand(QUndoCommand):

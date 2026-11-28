@@ -19,7 +19,9 @@ import math
 import copy
 from typing import Any
 
-from gft_opto.logic.momentary_calc2 import Load, Scenario, NETLIST_PROPERTY_LOAD_MAP
+from gft_opto.logic.momentary_calc2 import (
+    Load, Scenario, NETLIST_PROPERTY_LOAD_MAP, MAX_DEVICE_CURRENT_A, format_amps,
+)
 from gft_opto.logic.breaker_settings import resolve_breaker_action, breaker_settings, SETTING_KEYS
 from gft_opto.logic.protection_zones import (
     Zone, connection_key, identify_zones, generate_composite_zones,
@@ -94,6 +96,7 @@ class _Graph:
         self.items: dict[str, _Item] = {}
         self.records: dict[str, dict] = {}
         self.wires: list[_Wire] = []
+        self.wire_records: list = []
         for component in components:
             if not isinstance(component, dict):
                 raise ValueError(messages.PROTECTION_STUDY_EACH_NETLIST_COMPONENT_MUST_BE_AN_OBJECT)
@@ -121,9 +124,123 @@ class _Graph:
             self.items[a]._connections.append(wire)
             self.items[b]._connections.append(wire)
             self.wires.append(wire)
+            self.wire_records.append(record)
 
     def primary(self) -> list[Zone]:
         return identify_zones(self.items.values(), _Boundary, respect_switch_state=True)
+
+    def subgraph(self, ids: set[str], boundary_ids: set[str] | None) -> "_Graph":
+        """The listed components and every wire between two of them."""
+        return _Graph({
+            "components": [record for ident, record in self.records.items() if ident in ids],
+            "connections": [
+                record for record, wire in zip(self.wire_records, self.wires)
+                if wire.from_item.instance_id in ids and wire.to_item.instance_id in ids
+            ],
+        }, boundary_ids)
+
+
+# Region lookups walk only the part of the network a seed reaches. Tests turn
+# this off to check the answers match a whole-network partition.
+_LOCAL_REGIONS = True
+
+
+def _region_scope(graph: _Graph, seed: _Item, boundary_ids: set[str],
+                  keep: set[str] = frozenset()) -> set[str] | None:
+    """IDs that contain the seed's region when ``boundary_ids`` are the CT cuts.
+
+    This follows the same terminal connectivity as identify_zones: ordinary
+    equipment conducts through itself, while a boundary CT or an open switch
+    conducts only between wires on the same terminal. Every neighbour of such
+    a device is kept too, so its terminal checks still see all of its wires.
+    ``keep`` adds further IDs and their neighbours. Returns None when the seed
+    is itself a cut, so the caller falls back to the whole network.
+    """
+    cuts: dict[str, bool] = {}
+
+    def is_cut(item: _Item) -> bool:
+        ident = item.instance_id
+        if ident not in cuts:
+            cuts[ident] = (kind(item.record) == "ct" and ident in boundary_ids) or is_open_switch(item)
+        return cuts[ident]
+
+    def node(item: _Item, port: str | None, wire: _Wire) -> tuple:
+        if not is_cut(item):
+            return (item.instance_id,)
+        side = ("port", port) if port is not None else ("implicit", connection_key(wire))
+        return (item.instance_id, side)
+
+    if is_cut(seed):
+        return None
+    start = (seed.instance_id,)
+    seen = {start}
+    queue = deque([start])
+    scope = {seed.instance_id}
+    while queue:
+        current = queue.popleft()
+        item = graph.items[current[0]]
+        for wire in item.connections():
+            for here, here_port, there, there_port in (
+                (wire.from_item, wire.from_port, wire.to_item, wire.to_port),
+                (wire.to_item, wire.to_port, wire.from_item, wire.from_port),
+            ):
+                if here is not item or node(here, here_port, wire) != current:
+                    continue
+                target = node(there, there_port, wire)
+                if target not in seen:
+                    seen.add(target)
+                    queue.append(target)
+                    scope.add(there.instance_id)
+    edges = {ident for ident in scope if is_cut(graph.items[ident])}
+    edges.update(ident for ident in keep if ident in graph.items)
+    for ident in edges:
+        scope.add(ident)
+        for wire in graph.items[ident].connections():
+            scope.add(wire.from_item.instance_id)
+            scope.add(wire.to_item.instance_id)
+    return scope
+
+
+def _seed_regions(netlist: dict, graph: _Graph, seed_id: str, boundary_ids: set[str],
+                  keep: set[str] = frozenset()) -> tuple[_Graph, list[Zone]]:
+    """Regions whose core holds ``seed_id`` when ``boundary_ids`` are the CT cuts.
+
+    Gives the same regions as partitioning _Graph(netlist, boundary_ids) as a
+    whole, but builds only the part of the network the seed reaches. Returns
+    the adapted graph used, for boundary checks, and the matching regions.
+    """
+    seed = graph.items.get(seed_id)
+    scope = None
+    if _LOCAL_REGIONS and seed is not None:
+        scope = _region_scope(graph, seed, boundary_ids, keep)
+    adapted = _Graph(netlist, boundary_ids) if scope is None else graph.subgraph(scope, boundary_ids)
+    seed = adapted.items.get(seed_id)
+    if seed is None:
+        return adapted, []
+    return adapted, [region for region in adapted.primary() if seed in region.core_items]
+
+
+class _StudyCache:
+    """Work shared by every zone in one study call. The netlist must not change."""
+
+    def __init__(self, netlist: dict, graph: _Graph | None = None):
+        self.netlist = netlist
+        self.graph = graph if graph is not None else _Graph(netlist)
+        self._primary: list[Zone] | None = None
+        self._snapshots: list[tuple[Any, Zone]] | None = None
+
+    def primary(self) -> list[Zone]:
+        if self._primary is None:
+            self._primary = self.graph.primary()
+        return self._primary
+
+    def snapshot_candidates(self) -> list[tuple[Any, Zone]]:
+        """Detected primary and composite regions with their saved signatures."""
+        if self._snapshots is None:
+            primary = self.primary()
+            self._snapshots = [(_json(zone_signature(region)), region)
+                               for region in primary + generate_composite_zones(primary)]
+        return self._snapshots
 
 
 def topology_signature(netlist: dict) -> str:
@@ -247,6 +364,34 @@ def validate_zones(zones: list[dict]) -> None:
             _validate_region(zone["topology_region"])
 
 
+# Grounds and junctions do not draw their IDs and carry no loads, so a shared
+# ID on them cannot confuse a report.
+UNNAMED_KINDS = frozenset({"ground", "junction"})
+
+
+def id_key(shown_id: str) -> str:
+    """IDs that differ only in case or surrounding spaces count as the same."""
+    return " ".join(str(shown_id).split()).casefold()
+
+
+def duplicate_ids(entries) -> dict[str, int]:
+    """Shown IDs used by more than one named component, with their counts.
+
+    ``entries`` holds (shown ID, kind) pairs. Each repeated ID is reported with
+    every spelling used, such as "CB-1 / cb-1".
+    """
+    counts: dict[str, int] = defaultdict(int)
+    spellings: dict[str, set[str]] = defaultdict(set)
+    for shown, typ in entries:
+        if typ in UNNAMED_KINDS or not str(shown).strip():
+            continue
+        key = id_key(shown)
+        counts[key] += 1
+        spellings[key].add(" ".join(str(shown).split()))
+    return {" / ".join(sorted(spellings[key])): count
+            for key, count in counts.items() if count > 1}
+
+
 def _label(item) -> str:
     method = getattr(item, "visible_id", None)
     return str(method() if callable(method) else item.instance_id)
@@ -336,16 +481,18 @@ def _geometry_warnings(graph: _Graph, region: Zone, zone: dict) -> list[str]:
     return warnings
 
 
-def _resolve_region(netlist: dict, zone: dict) -> tuple[Zone | None, list[str]]:
+def _resolve_region(netlist: dict, zone: dict,
+                    cache: _StudyCache | None = None) -> tuple[Zone | None, list[str]]:
+    if cache is None or not _LOCAL_REGIONS:
+        cache = _StudyCache(netlist)
     boundaries = set(zone["boundary_cts"])
     snapshot = zone.get("topology_region")
     if snapshot is not None:
         # A detector composite cannot be reconstructed by just cutting its outer
         # CTs: that could absorb a third branch. Match the full footprint instead.
-        graph = _Graph(netlist)
-        primary = graph.primary()
-        candidates = primary + generate_composite_zones(primary)
-        matches = [r for r in candidates if _json(zone_signature(r)) == _json(snapshot)]
+        graph = cache.graph
+        wanted = _json(snapshot)
+        matches = [r for signature, r in cache.snapshot_candidates() if signature == wanted]
         if len(matches) != 1:
             return None, [messages.PROTECTION_STUDY_THE_SELECTED_DETECTED_REGION_CHANGED_OR_IS_MISSING_SELECT]
         region = matches[0]
@@ -354,11 +501,9 @@ def _resolve_region(netlist: dict, zone: dict) -> tuple[Zone | None, list[str]]:
         if zone["seed"] and zone["seed"] not in {i.instance_id for i in region.core_items}:
             return None, [messages.PROTECTION_STUDY_PROTECTED_EQUIPMENT_DOES_NOT_BELONG_TO_THE_SELECTED_DETECTED]
     else:
-        graph = _Graph(netlist, boundaries)
-        seed = graph.items.get(zone["seed"])
-        if seed is None:
+        if zone["seed"] not in cache.graph.items:
             return None, [messages.PROTECTION_STUDY_PROTECTED_EQUIPMENT_IS_MISSING_OR_NOT_SELECTED.format(zone['seed'])]
-        matches = [r for r in graph.primary() if seed in r.core_items]
+        graph, matches = _seed_regions(netlist, cache.graph, zone["seed"], boundaries, boundaries)
         if len(matches) != 1:
             return None, [messages.PROTECTION_STUDY_PROTECTED_EQUIPMENT_MUST_BE_INSIDE_THE_REGION_NOT_AN]
         region = matches[0]
@@ -491,9 +636,9 @@ def propose_zones(netlist: dict) -> list[dict]:
         terminals = [i for i in region.core_items if kind(i.record) == "incoming_line"]
         if not terminals:
             continue
-        candidate_graph = _Graph(netlist, _proposal_ct_boundaries(region))
-        seed = candidate_graph.items[terminals[0].instance_id]
-        candidate = next((r for r in candidate_graph.primary() if seed in r.core_items), None)
+        _, found = _seed_regions(netlist, graph, terminals[0].instance_id,
+                                 _proposal_ct_boundaries(region))
+        candidate = found[0] if found else None
         if (candidate is not None
                 and not any(kind(i.record) in {"bus", "xfmr_2w", "xfmr_3w"} for i in candidate.core_items)
                 and any(kind(i.record) == "breaker" and not is_open_switch(i) for i in candidate.core_items)):
@@ -522,11 +667,9 @@ def propose_zones(netlist: dict) -> list[dict]:
         # Neighboring schemes may use CT groups on opposite sides of a breaker.
         # This candidate expansion retains that overlap for explicit review.
         boundaries = _proposal_ct_boundaries(region)
-        expanded_graph = _Graph(netlist, boundaries)
-        expanded_seed = expanded_graph.items[seed.instance_id]
-        expanded = next((r for r in expanded_graph.primary() if expanded_seed in r.core_items), None)
-        if expanded is not None:
-            region = expanded
+        _, found = _seed_regions(netlist, graph, seed.instance_id, boundaries)
+        if found:
+            region = found[0]
         category = "Bus" if kind(seed.record) == "bus" else (
             "Transformer" if kind(seed.record).startswith("xfmr") else "Line")
         if category == "Transformer":
@@ -639,6 +782,10 @@ def _evaluate_actions(zone: dict, graph: _Graph, voltage: float) -> tuple[list[d
             if not valid:
                 warnings.append(messages.PROTECTION_STUDY_CURRENT_MUST_BE_FINITE_AND_GREATER_THAN_ZERO.format(ident, LOADS[key]))
                 continue
+            if value > MAX_DEVICE_CURRENT_A:
+                warnings.append(messages.PROTECTION_STUDY_CURRENT_ABOVE_DEVICE_LIMIT.format(
+                    ident, LOADS[key], format_amps(value), MAX_DEVICE_CURRENT_A))
+                continue
             if "custom_load" in action and not action["custom_load"]["name"].strip():
                 warnings.append("Other load name is missing.")
                 continue
@@ -708,8 +855,9 @@ def evaluate_zones(netlist: dict, zones: list[dict]) -> dict:
     if not valid_voltage:
         raise ValueError(messages.PROTECTION_STUDY_DC_VOLTAGE_MUST_BE_A_FINITE_POSITIVE_NUMBER)
     current_signature = topology_signature(netlist)
+    cache = _StudyCache(netlist, graph)
     report = {"complete": False, "zones": [], "warnings": [], "supply_peaks": {},
-              "topology_regions": topology_records(graph.primary())}
+              "topology_regions": topology_records(cache.primary())}
     # A motor is one physical load even though inrush/run have different fields.
     assignments = defaultdict(lambda: defaultdict(set))
     for zone in zones:
@@ -724,7 +872,7 @@ def evaluate_zones(netlist: dict, zones: list[dict]) -> dict:
                 for ident in owners:
                     conflicts[ident].append(message)
     for zone in zones:
-        region, warnings = _resolve_region(netlist, zone)
+        region, warnings = _resolve_region(netlist, zone, cache)
         if not zone["confirmed"]:
             warnings.append(messages.PROTECTION_STUDY_CONFIRM_THIS_ZONE_S_CT_BOUNDARIES_OPERATING_LOADS_STAGES)
         elif zone.get("topology_signature") != current_signature:
@@ -749,16 +897,14 @@ def evaluate_zones(netlist: dict, zones: list[dict]) -> dict:
         })
     # Each adapted graph uses different Python objects. Use stable item IDs for
     # configured-study containment instead of comparing object addresses.
-    for inner in report["zones"]:
-        ai = set(inner["members"])
-        aw = {_digest(w) for w in inner["connections"]}
+    footprints = [(set(row["members"]), {_digest(w) for w in row["connections"]})
+                  for row in report["zones"]]
+    for inner, (ai, aw) in zip(report["zones"], footprints):
         if not ai and not aw:
             continue
-        for outer in report["zones"]:
+        for outer, (bi, bw) in zip(report["zones"], footprints):
             if inner is outer:
                 continue
-            bi = set(outer["members"])
-            bw = {_digest(w) for w in outer["connections"]}
             if ai <= bi and aw <= bw and (ai < bi or aw < bw):
                 inner["enclosed_by"].append(outer["id"])
         inner["enclosed_by"].sort()
@@ -768,6 +914,10 @@ def evaluate_zones(netlist: dict, zones: list[dict]) -> dict:
                        and not is_transfer_bus(c) and i not in covered)
     if uncovered:
         report["warnings"].append(messages.PROTECTION_STUDY_PROTECTED_EQUIPMENT_NOT_COVERED_BY_A_CONFIGURED_ZONE.format(", ".join(uncovered)))
+    duplicates = duplicate_ids((c.get("label") or i, kind(c)) for i, c in graph.records.items())
+    if duplicates:
+        report["warnings"].append(messages.PROTECTION_STUDY_DUPLICATE_IDS.format(
+            ", ".join(sorted(duplicates, key=id_key))))
     if not zones:
         report["warnings"].append(messages.PROTECTION_STUDY_NO_OPERATING_ZONES_CONFIGURED_DETECTED_TOPOLOGY_REGIONS_ARE_DISPLAY)
     report["complete"] = bool(zones) and not report["warnings"] and all(r["complete"] for r in report["zones"])

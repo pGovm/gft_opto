@@ -16,6 +16,17 @@ import io
 import sys
 from datetime import datetime
 
+# Highest current accepted for one device field or other load. Substation DC
+# coils and motors draw tens of amps; anything above this is almost certainly a
+# typing or units mistake, so it cannot produce a complete study.
+MAX_DEVICE_CURRENT_A = 1000.0
+
+
+def format_amps(value) -> str:
+    """Amps for messages: one decimal place, or three significant figures when huge."""
+    return f"{value:.1f}" if abs(value) < 1e6 else f"{value:.3g}"
+
+
 class Load:
 
     def __init__(self, name, current_A, quantity=1, note=""):
@@ -50,7 +61,7 @@ class Scenario:
 
         if peak_amps > 1000:
             warnings.append(
-                messages.MOMENTARY_CALC2_PEAK_CURRENT_IS_A_THAT_S_OVER_1000_A.format(peak_amps)
+                messages.MOMENTARY_CALC2_PEAK_CURRENT_IS_A_THAT_S_OVER_1000_A.format(format_amps(peak_amps))
             )
         for load in self.loads:
             if load.current_A <= 0:
@@ -239,6 +250,31 @@ def calculator_from_netlist_file(path: str, system_name: str | None = None) -> M
     raise ValueError(messages.MOMENTARY_CALC2_EXPLICIT_OPERATING_ACTIONS_REQUIRED)
 
 
+def netlist_instance_ids(components) -> dict:
+    """Map build_netlist component IDs back to the drawing's instance IDs.
+
+    build_netlist names each component "<type>:<instance id>", while layouts and
+    saved zones use the instance ID alone. The mapping strips exactly that
+    prefix. It is empty when stripping would make two components share an ID.
+    """
+    if not isinstance(components, list):
+        return {}
+    ids = [c.get("id") for c in components if isinstance(c, dict)]
+    renamed = {}
+    for component in components:
+        if not isinstance(component, dict):
+            continue
+        ident, typ = component.get("id"), component.get("type")
+        if isinstance(ident, str) and isinstance(typ, str) and typ:
+            prefix = f"{typ}:"
+            if ident.startswith(prefix) and ident[len(prefix):].strip():
+                renamed[ident] = ident[len(prefix):]
+    final = [renamed.get(ident, ident) for ident in ids]
+    if len(set(final)) != len(final):
+        return {}
+    return renamed
+
+
 def evaluate_netlist(netlist: dict, zones: list[dict] | None = None) -> dict:
     """Evaluate saved layouts or netlists with the same engine as the GUI.
 
@@ -257,11 +293,15 @@ def evaluate_netlist(netlist: dict, zones: list[dict] | None = None) -> dict:
     if zones is None:
         raise ValueError(messages.MOMENTARY_CALC2_SAVED_ZONES_REQUIRED)
     components = data.get("components")
+    # Netlists written by build_netlist prefix IDs with the type; zones do not.
+    renamed = netlist_instance_ids(components) if data.get("schema_version") == 1 else {}
     if isinstance(components, list):
         for component in components:
             if isinstance(component, dict):
                 component.setdefault("type", component.get("symbol", "custom"))
                 component.setdefault("label", component.get("display_id") or component.get("name") or component.get("id"))
+                if component.get("id") in renamed:
+                    component["id"] = renamed[component["id"]]
     connections = data.get("connections")
     if isinstance(connections, list):
         for index, connection in enumerate(connections):
@@ -269,8 +309,9 @@ def evaluate_netlist(netlist: dict, zones: list[dict] | None = None) -> dict:
                 a, b = connection.get("from"), connection.get("to")
                 if not isinstance(a, dict) or not isinstance(b, dict):
                     raise ValueError(messages.PROTECTION_STUDY_EACH_CONNECTION_NEEDS_TWO_COMPONENT_IDS_AND_TWO_TERMINALS)
-                connections[index] = dict(from_id=a.get("component"), from_port=a.get("port"),
-                                          to_id=b.get("component"), to_port=b.get("port"))
+                a_id, b_id = a.get("component"), b.get("component")
+                connections[index] = dict(from_id=renamed.get(a_id, a_id), from_port=a.get("port"),
+                                          to_id=renamed.get(b_id, b_id), to_port=b.get("port"))
     return evaluate_zones(data, zones)
 
 
@@ -295,10 +336,12 @@ def netlist_from_scene(scene, system_name: str = "Netlist Study", voltage_V: flo
     for item in items:
         
         if hasattr(item, "instance_id") and hasattr(item, "equip_type"):
+            # Name each component by the ID drawn beside it, not its type name.
+            shown = getattr(item, "visible_id", None)
             components.append({
                 "id"        : item.instance_id,
                 "type"      : item.equip_type,
-                "label"     : getattr(item, "label", item.equip_type),
+                "label"     : shown() if callable(shown) else getattr(item, "label", item.equip_type),
                 
                 "properties": dict(getattr(item, "properties", {}) or {}),
             })
@@ -344,14 +387,55 @@ def evaluate_scene(scene, system_name: str = "Netlist Study", voltage_V: float =
     return evaluate_netlist(netlist, zones=zones)
 
 
-def run_from_netlist_file(path):
-    """Export per-zone/stage/supply calculations without an all-load aggregate."""
+def _read_json(path):
     from pathlib import Path
     with Path(path).open(encoding="utf-8") as stream:
-        report = evaluate_netlist(json.load(stream))
-    Path("momentary_results.json").write_text(
+        try:
+            return json.load(stream)
+        except json.JSONDecodeError as error:
+            raise ValueError(f"{path} is not a valid JSON file ({error}).") from None
+
+
+def _zones_from_file(path) -> list:
+    data = _read_json(path)
+    zones = data.get("zones") if isinstance(data, dict) else data
+    if not isinstance(zones, list):
+        raise ValueError(messages.MOMENTARY_CALC2_ZONES_FILE_INVALID.format(path))
+    if not zones:
+        raise ValueError(messages.MOMENTARY_CALC2_NO_ZONES_IN_FILE.format(path))
+    return zones
+
+
+def results_paths(path, output_dir=None) -> tuple:
+    """Result files named after the input, in its folder unless one is given."""
+    from pathlib import Path
+    source = Path(path)
+    folder = Path(output_dir) if output_dir else source.parent
+    stem = source.stem or "momentary"
+    return folder / f"{stem}_results.json", folder / f"{stem}_results.csv"
+
+
+def run_from_netlist_file(path, zones_path=None, output_dir=None):
+    """Export per-zone/stage/supply calculations without an all-load aggregate.
+
+    Results go beside the input as <name>_results.json and <name>_results.csv,
+    or into ``output_dir``. Zones come from the input file, or from
+    ``zones_path`` (a saved layout or a JSON list of zones).
+    """
+    netlist = _read_json(path)
+    if zones_path is not None:
+        zones = _zones_from_file(zones_path)
+    else:
+        zones = netlist.get("zones") if isinstance(netlist, dict) else None
+        if zones is None:
+            raise ValueError(messages.MOMENTARY_CALC2_NO_ZONES_IN_FILE.format(path))
+    report = evaluate_netlist(netlist, zones)
+    json_path, csv_path = results_paths(path, output_dir)
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    replaced = [p for p in (json_path, csv_path) if p.exists()]
+    json_path.write_text(
         json.dumps(report, indent=2, ensure_ascii=False, allow_nan=False), encoding="utf-8")
-    with Path("momentary_results.csv").open("w", encoding="utf-8", newline="") as stream:
+    with csv_path.open("w", encoding="utf-8", newline="") as stream:
         writer = csv.writer(stream)
         writer.writerow(["zone", "stage", "supply", "current_A", "zone_complete", "study_complete"])
         for zone in report["zones"]:
@@ -362,15 +446,30 @@ def run_from_netlist_file(path):
     print("COMPLETE" if report["complete"] else "INCOMPLETE - provisional stage totals only")
     for supply, peak in report["supply_peaks"].items():
         print(f"{supply}: {peak['peak_current_A']:g} A - {peak['zone']} / {peak['stage']}")
-    print("Saved momentary_results.json and momentary_results.csv")
+    for result in (json_path, csv_path):
+        print(f"{'Replaced' if result in replaced else 'Saved'} {result}")
     return report
 
 
+def main(argv=None) -> int:
+    import argparse
+    parser = argparse.ArgumentParser(
+        prog="python -m gft_opto.logic.momentary_calc2",
+        description=("Calculate the momentary DC current of each configured protection zone, "
+                     "using the same engine as the application."),
+    )
+    parser.add_argument("input", help="a saved layout (.json) with configured zones, or an exported netlist")
+    parser.add_argument("--zones", metavar="LAYOUT",
+                        help="use the zones saved in this layout (needed when the input is a netlist)")
+    parser.add_argument("--output-dir", metavar="FOLDER",
+                        help="where to write <input name>_results.json and .csv (default: the input's folder)")
+    args = parser.parse_args(argv)
+    try:
+        run_from_netlist_file(args.input, zones_path=args.zones, output_dir=args.output_dir)
+    except (OSError, ValueError, TypeError) as error:
+        parser.exit(1, f"error: {error}\n")
+    return 0
+
+
 if __name__ == "__main__":
-    if len(sys.argv) == 2:
-        try:
-            run_from_netlist_file(sys.argv[1])
-        except (OSError, ValueError, TypeError) as error:
-            raise SystemExit(str(error))
-    else:
-        raise SystemExit("Usage: python -m gft_opto.logic.momentary_calc2 <configured-layout-or-netlist.json>")
+    sys.exit(main())

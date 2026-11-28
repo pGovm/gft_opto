@@ -6,6 +6,7 @@ from PySide6.QtWidgets import QDialog, QPushButton, QTextEdit, QVBoxLayout
 from gft_opto.gui import messages
 from gft_opto.logic.protection_study import evaluate_zones, propose_zones
 
+STUDY_TITLE = "Momentary DC protection-zone study: "
 
 class EvaluationViewMixin:
     def _invalidate_results(self):
@@ -36,6 +37,17 @@ class EvaluationViewMixin:
         layout.addWidget(close)
         dialog.exec()
 
+
+    def _retitle_results(self, project):
+        """Show a new project name on results that a rename does not change."""
+        self.last_result["scenario_name"] = project
+        if self.last_netlist is not None:
+            self.last_netlist["system_name"] = project
+        self._evaluated_snapshot["project"] = project
+        lines = self.output_box.toPlainText().split("\n")
+        if lines and lines[0].startswith(STUDY_TITLE):
+            lines[0] = STUDY_TITLE + project
+            self.output_box.setPlainText("\n".join(lines))
 
     def _on_run_evaluation_clicked(self):
         """Propose zones, evaluate explicit actions, and display complete or draft results."""
@@ -68,7 +80,7 @@ class EvaluationViewMixin:
                 self.zone_view.setCurrentIndex(1)
             self.zone_view.blockSignals(False)
             self._show_zone_highlights()
-            lines = [f"Momentary DC protection-zone study: {netlist['system_name']}",
+            lines = [STUDY_TITLE + netlist["system_name"],
                 "COMPLETE" if report["complete"] else messages.SUBSTATION_GUI4_INCOMPLETE_CONFIGURE_REVIEW_FLAGGED_ZONES_PARTIAL_TOTALS_ARE_NOT,
                 "Each configured zone is a separate fault event. Same-stage loads are simultaneous; other stages are separate.",
                 "DC supplies are reported separately. No battery amp-hour calculation.", ""]

@@ -77,10 +77,10 @@ class ConfiguredCalculator(unittest.TestCase):
                                  cwd=folder, capture_output=True, text=True)
             self.assertEqual(run.returncode, 0, run.stderr)
             self.assertIn("INCOMPLETE", run.stdout)
-            report = json.loads((Path(folder) / "momentary_results.json").read_text())
+            report = json.loads((Path(folder) / "study_results.json").read_text())
             self.assertFalse(report["complete"])
             self.assertEqual(report["supply_peaks"], {})
-            with (Path(folder) / "momentary_results.csv").open(newline="") as stream:
+            with (Path(folder) / "study_results.csv").open(newline="") as stream:
                 rows = list(csv.DictReader(stream))
             self.assertEqual({r["stage"] for r in rows}, {"Primary trip", "Reclose", "Motor inrush", "Motor run"})
             self.assertTrue(all(r["study_complete"] == "False" for r in rows))

@@ -106,6 +106,16 @@ def validate_properties(props, *, symbol=None):
                 raise ValueError(messages.LAYOUT_IO_INVALID_VALUE_FOR.format(key))
 
 
+# Sheet and background coordinates beyond this (20,000 inches) can only come
+# from a damaged or hand-edited file, and would make the view unusable.
+MAX_SHEET_COORDINATE = 1_000_000
+
+
+def _sheet_coordinates(values) -> bool:
+    """Finite numbers no larger than MAX_SHEET_COORDINATE in size."""
+    return all(abs(_number(value)) <= MAX_SHEET_COORDINATE for value in values)
+
+
 def build_scene(data):
     """Validate and construct a separate scene before touching the user's drawing."""
     if not isinstance(data, dict) or data.get("version") != 1:
@@ -114,7 +124,7 @@ def build_scene(data):
     if not isinstance(data.get("project"), str) or not data["project"].strip():
         raise ValueError(messages.LAYOUT_IO_A_PROJECT_NAME_IS_REQUIRED)
     rect = data["scene_rect"]
-    if len(rect) != 4 or any(not math.isfinite(_number(v)) for v in rect) or rect[2] <= 0 or rect[3] <= 0:
+    if len(rect) != 4 or not _sheet_coordinates(rect) or rect[2] <= 0 or rect[3] <= 0:
         raise ValueError(messages.LAYOUT_IO_INVALID_DRAWING_DIMENSIONS)
     settings = data["settings"]
     if not 0 <= _number(settings["grid_opacity"]) <= 100:
@@ -127,7 +137,7 @@ def build_scene(data):
     bounds = data.get("pdf_bounds")
     if bounds is not None:
         if (not isinstance(bounds, (list, tuple)) or len(bounds) != 4
-                or any(not math.isfinite(_number(value)) for value in bounds)
+                or not _sheet_coordinates(bounds)
                 or bounds[2] <= 0 or bounds[3] <= 0):
             raise ValueError(messages.LAYOUT_IO_INVALID_PDF_BOUNDS)
     library = data["library"]
@@ -146,50 +156,51 @@ def build_scene(data):
     snap = OneLineSymbolItem.snap_to_grid_enabled
     OneLineSymbolItem.snap_to_grid_enabled = False
     try:
-        for record in data["components"]:
-            ident = record["id"]
-            if not isinstance(ident, str) or not ident or ident in items:
-                raise ValueError(messages.LAYOUT_IO_MISSING_OR_DUPLICATE_COMPONENT_ID)
-            key = record["symbol"]
-            if key not in (*BUILTIN_SYMBOLS, "junction", "custom") and not key.startswith("custom_"):
-                raise ValueError(messages.LAYOUT_IO_UNKNOWN_SYMBOL.format(key))
-            if not isinstance(record["name"], str) or not isinstance(record["display_id"], str):
-                raise ValueError(messages.LAYOUT_IO_INVALID_COMPONENT_NAME_OR_DISPLAYED_ID)
-            props = record["properties"]
-            validate_properties(props, symbol=key)
-            item = JunctionItem() if key == "junction" else make_user_equipment(key, record["name"], props)
-            scene.addItem(item)
-            item.instance_id = ident
-            item.display_id = record["display_id"]
-            ports = record["ports"]
-            if not isinstance(ports, dict) or not ports:
-                raise ValueError(messages.LAYOUT_IO_COMPONENT_HAS_NO_PORTS)
-            if any(not isinstance(name, str) or len(point) != 2 for name, point in ports.items()):
-                raise ValueError(messages.LAYOUT_IO_INVALID_COMPONENT_PORTS)
-            restored_ports = {name: QPointF(*[_number(v) for v in point]) for name, point in ports.items()}
-            if isinstance(item, BusItem):
-                if not {"left", "right"} <= ports.keys():
-                    raise ValueError(messages.LAYOUT_IO_BUS_ENDPOINTS_ARE_MISSING)
-                left, right = restored_ports["left"].x(), restored_ports["right"].x()
-                if right - left < 40 or any(p.y() != 0 or not left <= p.x() <= right for p in restored_ports.values()):
-                    raise ValueError(messages.LAYOUT_IO_INVALID_BUS_GEOMETRY)
-                item._base_ports = restored_ports
-                item._sync_bus_rect()
-            elif set(ports) != set(item.ports()):
-                raise ValueError(messages.LAYOUT_IO_UNEXPECTED_COMPONENT_TERMINALS)
-            scale = _number(record["scale"])
-            if scale < 0.5 or (item.max_scale is not None and scale > item.max_scale):
-                raise ValueError(messages.LAYOUT_IO_INVALID_COMPONENT_SCALE)
-            item.set_scale_factor(scale)
-            item.set_rotation_deg(_number(record["rotation"]))
-            position = record["position"]
-            if len(position) != 2:
-                raise ValueError(messages.LAYOUT_IO_INVALID_COMPONENT_POSITION)
-            restored_position = QPointF(*[_number(v) for v in position])
-            item.setPos(restored_position)
-            item.setZValue(100)
-            items[ident] = item
+        # Place every name once, after all equipment and wires are in.
         with batch_label_refresh(scene):
+            for record in data["components"]:
+                ident = record["id"]
+                if not isinstance(ident, str) or not ident or ident in items:
+                    raise ValueError(messages.LAYOUT_IO_MISSING_OR_DUPLICATE_COMPONENT_ID)
+                key = record["symbol"]
+                if key not in (*BUILTIN_SYMBOLS, "junction", "custom") and not key.startswith("custom_"):
+                    raise ValueError(messages.LAYOUT_IO_UNKNOWN_SYMBOL.format(key))
+                if not isinstance(record["name"], str) or not isinstance(record["display_id"], str):
+                    raise ValueError(messages.LAYOUT_IO_INVALID_COMPONENT_NAME_OR_DISPLAYED_ID)
+                props = record["properties"]
+                validate_properties(props, symbol=key)
+                item = JunctionItem() if key == "junction" else make_user_equipment(key, record["name"], props)
+                scene.addItem(item)
+                item.instance_id = ident
+                item.display_id = record["display_id"]
+                ports = record["ports"]
+                if not isinstance(ports, dict) or not ports:
+                    raise ValueError(messages.LAYOUT_IO_COMPONENT_HAS_NO_PORTS)
+                if any(not isinstance(name, str) or len(point) != 2 for name, point in ports.items()):
+                    raise ValueError(messages.LAYOUT_IO_INVALID_COMPONENT_PORTS)
+                restored_ports = {name: QPointF(*[_number(v) for v in point]) for name, point in ports.items()}
+                if isinstance(item, BusItem):
+                    if not {"left", "right"} <= ports.keys():
+                        raise ValueError(messages.LAYOUT_IO_BUS_ENDPOINTS_ARE_MISSING)
+                    left, right = restored_ports["left"].x(), restored_ports["right"].x()
+                    if right - left < 40 or any(p.y() != 0 or not left <= p.x() <= right for p in restored_ports.values()):
+                        raise ValueError(messages.LAYOUT_IO_INVALID_BUS_GEOMETRY)
+                    item._base_ports = restored_ports
+                    item._sync_bus_rect()
+                elif set(ports) != set(item.ports()):
+                    raise ValueError(messages.LAYOUT_IO_UNEXPECTED_COMPONENT_TERMINALS)
+                scale = _number(record["scale"])
+                if scale < 0.5 or (item.max_scale is not None and scale > item.max_scale):
+                    raise ValueError(messages.LAYOUT_IO_INVALID_COMPONENT_SCALE)
+                item.set_scale_factor(scale)
+                item.set_rotation_deg(_number(record["rotation"]))
+                position = record["position"]
+                if len(position) != 2 or not _sheet_coordinates(position):
+                    raise ValueError(messages.LAYOUT_IO_INVALID_COMPONENT_POSITION)
+                restored_position = QPointF(*[_number(v) for v in position])
+                item.setPos(restored_position)
+                item.setZValue(100)
+                items[ident] = item
             for a, ap, b, bp in data["connections"]:
                 if a not in items or b not in items or ap not in items[a].ports() or bp not in items[b].ports():
                     raise ValueError(messages.LAYOUT_IO_WIRE_REFERENCES_AN_UNKNOWN_COMPONENT_OR_TERMINAL)

@@ -20,6 +20,26 @@ from PySide6.QtWidgets import (
     QLineEdit,
 )
 
+from gft_opto.logic.momentary_calc2 import MAX_DEVICE_CURRENT_A
+
+# Current fields each symbol type has. Create Component and the properties
+# panel both use these, so a value can only be typed where it is used.
+COIL_CURRENT_SYMBOLS = frozenset({"breaker", "custom"})
+MOTOR_CURRENT_SYMBOLS = frozenset({"breaker", "mos", "custom", "xfmr_2w", "xfmr_3w", "pt"})
+COIL_CURRENT_KEYS = ("trip_coil_1_a", "trip_coil_2_a", "close_coil_a")
+MOTOR_CURRENT_KEYS = ("motor_inrush_a", "motor_run_a")
+
+
+def current_fields_for(symbol: str) -> set[str]:
+    """Property keys of the current fields offered for a symbol type."""
+    symbol = "custom" if str(symbol).startswith("custom") else str(symbol)
+    fields = set()
+    if symbol in COIL_CURRENT_SYMBOLS:
+        fields.update(COIL_CURRENT_KEYS)
+    if symbol in MOTOR_CURRENT_SYMBOLS:
+        fields.update(MOTOR_CURRENT_KEYS)
+    return fields
+
 
 
 # ---------------------------------------------------------------------------
@@ -123,7 +143,7 @@ class ComponentDialog(QDialog):
         self._add_row(form, "Component Name:", self.name_edit)
 
         # Electrical properties shown in the main window properties panel
-        self.rating_spin = self._make_spin(default=36)
+        self.rating_spin = self._make_spin(default=36, maximum=100000)
         self._add_row(form, "Rating (kV):", self.rating_spin)
 
         self.trip_coil_1_spin = self._make_spin()
@@ -181,10 +201,11 @@ class ComponentDialog(QDialog):
         self.form.labelForField(self.rating_spin).setText(
             "MCOV (kV):" if symbol == "surge_arrester" else "Rating (kV):")
         self.form.setRowVisible(self.rating_spin, symbol in {"bus", "surge_arrester"})
+        offered = current_fields_for(symbol)
         for field_widget in (self.trip_coil_1_spin, self.trip_coil_2_spin, self.close_coil_spin):
-            self.form.setRowVisible(field_widget, symbol in {"breaker", "custom"})
+            self.form.setRowVisible(field_widget, "trip_coil_1_a" in offered)
         for field_widget in (self.motor_inrush_spin, self.motor_run_spin):
-            self.form.setRowVisible(field_widget, symbol in {"breaker", "mos", "custom", "xfmr_2w", "xfmr_3w", "pt"})
+            self.form.setRowVisible(field_widget, "motor_inrush_a" in offered)
         self.adjustSize()
 
     @staticmethod
@@ -192,10 +213,11 @@ class ComponentDialog(QDialog):
         form.addRow(QLabel(text), field_widget)
 
     @staticmethod
-    def _make_spin(default: float = 0):
+    def _make_spin(default: float = 0, maximum: float = MAX_DEVICE_CURRENT_A):
+        """Number field; current fields stop at the per-device current limit."""
         spin = QDoubleSpinBox()
         spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
-        spin.setRange(0, 100000)
+        spin.setRange(0, maximum)
         spin.setDecimals(2)
         spin.setValue(default)
         return spin

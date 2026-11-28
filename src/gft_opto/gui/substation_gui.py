@@ -16,7 +16,6 @@ import functools
 import sys
 import math
 
-import pymupdf
 from PySide6.QtCore import Qt, QByteArray, QMimeData, QRectF
 from PySide6.QtGui import (
     QAction, QColor, QPen, QBrush, QPalette, QPainterPath, QPainterPathStroker, QDrag, QIcon, QImage, QKeySequence, QPixmap, QUndoStack,
@@ -26,8 +25,9 @@ from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFrame, QGraphicsScene, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QSlider, QTextEdit, QVBoxLayout, QWidget, QGraphicsPathItem, QSpinBox, QScrollArea, QSizePolicy,
 )
 
-from gft_opto.gui.circuit_check import check_circuit
-from gft_opto.gui.custom_widget_tool import ComponentDialog, SYMBOL_TYPE_CHOICES
+from gft_opto.gui.circuit_check import check_circuit, symbol_kind
+from gft_opto.gui.custom_widget_tool import ComponentDialog, SYMBOL_TYPE_CHOICES, current_fields_for
+from gft_opto.gui.pdf_background import PdfBackgroundError, render_first_page
 from gft_opto.gui.routing import (
     DEFAULT_GRID_OPACITY,
     DEFAULT_WORKSPACE_HEIGHT,
@@ -44,9 +44,9 @@ from gft_opto.gui.symbols import (
 from gft_opto.gui.workspace import WorkspaceView
 from gft_opto.gui.commands import EditPropertyCommand, ReplaceZonesCommand, MoveEquipmentCommand
 from gft_opto.gui.routing import default_snap_port, position_for_snapped_port
-from gft_opto.logic.momentary_calc2 import netlist_from_scene
+from gft_opto.logic.momentary_calc2 import MAX_DEVICE_CURRENT_A, netlist_from_scene
 from gft_opto.logic.protection_zones import connection_key, identify_zones
-from gft_opto.logic.protection_study import propose_zones, topology_records
+from gft_opto.logic.protection_study import UNNAMED_KINDS, id_key, propose_zones, topology_records
 from gft_opto.gui.zone_dialog import ZoneDialog
 from gft_opto.gui.theme import SCROLLBAR_STYLE, readable_palette, ui_font
 from gft_opto.gui.ribbon import RibbonBar, populate_ribbon
@@ -394,6 +394,8 @@ class SubstationGuiMockup(ProjectFilesMixin, EvaluationViewMixin, PdfExportMixin
         if (self.last_result is not None
                 and self._evaluation_content(data) != self._evaluation_content(self._evaluated_snapshot)):
             self._invalidate_results()
+        elif self.last_result is not None and data["project"] != self._evaluated_snapshot.get("project"):
+            self._retitle_results(data["project"])
 
 
 # import JSON netlist file function
@@ -776,15 +778,22 @@ class SubstationGuiMockup(ProjectFilesMixin, EvaluationViewMixin, PdfExportMixin
         lines.append(messages.SUBSTATION_GUI4_SHORT_CIRCUITS if shorts else messages.SUBSTATION_GUI4_SHORT_CIRCUITS_NONE)
         for issue in shorts:
             lines.append(f"  • {issue}")
+        duplicates = report.get("duplicate_ids", [])
+        if duplicates:
+            lines.append("")
+            lines.append("Repeated IDs (give each component its own):")
+            for issue in duplicates:
+                lines.append(f"  • {issue}")
         if hasattr(self, "footer_status_label"):
             if report["ok"]:
                 self.footer_status_label.setText("Circuit check passed")
             elif open_ends == [messages.CIRCUIT_CHECK_NO_COMPONENTS_ON_THE_CANVAS]:
                 self.footer_status_label.setText(messages.SUBSTATION_GUI4_PLACE_COMPONENTS_BEFORE_CHECK)
             else:
-                self.footer_status_label.setText(
-                    messages.SUBSTATION_GUI4_CIRCUIT_COUNTS.format(len(open_ends), len(shorts))
-                )
+                text = messages.SUBSTATION_GUI4_CIRCUIT_COUNTS.format(len(open_ends), len(shorts))
+                if duplicates:
+                    text += f", {len(duplicates)} repeated ID(s)"
+                self.footer_status_label.setText(text)
         message = "\n".join(lines)
         if report["ok"]:
             QMessageBox.information(self, "Validate", message)
@@ -1055,35 +1064,16 @@ class SubstationGuiMockup(ProjectFilesMixin, EvaluationViewMixin, PdfExportMixin
             return
 
         try:
-            doc = pymupdf.open(pdf_path)
-            try:
-                page = doc.load_page(0)
-                page_rect = page.rect
-                # PDF coordinates are points (72 points per inch). Converting
-                # them to the grid's scene scale makes a 48 × 36 inch AEP
-                # sheet exactly 2400 × 1800 scene units.
-                scene_width = (
-                    page_rect.width / 72.0 * SCENE_UNITS_PER_INCH
-                )
-                scene_height = (
-                    page_rect.height / 72.0 * SCENE_UNITS_PER_INCH
-                )
-                zoom = 2.0
-                mat = pymupdf.Matrix(zoom, zoom)
-                pix = page.get_pixmap(matrix=mat, alpha=False)
-                png_bytes = pix.tobytes("png")
-            finally:
-                doc.close()
-        except Exception as e:
+            background = render_first_page(pdf_path)
+        except PdfBackgroundError as error:
             if hasattr(self, "footer_status_label"):
-                self.footer_status_label.setText(messages.SUBSTATION_GUI4_IMPORT_FAILED.format(e))
+                self.footer_status_label.setText(messages.SUBSTATION_GUI4_IMPORT_FAILED.format(error))
+            QMessageBox.warning(self, "Import PDF", str(error))
             return
-
-        pm = QPixmap()
-        if not pm.loadFromData(png_bytes):
-            if hasattr(self, "footer_status_label"):
-                self.footer_status_label.setText(messages.SUBSTATION_GUI4_IMPORT_FAILED_COULD_NOT_DECODE_RENDERED_PNG)
-            return
+        # PDF coordinates are points (72 per inch). Converting them to the
+        # grid's scene scale makes a 48 × 36 inch sheet 2400 × 1800 units.
+        pm = background.pixmap
+        scene_width, scene_height = background.scene_width, background.scene_height
 
         self._workspace_original = pm
         self.pdf_path = str(Path(pdf_path).resolve())
@@ -1105,8 +1095,12 @@ class SubstationGuiMockup(ProjectFilesMixin, EvaluationViewMixin, PdfExportMixin
             self.footer_status_label.setText(
                 f"Imported: {pdf_path} "
                 + ("(fitted to layout sheet)" if fit_layout else f"({sheet_width:g} × {sheet_height:g} in)")
+                + (" — page 1 only" if background.page_count > 1 else "")
             )
         self._mark_modified()
+        if background.page_count > 1:
+            QMessageBox.information(self, "Import PDF", messages.PDF_BACKGROUND_FIRST_PAGE_ONLY.format(
+                Path(pdf_path).name, background.page_count))
 
     def _on_selection_changed(self):
         """Update the properties panel when the user selects a symbol or wire."""
@@ -1160,15 +1154,23 @@ class SubstationGuiMockup(ProjectFilesMixin, EvaluationViewMixin, PdfExportMixin
             self._set_bus_property_mode(False)
             self._set_custom_component_properties(self._symbol_properties(item))
             symbol_type = getattr(item, "properties", {}).get("symbol_type", item.equip_type)
-            if item.equip_type == "incoming_line":
+            if item.equip_type in {"incoming_line", "junction"} or symbol_type == "ground":
+                # No status or current applies: junctions only join wires, and a
+                # ground or line end never carries an operating load.
                 for widget in self._non_bus_property_widgets:
                     widget.setVisible(False)
-            elif symbol_type in {"xfmr_2w", "xfmr_3w", "pt"}:
-                # Motor currents are recorded but never enter the DC calculation.
-                motor_widgets = (self.prop_motor_inrush_label, self.prop_motor_inrush,
-                                 self.prop_motor_run_label, self.prop_motor_run)
+            else:
+                # Offer the current fields Create Component offers for this type.
+                # Transformers and PTs record motor currents only, which never
+                # enter the DC calculation, and have no status.
+                offered = current_fields_for(symbol_type)
+                shown = set() if symbol_type in {"xfmr_2w", "xfmr_3w", "pt"} else {
+                    self.prop_status_label, self.prop_status}
+                for key, label, field in self._current_property_rows():
+                    if key in offered:
+                        shown.update((label, field))
                 for widget in self._non_bus_property_widgets:
-                    widget.setVisible(widget in motor_widgets)
+                    widget.setVisible(widget in shown)
         elif isinstance(item, ConnectionItem):
             self.prop_type.setText("Connection")
             self.prop_name.setReadOnly(True)
@@ -1200,6 +1202,14 @@ class SubstationGuiMockup(ProjectFilesMixin, EvaluationViewMixin, PdfExportMixin
         symbol = selected[0]
         if new_id == symbol.visible_id():
             return
+        if symbol_kind(symbol) not in UNNAMED_KINDS:
+            taken = {id_key(item.visible_id()) for item in self.workspace_scene.items()
+                     if isinstance(item, OneLineSymbolItem) and item is not symbol
+                     and symbol_kind(item) not in UNNAMED_KINDS}
+            if id_key(new_id) in taken:
+                self.footer_status_label.setText(messages.SUBSTATION_GUI4_ID_ALREADY_USED.format(new_id))
+                self._on_selection_changed()
+                return
         self._edit_property(symbol, "display_id", new_id)
 
     def _on_breaker_setting_changed(self, key):
@@ -1246,6 +1256,9 @@ class SubstationGuiMockup(ProjectFilesMixin, EvaluationViewMixin, PdfExportMixin
             return None
         if isinstance(selected[0], BusItem):
             return None
+        symbol_type = (getattr(selected[0], "properties", None) or {}).get("symbol_type", selected[0].equip_type)
+        if selected[0].equip_type in {"incoming_line", "junction"} or symbol_type == "ground":
+            return None  # These have no status or current fields.
         return selected[0]
 
     def _on_property_status_changed(self, text: str):
@@ -1255,21 +1268,36 @@ class SubstationGuiMockup(ProjectFilesMixin, EvaluationViewMixin, PdfExportMixin
             return
         self._edit_property(symbol, "status", text)
 
+    def _current_property_rows(self):
+        """(property key, label, field) for each current row of the panel."""
+        return (
+            ("trip_coil_1_a", self.prop_trip_coil_1_label, self.prop_trip_coil_1),
+            ("trip_coil_2_a", self.prop_trip_coil_2_label, self.prop_trip_coil_2),
+            ("close_coil_a", self.prop_close_coil_label, self.prop_close_coil),
+            ("motor_inrush_a", self.prop_motor_inrush_label, self.prop_motor_inrush),
+            ("motor_run_a", self.prop_motor_run_label, self.prop_motor_run),
+        )
+
     def _on_numeric_property_changed(self, key: str, text: str):
         """Store a typed amp value on the selected component."""
         symbol = self._selected_editable_symbol()
         if symbol is None:
             return
+        symbol_type = (getattr(symbol, "properties", None) or {}).get("symbol_type", symbol.equip_type)
+        if key not in current_fields_for(symbol_type):
+            return  # This type has no such field.
         raw = text.strip()
         try:
             value = float(raw) if raw else 0.0
-            if not math.isfinite(value) or value < 0:
+            if not math.isfinite(value) or not 0 <= value <= MAX_DEVICE_CURRENT_A:
                 raise ValueError
         except ValueError:
-            self.footer_status_label.setText(messages.SUBSTATION_GUI4_CURRENT_MUST_BE_A_FINITE_NUMBER_GREATER_THAN_OR)
+            self.footer_status_label.setText(
+                messages.SUBSTATION_GUI4_CURRENT_OUTSIDE_RANGE.format(MAX_DEVICE_CURRENT_A))
             self._on_selection_changed()
             return
-        self._edit_property(symbol, key, value)
+        # "-0" is zero; do not store a negative zero.
+        self._edit_property(symbol, key, value + 0.0)
 
     def _on_property_voltage_changed(self, text: str):
         """Store a typed bus voltage and refresh the rating drawn on the bar."""
